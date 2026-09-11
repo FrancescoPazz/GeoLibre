@@ -1,4 +1,5 @@
 import { parseProject, type GeoLibreProject } from "@geolibre/core";
+import { readDeploymentEnvValue, type EnvRecord } from "./deployment-env";
 import { normalizeProjectUrl } from "./urls";
 import { WHITEBOX_TOOL_PARAM } from "./whitebox-tool-url";
 
@@ -34,6 +35,37 @@ export function projectUrlFromLocation(): string | null {
 
   const bareQuery = search.startsWith("?") ? safeDecodeURIComponent(search.slice(1)).trim() : "";
   return /^https?:\/\//i.test(bareQuery) ? normalizeProjectUrl(bareQuery) : null;
+}
+
+/**
+ * The project a deployment opens on when the launch carries none of its own:
+ * `VITE_START_PROJECT_URL` (`START_PROJECT_URL` to the Docker entrypoint), an
+ * http(s) URL or a path served next to the app, resolved against `baseUri`.
+ * A geoportal keeps its start view, basemap and catalogs in that file rather
+ * than in code. Null when unset or not resolvable to an http(s) URL.
+ */
+export function deploymentStartProjectUrl(
+  deploymentEnv?: EnvRecord,
+  buildEnv?: EnvRecord,
+  baseUri?: string,
+): string | null {
+  const raw = readDeploymentEnvValue("VITE_START_PROJECT_URL", deploymentEnv, buildEnv)?.trim();
+  if (!raw) return null;
+  try {
+    const base = baseUri ?? (typeof document !== "undefined" ? document.baseURI : undefined);
+    return normalizeProjectUrl(new URL(raw, base).href);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The project this launch opens: one named on the URL first, else the
+ * deployment's start project. Both count as an explicit payload for the
+ * startup plan, so the empty default workspace never replaces them.
+ */
+export function startupProjectUrl(): string | null {
+  return projectUrlFromLocation() ?? deploymentStartProjectUrl();
 }
 
 /**

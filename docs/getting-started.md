@@ -814,6 +814,16 @@ CATALOG_URLS=/init/catalogo.json,https://geoportal.example.org/init/basemaps.jso
 
 Comma or whitespace separated; http(s) URLs or paths served next to the app. Users can also load a catalog from the panel, and the catalogs a project used are kept in its file. Clicking an entry adds it to the map as a regular layer (removable from the Layers panel or by clicking the entry again); a file's initial `workbench` is added when the project is empty. `CATALOG_URLS` (or `VITE_CATALOG_URLS`) follows the same build/deployment/runtime rules as the other variables above.
 
+### Start project
+
+A deployment can open on a project of its own instead of the empty workspace — the view, projection, basemap, layers and plugin state (the Catalog plugin's catalogs, for one) a geoportal wants every visitor to start from, kept in a `.geolibre.json` file rather than in code:
+
+```env
+START_PROJECT_URL=/projects/geoportale.geolibre.json
+```
+
+An http(s) URL or a path served next to the app. A project named on the page URL (`?project=`, `?url=`) still wins, and the file is opened without being added to the recent projects. `START_PROJECT_URL` (or `VITE_START_PROJECT_URL`) follows the same build/deployment/runtime rules as the other variables above.
+
 ### Deployment defaults in the Docker image
 
 Every variable in the sections above can also be given to the prebuilt Docker image at container start as `GEOLIBRE_<NAME>` (`GEOLIBRE_CESIUM_TOKEN`, `GEOLIBRE_BRAND_NAME`, …): the entrypoint validates it and publishes it to the app as `VITE_<NAME>`, so no rebuild is needed. The deployment layer sits between the build and whatever a user or project sets. For the geocoder, the deployment's provider (with its key and endpoints) becomes the default of every project that has not chosen one; a project that carries its own choice keeps it. See [Self-hosting](self-hosting.md#2-host-the-geolibre-web-build-next-to-it).

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { dataUrlParameters, serviceUrlParameter } from "../lib/data-url";
 import { isTauri } from "../lib/is-tauri";
-import { projectUrlFromLocation } from "../lib/project-url";
+import { startupProjectUrl } from "../lib/project-url";
 import { planStartup, startupDefaultWorkspace, type StartupPlan } from "../lib/startup-project";
 import { openRecentProjectFile, RecentProjectGoneError } from "../lib/tauri-io";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
@@ -41,7 +41,7 @@ const RESTORE_GATE_TIMEOUT_MS = 10_000;
  * an empty workspace.
  */
 function hasExplicitLaunchPayload(): boolean {
-  if (projectUrlFromLocation() !== null) return true;
+  if (startupProjectUrl() !== null) return true;
   if (dataUrlParameters(window.location.search) !== null) return true;
   if (serviceUrlParameter(window.location.search) !== null) return true;
   return false;

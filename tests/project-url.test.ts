@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { fetchProjectFromUrl } from "../apps/geolibre-desktop/src/lib/project-url";
+import {
+  deploymentStartProjectUrl,
+  fetchProjectFromUrl,
+} from "../apps/geolibre-desktop/src/lib/project-url";
 
 const PROJECT_URL = "https://example.com/Test.geolibre.json";
 
@@ -17,6 +20,62 @@ const VALID_PROJECT_JSON = JSON.stringify({
 function okFetch(body: string): typeof fetch {
   return (async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
 }
+
+describe("deploymentStartProjectUrl", () => {
+  const BASE = "https://geoportal.example.org/app/";
+
+  it("is null when the deployment names no start project", () => {
+    assert.equal(deploymentStartProjectUrl({}, {}, BASE), null);
+    assert.equal(deploymentStartProjectUrl({ VITE_START_PROJECT_URL: "  " }, {}, BASE), null);
+  });
+
+  it("resolves a path against the app base and keeps an absolute http(s) URL", () => {
+    assert.equal(
+      deploymentStartProjectUrl(
+        { VITE_START_PROJECT_URL: "/projects/start.geolibre.json" },
+        {},
+        BASE,
+      ),
+      "https://geoportal.example.org/projects/start.geolibre.json",
+    );
+    assert.equal(
+      deploymentStartProjectUrl(
+        { VITE_START_PROJECT_URL: "projects/start.geolibre.json" },
+        {},
+        BASE,
+      ),
+      "https://geoportal.example.org/app/projects/start.geolibre.json",
+    );
+    assert.equal(
+      deploymentStartProjectUrl(
+        {},
+        { VITE_START_PROJECT_URL: "https://cdn.example.org/p.geolibre.json" },
+        BASE,
+      ),
+      "https://cdn.example.org/p.geolibre.json",
+      "the build env is the fallback",
+    );
+  });
+
+  it("prefers the deployment over the build and rejects other schemes", () => {
+    assert.equal(
+      deploymentStartProjectUrl(
+        { VITE_START_PROJECT_URL: "https://a.example/one.json" },
+        { VITE_START_PROJECT_URL: "https://b.example/two.json" },
+        BASE,
+      ),
+      "https://a.example/one.json",
+    );
+    assert.equal(
+      deploymentStartProjectUrl({ VITE_START_PROJECT_URL: "javascript:alert(1)" }, {}, BASE),
+      null,
+    );
+    assert.equal(
+      deploymentStartProjectUrl({ VITE_START_PROJECT_URL: "ftp://x/y.json" }, {}, BASE),
+      null,
+    );
+  });
+});
 
 describe("fetchProjectFromUrl", () => {
   it("returns the parsed project on a successful fetch", async () => {

@@ -113,6 +113,7 @@ for (const key of [
   "BRAND_FAVICON_URL",
   "BRAND_ACCENT_COLOR",
   "CATALOG_URLS",
+  "START_PROJECT_URL",
 ]) {
   if (!process.env[`VITE_${key}`]) {
     const value = process.env[key] || FILE_ENV[`VITE_${key}`] || FILE_ENV[key];
@@ -312,6 +313,7 @@ const BUILD_ENV_KEYS = [
   "VITE_PYODIDE_INDEX_URL",
   "VITE_ROUTING_ENDPOINT",
   "VITE_SIDECAR_URL",
+  "VITE_START_PROJECT_URL",
   "VITE_STADIA_API_KEY",
   "VITE_TIANDITU_API_KEY",
   "VITE_TOMTOM_API_KEY",

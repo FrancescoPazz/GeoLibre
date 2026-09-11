@@ -17,7 +17,7 @@ import {
   type EmbedCommand,
   type EmbedEventType,
 } from "../lib/embed-api";
-import { fetchProjectFromUrl, projectUrlFromLocation } from "../lib/project-url";
+import { fetchProjectFromUrl, startupProjectUrl } from "../lib/project-url";
 import { shouldAwaitNativeMap } from "../lib/native-map-attach";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
 import { isKnownWhiteboxToolId } from "../lib/whitebox-tool-url";
@@ -125,7 +125,7 @@ export function useEmbedApi(
 
     // The URL the current project came from, echoed in `projectLoaded` so the
     // host can tell its own load from one the user triggered.
-    let projectSourceUrl: string | null = projectUrlFromLocation();
+    let projectSourceUrl: string | null = startupProjectUrl();
     let loadAbort: AbortController | null = null;
     const dataLoadAborts = new Set<AbortController>();
     let dataLoadQueue: Promise<void> = Promise.resolve();

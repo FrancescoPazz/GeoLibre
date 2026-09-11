@@ -1,6 +1,6 @@
 import { useAppStore } from "@geolibre/core";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchProjectFromUrl, projectUrlFromLocation } from "../lib/project-url";
+import { fetchProjectFromUrl, startupProjectUrl } from "../lib/project-url";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
 
 export type ProjectUrlLoadState =
@@ -10,7 +10,7 @@ export type ProjectUrlLoadState =
 
 export function useProjectUrlLoader(): ProjectUrlLoadState {
   const loadProject = useAppStore((state) => state.loadProject);
-  const projectUrl = useMemo(() => projectUrlFromLocation(), []);
+  const projectUrl = useMemo(() => startupProjectUrl(), []);
   const clearMessageTimeoutRef = useRef<number | null>(null);
   const [state, setState] = useState<ProjectUrlLoadState>({
     error: null,
