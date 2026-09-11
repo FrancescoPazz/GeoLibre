@@ -14,6 +14,7 @@ import { cn } from "@geolibre/ui";
 import { Bug } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { usePointerPlace } from "../../hooks/usePointerPlace";
+import { useSeaLevelElevation } from "../../hooks/useSeaLevelElevation";
 import { formatAccuracy, formatSpeedKmh } from "../../lib/gps-tracking";
 
 /**
@@ -44,7 +45,13 @@ export function StatusBar({
 }: StatusBarProps) {
   const { t } = useTranslation();
   const pointerCoords = useAppStore((s) => s.pointerCoords);
-  const pointerElevation = useAppStore((s) => s.pointerElevation);
+  const rawPointerElevation = useAppStore((s) => s.pointerElevation);
+  // The globe reports ellipsoidal heights; a deployment that reads heights
+  // above sea level gets them shifted by the geoid here.
+  const { elevation: pointerElevation, seaLevel } = useSeaLevelElevation(
+    rawPointerElevation,
+    pointerCoords,
+  );
   const pointerPlace = usePointerPlace();
   const cameraAltitude = useAppStore((s) => s.cameraAltitude);
   const scaleUnit = useAppStore((s) => s.preferences.map.scaleUnit);
@@ -127,7 +134,10 @@ export function StatusBar({
         {compact ? "XY" : "Coords"}: {coordText}
       </button>
       {elevationText && (
-        <span className="shrink-0" title={t("statusBar.elevationLong")}>
+        <span
+          className="shrink-0"
+          title={seaLevel ? t("statusBar.elevationSeaLevelLong") : t("statusBar.elevationLong")}
+        >
           {t("statusBar.elevation")}: {elevationText}
         </span>
       )}

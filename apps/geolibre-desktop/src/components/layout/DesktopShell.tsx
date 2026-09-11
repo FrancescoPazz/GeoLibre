@@ -28,7 +28,6 @@ import {
   reattachRouteAnimation,
   reattachFlightSimulator,
   reattachRer3dTools,
-  createEgm96Geoid,
   setElevationBandsGeoid,
   setMeasure3dGeoid,
   restoreArcGISViewportLayers,
@@ -184,6 +183,7 @@ import { FlightSimulatorPanel } from "../panels/FlightSimulatorPanel";
 import { LineOfSightPanel } from "../panels/LineOfSightPanel";
 import { Measure3dPanel } from "../panels/Measure3dPanel";
 import { PlayPathPanel } from "../panels/PlayPathPanel";
+import { getSharedGeoid } from "../../lib/geoid";
 import { GlobeClippingPanel } from "../panels/GlobeClippingPanel";
 import { ElevationBandsPanel } from "../panels/ElevationBandsPanel";
 import { CoordsConverterPanel } from "../panels/CoordsConverterPanel";
@@ -1389,8 +1389,7 @@ export function DesktopShell({
   // a static asset fetched on first use, so wiring it is a one-time hand-over
   // rather than something the renderer swap has to redo.
   useEffect(() => {
-    const url = new URL(`${import.meta.env.BASE_URL}geoid/WW15MGH.DAC`, document.baseURI).href;
-    const geoid = createEgm96Geoid(url);
+    const geoid = getSharedGeoid();
     setMeasure3dGeoid(geoid.heights);
     setElevationBandsGeoid(geoid);
     return () => {

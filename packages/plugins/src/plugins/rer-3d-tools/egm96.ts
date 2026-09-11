@@ -68,6 +68,14 @@ export interface Egm96Geoid {
   heights: GeoidHeights;
   /** Undulation at one position given in degrees. */
   height(lngDeg: number, latDeg: number): Promise<number>;
+  /**
+   * Undulation at one position given in degrees, without waiting: null until
+   * the grid is in memory (a first call to {@link height} or {@link load}
+   * fetches it). For readouts that follow the pointer.
+   */
+  heightSync(lngDeg: number, latDeg: number): number | null;
+  /** Fetch and decode the grid now rather than on first use. */
+  load(): Promise<void>;
   /** Whether the grid has been fetched and decoded. */
   loaded(): boolean;
 }
@@ -106,6 +114,11 @@ export function createEgm96Geoid(gridUrl: string, fetchImpl?: FetchLike): Egm96G
     },
     height: async (lngDeg, latDeg) =>
       egm96UndulationMeters(await load(), lngDeg * toRad, latDeg * toRad),
+    heightSync: (lngDeg, latDeg) =>
+      grid ? egm96UndulationMeters(grid, lngDeg * toRad, latDeg * toRad) : null,
+    load: async () => {
+      await load();
+    },
     loaded: () => grid !== null,
   };
 }

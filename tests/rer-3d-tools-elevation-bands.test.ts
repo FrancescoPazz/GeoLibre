@@ -90,6 +90,8 @@ function fakeGeoid(undulation: number): Egm96Geoid & { asked: Array<[number, num
       asked.push([lng, lat]);
       return undulation;
     },
+    heightSync: () => undulation,
+    load: async () => {},
     loaded: () => true,
   };
 }

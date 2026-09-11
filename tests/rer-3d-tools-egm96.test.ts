@@ -107,6 +107,17 @@ describe("createEgm96Geoid", () => {
     assert.equal(f.calls(), 1, "the grid is kept");
   });
 
+  it("answers synchronously once loaded, and can be loaded ahead of use", async () => {
+    const f = fakeFetch();
+    const geoid = createEgm96Geoid("/geoid/WW15MGH.DAC", f.impl);
+    assert.equal(geoid.heightSync(11, 44), null, "nothing in memory yet");
+    await geoid.load();
+    assert.equal(f.calls(), 1);
+    assert.equal(geoid.heightSync(11, 44), 42);
+    await geoid.load();
+    assert.equal(f.calls(), 1, "loading again is free");
+  });
+
   it("does not cache a failed fetch", async () => {
     const f = fakeFetch(true);
     const geoid = createEgm96Geoid("/geoid/WW15MGH.DAC", f.impl);

@@ -192,6 +192,7 @@
   "statusBar": {
     "elevation": "Quota",
     "elevationLong": "Quota",
+    "elevationSeaLevelLong": "Quota sul livello medio del mare (EGM96)",
     "place": "Località",
     "placeLong": "Località sotto il puntatore, dal servizio di toponomastica del deployment",
     "cameraAltitude": "Quota vista",

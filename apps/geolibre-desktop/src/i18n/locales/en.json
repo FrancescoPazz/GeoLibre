@@ -192,6 +192,7 @@
   "statusBar": {
     "elevation": "Elev",
     "elevationLong": "Elevation",
+    "elevationSeaLevelLong": "Elevation above mean sea level (EGM96)",
     "place": "Place",
     "placeLong": "Place under the pointer, from the deployment's place-name service",
     "cameraAltitude": "Eye alt",
