@@ -6,20 +6,20 @@ Beyond the [Add Data](adding-data.md) menu, GeoLibre connects to several hosted 
 
 ## Cloud catalogs
 
-| Integration | Where | What it does |
-| --- | --- | --- |
-| **Planetary Computer** | Processing menu | Browse and load STAC data from Microsoft Planetary Computer (Sentinel, Landsat, and more). |
-| **Earth Engine** | Processing menu | Browse and load Google Earth Engine datasets after authenticating. |
-| **Overture Maps** | Plugins menu | Load Overture Maps data themes (such as buildings, places, and transportation). |
-| **STAC** | Add Data menu | Search any STAC catalog and add matching raster items. See [Adding Data](adding-data.md#web-services). |
+| Integration            | Where           | What it does                                                                                           |
+| ---------------------- | --------------- | ------------------------------------------------------------------------------------------------------ |
+| **Planetary Computer** | Processing menu | Browse and load STAC data from Microsoft Planetary Computer (Sentinel, Landsat, and more).             |
+| **Earth Engine**       | Processing menu | Browse and load Google Earth Engine datasets after authenticating.                                     |
+| **Overture Maps**      | Plugins menu    | Load Overture Maps data themes (such as buildings, places, and transportation).                        |
+| **STAC**               | Add Data menu   | Search any STAC catalog and add matching raster items. See [Adding Data](adding-data.md#web-services). |
 
 !!! note "Credentials"
-    Earth Engine requires authentication, and some providers expect an API key or token. Set these in **Settings → Environment Variables**. See [Settings & Preferences](settings.md).
+Earth Engine requires authentication, and some providers expect an API key or token. Set these in **Settings → Environment Variables**. See [Settings & Preferences](settings.md).
 
 ## Self-hosted catalogs
 
-| Integration | Where | What it does |
-| --- | --- | --- |
+| Integration | Where        | What it does                                                                                                                                                                             |
+| ----------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **GeoLens** | Plugins menu | Connect to a self-hosted [GeoLens](https://getgeolens.com) catalog, search its datasets, and add them as signed vector tiles, OGC API Features GeoJSON, or server-rendered raster tiles. |
 
 GeoLens is an open-source spatial catalog (FastAPI + PostGIS) that you run on
@@ -44,34 +44,34 @@ single sign-on layer.
 
 The **Web Services** submenu of the [Plugins menu](plugins.md) bundles seventeen catalog and service browsers, from the United States federal sources below to general-purpose STAC, ArcGIS Hub, Source Cooperative, and Hugging Face browsers. All seventeen are documented on the **[Web Services](web-services.md)** page.
 
-| Service | Data |
-| --- | --- |
-| **FEMA NFHL** | National Flood Hazard Layer (NFHL) flood data. |
-| **NASA Earthdata** | NASA satellite and Earth science imagery. |
-| **EPA EnviroAtlas** | Environmental and ecosystem data. |
-| **USGS National Map** | The National Map topographic and geographic layers. |
-| **USGS NLDI** | Flowline tracing, hydrolocation, basins, and network navigation. See [USGS NLDI workflows](usgs-nldi.md). |
+| Service               | Data                                                                                                      |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| **FEMA NFHL**         | National Flood Hazard Layer (NFHL) flood data.                                                            |
+| **NASA Earthdata**    | NASA satellite and Earth science imagery.                                                                 |
+| **EPA EnviroAtlas**   | Environmental and ecosystem data.                                                                         |
+| **USGS National Map** | The National Map topographic and geographic layers.                                                       |
+| **USGS NLDI**         | Flowline tracing, hydrolocation, basins, and network navigation. See [USGS NLDI workflows](usgs-nldi.md). |
 
 ## Imagery and street-level
 
-| Integration | Where | What it does |
-| --- | --- | --- |
-| **Historical Imagery** | Plugins menu | Browse historical Esri World Imagery snapshots. |
-| **Vantor Open Data** | Plugins → Web Services | Search disaster-event satellite imagery, filter pre/post-event scenes by map extent, visualize Cloud-Optimized GeoTIFFs, and download selected scenes. |
-| **Planet Open Data** | Plugins → Web Services | Browse Planet Labs PBC disaster data releases through the STAC Catalogs interface, with the public disaster catalog selected by default. |
-| **Street View** | Plugins menu | View Google Street View and Mapillary street-level imagery. Needs provider credentials (see [Getting Started](../getting-started.md#optional-imagery-credentials)). |
+| Integration            | Where                  | What it does                                                                                                                                                        |
+| ---------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Historical Imagery** | Plugins menu           | Browse historical Esri World Imagery snapshots.                                                                                                                     |
+| **Vantor Open Data**   | Plugins → Web Services | Search disaster-event satellite imagery, filter pre/post-event scenes by map extent, visualize Cloud-Optimized GeoTIFFs, and download selected scenes.              |
+| **Planet Open Data**   | Plugins → Web Services | Browse Planet Labs PBC disaster data releases through the STAC Catalogs interface, with the public disaster catalog selected by default.                            |
+| **Street View**        | Plugins menu           | View Google Street View and Mapillary street-level imagery. Needs provider credentials (see [Getting Started](../getting-started.md#optional-imagery-credentials)). |
 
 ## Time series and comparison
 
-| Plugin | What it does |
-| --- | --- |
+| Plugin          | What it does                                                                                                               |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | **Time Slider** | Animate time series raster and vector data (COG, XYZ/WMTS, WMS-Time, and time-filtered GeoJSON) through a docked timeline. |
-| **Layer Swipe** | Compare two layers side by side with a swipe handle. |
+| **Layer Swipe** | Compare two layers side by side with a swipe handle.                                                                       |
 
 ## AI analysis
 
-| Plugin | What it does |
-| --- | --- |
+| Plugin       | What it does                     |
+| ------------ | -------------------------------- |
 | **GeoAgent** | AI-assisted geospatial analysis. |
 
 The plugins under **Imagery and street-level**, **Time series and comparison**, and **AI analysis** are activated from the [Plugins menu](plugins.md), where you can also set their on-map position (the integrations further up this page are reached from the Processing and Add Data menus instead). The Web Services panels are the exception, including **Vantor Open Data** and **Planet Open Data** above: they dock beside the Layers panel instead of floating over the map, so they offer no position choice.
@@ -80,11 +80,11 @@ The plugins under **Imagery and street-level**, **Time series and comparison**, 
 
 GeoLibre can turn addresses into points and points into addresses. Both run through a selectable provider; the public [Nominatim](https://nominatim.openstreetmap.org/) service is the default and needs no key.
 
-| Tool | Where | What it does |
-| --- | --- | --- |
-| **Geocode Addresses** | Processing menu | Pick a CSV with an address column and geocode each row into a point layer. Each matched row keeps its original columns plus `geocode_lat`, `geocode_lon`, `geocode_display_name`, and `geocode_importance` (a match score). A per-run provider picker lets you switch backend for that batch. |
-| **Delimited Text Layer → Addresses** | Add Data | Geocode a CSV/TSV at import time instead of a separate step: choose "Addresses" as the import mode, pick one or more columns to concatenate into the address (e.g. street, city, state), and each row is geocoded through the project's configured provider. Matched rows become points; rows with no match are kept (not dropped) with `geocode_status: "unmatched"` so they stay visible and fixable in the attribute table. |
-| **Reverse Geocode** | Controls menu | A toggle. While on, click anywhere on the map to look up the address at that point, shown in a popup with a copy button. |
+| Tool                                 | Where           | What it does                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Geocode Addresses**                | Processing menu | Pick a CSV with an address column and geocode each row into a point layer. Each matched row keeps its original columns plus `geocode_lat`, `geocode_lon`, `geocode_display_name`, and `geocode_importance` (a match score). A per-run provider picker lets you switch backend for that batch.                                                                                                                                  |
+| **Delimited Text Layer → Addresses** | Add Data        | Geocode a CSV/TSV at import time instead of a separate step: choose "Addresses" as the import mode, pick one or more columns to concatenate into the address (e.g. street, city, state), and each row is geocoded through the project's configured provider. Matched rows become points; rows with no match are kept (not dropped) with `geocode_status: "unmatched"` so they stay visible and fixable in the attribute table. |
+| **Reverse Geocode**                  | Controls menu   | A toggle. While on, click anywhere on the map to look up the address at that point, shown in a popup with a copy button.                                                                                                                                                                                                                                                                                                       |
 
 All three send coordinates or addresses to a third-party service, so the first time you enable Reverse Geocode (and whenever you run a batch, including at CSV import time) your data leaves your device for those requests. Reverse Geocode shows a one-time notice before it is first enabled.
 
@@ -92,14 +92,15 @@ All three send coordinates or addresses to a third-party service, so the first t
 
 Choose a backend in **Settings → Geocoding**. The selection, per-provider API keys, optional endpoint overrides, and contact email are saved with the project.
 
-| Provider | API key | Notes |
-| --- | --- | --- |
-| **Nominatim (OpenStreetMap)** | No | Default. Public endpoint is paced and row-capped (see below); point it at a self-hosted instance to relax both. |
-| **CartoCiudad (IGN España)** | No | Official Spanish national geocoder (IGN/CNIG). Free public API, no key required. |
-| **Pelias** | Optional | Hosted [geocode.earth](https://geocode.earth/) needs a key; a self-hosted Pelias does not. |
-| **ArcGIS World Geocoder** | Yes | Esri token / API key. |
-| **Mapbox** | Yes | Mapbox access token (`pk.…`). |
-| **Google** | Yes | Google Maps Geocoding API key. Google does not officially allow browser cross-origin requests to this API, so a same-origin proxy may be required. |
+| Provider                                       | API key             | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Nominatim (OpenStreetMap)**                  | No                  | Default. Public endpoint is paced and row-capped (see below); point it at a self-hosted instance to relax both.                                                                                                                                                                                                                                                                                                                                                                          |
+| **CartoCiudad (IGN España)**                   | No                  | Official Spanish national geocoder (IGN/CNIG). Free public API, no key required.                                                                                                                                                                                                                                                                                                                                                                                                         |
+| **Pelias**                                     | Optional            | Hosted [geocode.earth](https://geocode.earth/) needs a key; a self-hosted Pelias does not.                                                                                                                                                                                                                                                                                                                                                                                               |
+| **ArcGIS World Geocoder**                      | Yes                 | Esri token / API key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| **Mapbox**                                     | Yes                 | Mapbox access token (`pk.…`).                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **Google**                                     | Yes                 | Google Maps Geocoding API key. Google does not officially allow browser cross-origin requests to this API, so a same-origin proxy may be required.                                                                                                                                                                                                                                                                                                                                       |
+| **Emilia-Romagna eGeoCoding (Normalizzatore)** | Service credentials | The Emilia-Romagna region's official address normaliser, forward-only, searching within the map's current view (or the whole region for a batch). Enter the service credentials as the API key in the form `username:password`; a deployment that fronts the service with a same-origin proxy that injects them can leave the key empty and set the endpoint to the proxy. Results are ordered by the service's reliability rank, which is kept as `geocode_importance` (0 is the best). |
 
 API keys are stored in plain text in the `.geolibre.json` project file, so avoid sharing a project that carries them (the Project → Share flow can strip environment variables, but provider keys live under Geocoding settings).
 
@@ -115,10 +116,10 @@ Self-hosted Nominatim and the keyed providers (Mapbox, ArcGIS, Google, hosted Pe
 
 The Geocoding settings panel is the easiest way to configure a provider, but the same values can also be set as runtime environment variables (the same `VITE_`-prefixed mechanism used for [imagery credentials](../getting-started.md#optional-imagery-credentials)). Explicit environment variables override the Settings panel.
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `VITE_GEOCODER_PROVIDER` | `nominatim` | Provider id: `nominatim`, `cartociudad`, `pelias`, `arcgis`, `mapbox`, or `google`. |
-| `VITE_GEOCODER_API_KEY` | unset | API key / access token for the selected provider. |
-| `VITE_GEOCODER_ENDPOINT` | provider default | Forward (address to point) search endpoint override. |
-| `VITE_GEOCODER_REVERSE_ENDPOINT` | provider default | Reverse (point to address) endpoint override. |
-| `VITE_GEOCODER_EMAIL` | unset | Contact email sent as the `email` query parameter to identify your client to Nominatim. |
+| Variable                         | Default          | Purpose                                                                                 |
+| -------------------------------- | ---------------- | --------------------------------------------------------------------------------------- |
+| `VITE_GEOCODER_PROVIDER`         | `nominatim`      | Provider id: `nominatim`, `cartociudad`, `pelias`, `arcgis`, `mapbox`, or `google`.     |
+| `VITE_GEOCODER_API_KEY`          | unset            | API key / access token for the selected provider.                                       |
+| `VITE_GEOCODER_ENDPOINT`         | provider default | Forward (address to point) search endpoint override.                                    |
+| `VITE_GEOCODER_REVERSE_ENDPOINT` | provider default | Reverse (point to address) endpoint override.                                           |
+| `VITE_GEOCODER_EMAIL`            | unset            | Contact email sent as the `email` query parameter to identify your client to Nominatim. |

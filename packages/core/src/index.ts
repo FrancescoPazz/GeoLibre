@@ -129,6 +129,23 @@ export {
   type ReverseGeocodeDisplay,
 } from "./geocoding";
 export {
+  RER_DEFAULT_SEARCH_EXTENT,
+  RER_GEOCODER_ENDPOINT,
+  RER_GEOCODER_PROVIDER_ID,
+  parseRerRecords,
+  rerAddressUrl,
+  rerCredentials,
+  rerFetchForward,
+  rerGeocodingProvider,
+  rerHandle,
+  rerHandleBody,
+  rerHandleUrl,
+  rerRecordset,
+  rerSearchBody,
+  resetRerGeocoderSessions,
+  type RerAddressRecord,
+} from "./rer-geocoder";
+export {
   getBuildEnvironment,
   getCesiumIonToken,
   getCesiumTerrainAssetId,

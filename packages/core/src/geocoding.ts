@@ -1,4 +1,5 @@
 import type { Feature, Point } from "geojson";
+import { rerGeocodingProvider } from "./rer-geocoder";
 import { getRuntimeEnvironment } from "./runtime-env";
 
 /**
@@ -13,10 +14,12 @@ import { getRuntimeEnvironment } from "./runtime-env";
  *
  * Providers: geocoding is dispatched through a small {@link GeocodingProvider}
  * registry so alternatives to Nominatim (ArcGIS World Geocoder, CartoCiudad, Mapbox,
- * Pelias, Google) can be selected per project. Each provider builds its own request
- * URLs and normalizes its response into a {@link GeocodeMatch} (forward) or a
- * {@link ReverseGeocodeDisplay} (reverse), so the dialog and plugin stay
- * provider-agnostic. Nominatim is the default.
+ * Pelias, Google, Emilia-Romagna's eGeoCoding) can be selected per project. Each
+ * provider builds its own request URLs and normalizes its response into a
+ * {@link GeocodeMatch} (forward) or a {@link ReverseGeocodeDisplay} (reverse), so
+ * the dialog and plugin stay provider-agnostic; a provider whose service is not
+ * a plain GET owns its request through {@link GeocodingProvider.fetchForward}.
+ * Nominatim is the default.
  *
  * The 1 request/second throttle and the row cap are part of Nominatim's public
  * usage policy and are therefore applied ONLY to the default public host; a
@@ -71,7 +74,8 @@ export type GeocodingProviderId =
   | "arcgis"
   | "mapbox"
   | "google"
-  | "cartociudad";
+  | "cartociudad"
+  | "rer";
 
 /** The provider used when none is configured. */
 export const DEFAULT_GEOCODING_PROVIDER_ID: GeocodingProviderId = "nominatim";
@@ -93,6 +97,11 @@ export interface GeocoderConfig {
 export interface ForwardRequestOptions {
   email?: string;
   limit?: number;
+  /**
+   * The map's current view as [west, south, east, north] degrees, for
+   * providers that confine or bias a search to an area.
+   */
+  bbox?: readonly [number, number, number, number];
 }
 
 /** Per-request options passed to a provider's reverse URL builder. */
@@ -152,6 +161,20 @@ export interface GeocodingProvider {
   defaultReverseEndpoint: string;
   buildForwardUrl(config: GeocoderConfig, query: string, options: ForwardRequestOptions): string;
   parseForward(data: unknown): GeocodeMatch[];
+  /**
+   * Run the forward request itself, for a service that is not a single GET —
+   * a POST with a body, or one that needs a session first. When set,
+   * {@link geocodeForward} delegates to it instead of fetching
+   * {@link buildForwardUrl}; the provider still normalises through
+   * {@link parseForward} so both paths agree.
+   */
+  fetchForward?(
+    config: GeocoderConfig,
+    query: string,
+    options: ForwardRequestOptions,
+    fetchImpl: typeof globalThis.fetch,
+    signal?: AbortSignal,
+  ): Promise<GeocodeMatch[]>;
   buildReverseUrl(
     config: GeocoderConfig,
     lon: number,
@@ -846,6 +869,7 @@ export const GEOCODING_PROVIDERS: readonly GeocodingProvider[] = [
   mapboxProvider,
   googleProvider,
   cartociudadProvider,
+  rerGeocodingProvider,
 ];
 
 const PROVIDERS_BY_ID = new Map<GeocodingProviderId, GeocodingProvider>(
@@ -1102,14 +1126,24 @@ function wrapLongitude(lon: number): number | null {
  */
 export async function geocodeForward(
   query: string,
-  options: { signal?: AbortSignal; config?: GeocoderConfig; limit?: number } = {},
+  options: {
+    signal?: AbortSignal;
+    config?: GeocoderConfig;
+    limit?: number;
+    bbox?: readonly [number, number, number, number];
+  } = {},
 ): Promise<GeocodeMatch[]> {
   const config = options.config ?? getGeocoderConfig();
   const provider = getGeocodingProvider(config.providerId);
-  const url = provider.buildForwardUrl(config, query, {
+  const requestOptions: ForwardRequestOptions = {
     email: config.email,
     limit: options.limit,
-  });
+    bbox: options.bbox,
+  };
+  if (provider.fetchForward) {
+    return provider.fetchForward(config, query, requestOptions, geocodeFetch(), options.signal);
+  }
+  const url = provider.buildForwardUrl(config, query, requestOptions);
   const response = await geocodeFetch()(url, {
     signal: options.signal,
     headers: { Accept: "application/json" },
@@ -1136,6 +1170,7 @@ export async function geocodeReverse(
   }
   const config = options.config ?? getGeocoderConfig();
   const provider = getGeocodingProvider(config.providerId);
+  if (!provider.reverse) return null;
   const url = provider.buildReverseUrl(config, wrappedLon, lat, {
     email: config.email,
     zoom: options.zoom,

@@ -220,6 +220,9 @@ export function LayerPanelPlaceSearch({
           signal: controller.signal,
           config,
           limit: MAX_RESULTS,
+          // Providers that search within an area (Emilia-Romagna's
+          // eGeoCoding) get the current view; the others ignore it.
+          bbox: mapControllerRef.current?.getViewBounds() ?? undefined,
         });
         if (controller.signal.aborted) return;
         setPlaceRows(matches.map((match) => ({ kind: "place", match })));
@@ -230,7 +233,7 @@ export function LayerPanelPlaceSearch({
         setStatus("error");
       }
     },
-    [geocodingPrefs],
+    [geocodingPrefs, mapControllerRef],
   );
 
   // The local half: match the query against the loaded layers' attributes. It
