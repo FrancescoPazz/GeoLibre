@@ -104,11 +104,14 @@ export {
   PROFILE_SAMPLING_DEBOUNCE_MS,
   clearMeasure3d,
   closeMeasure3dPanel,
+  exportMeasure3dSummary,
   getMeasure3dProjectState,
   getMeasure3dSnapshot,
   isMeasure3dPanelVisible,
+  measure3dSummary,
   normalizeDrawOptions,
   openMeasure3dPanel,
+  saveMeasure3dAsLayer,
   reattachMeasure3d,
   restoreMeasure3d,
   setMeasure3dGeoid,
@@ -137,6 +140,15 @@ export {
   type SnapMode,
   type TerrainProfile,
 } from "./terrain-profile";
+export {
+  buildMeasureFeatureCollection,
+  measureFileStem,
+  measureSummaryKind,
+  measureSummaryProperties,
+  measureSummaryText,
+  pathBearingDegrees,
+  type MeasureSummaryKind,
+} from "./measure-export";
 export {
   EGM96_COLUMNS,
   EGM96_GRID_BYTES,

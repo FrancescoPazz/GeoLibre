@@ -5,10 +5,12 @@ import {
   buildChartGeometry,
   clearMeasure3d,
   closeMeasure3dPanel,
+  exportMeasure3dSummary,
   formatDegrees,
   formatMeters,
   formatSquareMeters,
   getMeasure3dSnapshot,
+  saveMeasure3dAsLayer,
   setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,
   setMeasure3dMode,
@@ -23,6 +25,8 @@ import { Button } from "@geolibre/ui";
 import {
   Circle,
   Eraser,
+  FileText,
+  Layers,
   MapPin,
   Pentagon,
   Ruler,
@@ -113,7 +117,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
     handle.addEventListener("pointercancel", handleUp);
   };
 
-  const { mode, options, geometry, measures, bound } = state;
+  const { mode, options, geometry, measures, bound, sampling } = state;
   const hasFigure = geometry.points.length > 0;
   const hint = !bound
     ? t("toolbar.measure3d.unavailable")
@@ -267,6 +271,45 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
 
         {(mode === "line" || mode === "polygon") && geometry.points.length >= 2 && (
           <ProfileSection state={state} />
+        )}
+
+        {hasFigure && (
+          <div className="flex flex-wrap gap-2 border-t border-border pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              title={t("toolbar.measure3d.saveAsLayerTooltip")}
+              disabled={sampling}
+              onClick={() =>
+                saveMeasure3dAsLayer(
+                  t("toolbar.measure3d.layerName", {
+                    mode: t(`toolbar.measure3d.modes.${mode}` as const),
+                  }),
+                )
+              }
+            >
+              <Layers className="h-3.5 w-3.5" />
+              {t("toolbar.measure3d.saveAsLayer")}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              title={t("toolbar.measure3d.exportSummaryTooltip")}
+              disabled={sampling}
+              onClick={() =>
+                exportMeasure3dSummary(
+                  t("toolbar.measure3d.layerName", {
+                    mode: t(`toolbar.measure3d.modes.${mode}` as const),
+                  }),
+                )
+              }
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {t("toolbar.measure3d.exportSummary")}
+            </Button>
+          </div>
         )}
       </div>
     </div>

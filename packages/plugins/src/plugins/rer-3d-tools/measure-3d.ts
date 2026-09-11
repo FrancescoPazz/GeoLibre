@@ -10,6 +10,11 @@ import {
 } from "./draw-geometry";
 import type { LngLatAlt } from "./line-of-sight-geometry";
 import {
+  buildMeasureFeatureCollection,
+  measureFileStem,
+  measureSummaryText,
+} from "./measure-export";
+import {
   SAMPLING_STEP_DISABLED,
   buildTerrainProfile,
   profileSamplingStep,
@@ -70,6 +75,8 @@ let options: DrawOptions = { ...DEFAULT_DRAW_OPTIONS };
 let geometry: DrawGeometry = { mode, points: [], closed: false };
 let drawing: CesiumDrawing | null = null;
 let cesium: CesiumSceneHandle["Cesium"] | null = null;
+/** The host API the panel was opened with, for actions that create layers or files. */
+let hostApp: GeoLibreAppAPI | null = null;
 let profile: TerrainProfile | null = null;
 let sampling = false;
 let samplingStepAuto = true;
@@ -284,6 +291,7 @@ function detach(): void {
 
 export function openMeasure3dPanel(app: GeoLibreAppAPI): void {
   open = true;
+  hostApp = app;
   attach(app);
   publish();
 }
@@ -326,6 +334,7 @@ export function clearMeasure3d(): void {
 /** Re-bind after an engine mounts or is replaced, redrawing the kept figure. */
 export function reattachMeasure3d(app: GeoLibreAppAPI): void {
   if (!open) return;
+  hostApp = app;
   const handle = primaryGlobe(app);
   const d = liveDrawing();
   if (d && handle && d.drives(handle.viewer)) return;
@@ -365,6 +374,35 @@ export function normalizeDrawOptions(raw: unknown): DrawOptions {
   };
 }
 
+/**
+ * Add the current measurement to the project as a GeoJSON layer — the
+ * figure, its vertices with per-segment distances, and the sampled profile —
+ * so it can be styled, exported in any format and saved with the project.
+ * Returns the new layer's id, or null when there is nothing to save.
+ */
+export function saveMeasure3dAsLayer(name: string): string | null {
+  const C = cesium;
+  if (!hostApp || !C || geometry.points.length === 0) return null;
+  const collection = buildMeasureFeatureCollection(C, geometry, measures, profile);
+  if (collection.features.length === 0) return null;
+  return hostApp.addGeoJsonLayer(name, collection);
+}
+
+/** The plain-text summary of the current measurement, or null when there is none. */
+export function measure3dSummary(name: string): string | null {
+  const C = cesium;
+  if (!C || geometry.points.length === 0) return null;
+  return measureSummaryText(C, name, geometry, measures, profile);
+}
+
+/** Download the summary as `<name>_summary.txt` through the host. */
+export function exportMeasure3dSummary(name: string): boolean {
+  const text = measure3dSummary(name);
+  if (!text || !hostApp?.exportTextFile) return false;
+  hostApp.exportTextFile(`${measureFileStem(name)}_summary.txt`, text, { mimeType: "text/plain" });
+  return true;
+}
+
 /** Restore from a project file's saved state; `undefined` resets the tool. */
 export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
   if (!state || typeof state !== "object") {
@@ -383,6 +421,7 @@ export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
     return false;
   }
   const raw = state as Record<string, unknown>;
+  hostApp = app;
   mode = normalizeMode(raw.mode);
   options = normalizeDrawOptions(raw);
   const points = normalizePoints(raw.points);

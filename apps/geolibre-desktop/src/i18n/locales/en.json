@@ -2385,6 +2385,11 @@
         "meanSeaLevel": "Heights above sea level (EGM96)",
         "noGeoid": "The EGM96 geoid grid is not available in this deployment."
       },
+      "saveAsLayer": "Save as layer",
+      "saveAsLayerTooltip": "Add the measurement to the project as a GeoJSON layer: the figure, its vertices with per-segment distances, and the terrain profile. Export it in any format from the Layers panel.",
+      "exportSummary": "Summary",
+      "exportSummaryTooltip": "Download a plain-text summary of the measurement.",
+      "layerName": "3D measure — {{mode}}",
       "clampToGround": "Drape on terrain",
       "showLabels": "Labels on the map",
       "vertices": "Vertices",

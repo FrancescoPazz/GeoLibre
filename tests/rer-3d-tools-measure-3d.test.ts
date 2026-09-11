@@ -26,6 +26,9 @@ import {
   setMeasure3dSamplingStep,
   setMeasure3dGeoid,
   setMeasure3dHeightsAboveSeaLevel,
+  saveMeasure3dAsLayer,
+  measure3dSummary,
+  exportMeasure3dSummary,
   PROFILE_SAMPLING_DEBOUNCE_MS,
 } from "../packages/plugins/src/plugins/rer-3d-tools/measure-3d";
 import { SAMPLING_STEP_SERIES } from "../packages/plugins/src/plugins/rer-3d-tools/terrain-profile";
@@ -628,12 +631,19 @@ describe("measure-3d heights above sea level", () => {
     const globe = makeGlobe({ terrain: () => 100 });
     openMeasure3dPanel(globeApp(globe));
     assert.equal(getMeasure3dSnapshot().geoidAvailable, false);
-    assert.equal(getMeasure3dSnapshot().heightsAboveSeaLevel, false, "no deployment default in tests");
+    assert.equal(
+      getMeasure3dSnapshot().heightsAboveSeaLevel,
+      false,
+      "no deployment default in tests",
+    );
     globe.click(A);
     globe.click(B);
     setMeasure3dHeightsAboveSeaLevel(true);
     await settle();
-    assert.ok(Math.abs((getMeasure3dSnapshot().profile?.minAlt ?? 0) - 100) < 1e-6, "no geoid, ellipsoidal heights");
+    assert.ok(
+      Math.abs((getMeasure3dSnapshot().profile?.minAlt ?? 0) - 100) < 1e-6,
+      "no geoid, ellipsoidal heights",
+    );
   });
 
   it("subtracts the geoid undulation once supplied and enabled, and restores it from the project", async () => {
@@ -646,7 +656,10 @@ describe("measure-3d heights above sea level", () => {
     setMeasure3dHeightsAboveSeaLevel(true);
     await settle();
     let s = getMeasure3dSnapshot();
-    assert.ok(Math.abs((s.profile?.minAlt ?? 0) - 60) < 1e-6, "100 m ellipsoidal − 40 m undulation");
+    assert.ok(
+      Math.abs((s.profile?.minAlt ?? 0) - 60) < 1e-6,
+      "100 m ellipsoidal − 40 m undulation",
+    );
     assert.equal(getMeasure3dProjectState()?.meanSeaLevel, true);
     setMeasure3dHeightsAboveSeaLevel(false);
     await settle();
@@ -658,5 +671,57 @@ describe("measure-3d heights above sea level", () => {
     await settle();
     assert.equal(getMeasure3dSnapshot().heightsAboveSeaLevel, true);
     assert.ok(Math.abs((getMeasure3dSnapshot().profile?.minAlt ?? 0) - 60) < 1e-6);
+  });
+});
+
+describe("measure-3d save and summary", () => {
+  beforeEach(() => {
+    restoreMeasure3d(mapLessApp, undefined);
+  });
+
+  function recordingApp(globe: ReturnType<typeof makeGlobe>) {
+    const layers: Array<{ name: string; features: number }> = [];
+    const files: Array<{ filename: string; content: string }> = [];
+    const app = {
+      getMap: () => null,
+      getCesiumScene: () => globe.handle,
+      addGeoJsonLayer: (name: string, data: { features: unknown[] }) => {
+        layers.push({ name, features: data.features.length });
+        return `layer-${layers.length}`;
+      },
+      exportTextFile: (filename: string, content: string) => {
+        files.push({ filename, content });
+      },
+    } as unknown as GeoLibreAppAPI;
+    return { app, layers, files };
+  }
+
+  it("adds the measurement to the project as a layer through the host", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    const { app, layers } = recordingApp(globe);
+    openMeasure3dPanel(app);
+    assert.equal(saveMeasure3dAsLayer("Misura"), null, "nothing to save yet");
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    const id = saveMeasure3dAsLayer("Misura 3D — Linea");
+    assert.equal(id, "layer-1");
+    // The figure, its two vertices, and the sampled profile line.
+    assert.deepEqual(layers, [{ name: "Misura 3D — Linea", features: 4 }]);
+  });
+
+  it("writes the summary through the host with a file-safe name", () => {
+    const globe = makeGlobe();
+    const { app, files } = recordingApp(globe);
+    openMeasure3dPanel(app);
+    assert.equal(measure3dSummary("x"), null);
+    assert.equal(exportMeasure3dSummary("x"), false);
+    globe.click(A);
+    globe.click(B);
+    const text = measure3dSummary("Percorso 1");
+    assert.ok(text?.startsWith("name: Percorso 1\nkind: line"));
+    assert.equal(exportMeasure3dSummary("Percorso 1"), true);
+    assert.equal(files[0].filename, "Percorso_1_summary.txt");
+    assert.equal(files[0].content, text);
   });
 });

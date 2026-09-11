@@ -2367,6 +2367,11 @@
         "meanSeaLevel": "Quote sul livello del mare (EGM96)",
         "noGeoid": "La griglia del geoide EGM96 non è disponibile in questo deployment."
       },
+      "saveAsLayer": "Salva come layer",
+      "saveAsLayerTooltip": "Aggiunge la misura al progetto come layer GeoJSON: la figura, i vertici con le distanze per segmento e il profilo del terreno. Esportabile in qualsiasi formato dal pannello Layer.",
+      "exportSummary": "Riepilogo",
+      "exportSummaryTooltip": "Scarica un riepilogo testuale della misura.",
+      "layerName": "Misura 3D — {{mode}}",
       "clampToGround": "Adagia sul terreno",
       "showLabels": "Etichette sulla mappa",
       "vertices": "Vertici",
