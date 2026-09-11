@@ -687,6 +687,12 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     tier: "advanced",
   },
   {
+    id: "controls.coordsConverter",
+    menuId: "controls",
+    labelKey: "toolbar.item.coordsConverter",
+    tier: "advanced",
+  },
+  {
     id: "controls.spinGlobe",
     menuId: "controls",
     labelKey: "toolbar.item.spinGlobe",

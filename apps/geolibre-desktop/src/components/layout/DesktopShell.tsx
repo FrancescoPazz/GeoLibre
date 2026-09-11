@@ -186,6 +186,7 @@ import { Measure3dPanel } from "../panels/Measure3dPanel";
 import { PlayPathPanel } from "../panels/PlayPathPanel";
 import { GlobeClippingPanel } from "../panels/GlobeClippingPanel";
 import { ElevationBandsPanel } from "../panels/ElevationBandsPanel";
+import { CoordsConverterPanel } from "../panels/CoordsConverterPanel";
 import {
   PluginRightPanel,
   PLUGIN_PANEL_DEFAULT_WIDTH,
@@ -2825,6 +2826,12 @@ export function DesktopShell({
             displayName={t("shell.section.elevationBandsPanel")}
           >
             <ElevationBandsPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Coordinate converter panel"
+            displayName={t("shell.section.coordsConverterPanel")}
+          >
+            <CoordsConverterPanel mapControllerRef={mapControllerRef} />
           </SectionErrorBoundary>
           <KnowledgeCardConsentDialog
             open={knowledgeNoticeOpen}

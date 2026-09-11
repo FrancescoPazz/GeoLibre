@@ -159,6 +159,23 @@ export {
   type WhereAmIResolverOptions,
 } from "./where-am-i";
 export {
+  CRS_CONVERSIONS,
+  ED50_ETRS89_WKT,
+  MONTE_MARIO_ETRS89_WKT,
+  WGS84_EPSG,
+  conversionsForInput,
+  convertCoordinates,
+  formatConverted,
+  getCoordsConverterUrl,
+  inputXY,
+  parseCoordinateInput,
+  parseProjectedPoint,
+  projectRequestUrl,
+  type ConvertedCoordinates,
+  type CoordinateInput,
+  type CrsConversion,
+} from "./crs-conversion";
+export {
   getBuildEnvironment,
   getCesiumIonToken,
   getCesiumTerrainAssetId,

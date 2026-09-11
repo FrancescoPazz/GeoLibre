@@ -780,6 +780,16 @@ WHERE_AM_I_DETAIL_FIELD=DETTAGLIO
 
 `WHERE_AM_I_URL` and `WHERE_AM_I_FIELD` are both needed. When the fast query — typically an index-only spatial relation — returns several candidates and `WHERE_AM_I_ACCURATE_URL` is set, that query is asked with the candidates' ids (`WHERE_AM_I_ID_FIELD`, default `OBJECTID`) as `objectIds` and decides among them; `WHERE_AM_I_DETAIL_FIELD` names a longer description shown as the tooltip. Lookups run only once the pointer settles and are cached, but they do send the pointer position to that service, so name one only when its operator expects the traffic. All five follow the same build/deployment/runtime rules as the other variables above.
 
+### Coordinate conversion service
+
+**Controls → Coordinate converter** converts a position between WGS84 and the Italian reference systems (Monte Mario / Gauss-Boaga, ED50, ETRS89, RDN2008 and WGS84 UTM, both ways) through an ArcGIS GeometryServer `project` operation. The menu item appears only when a service is named:
+
+```env
+COORDS_CONVERTER_URL=https://gis.example.org/arcgis/rest/services/Utilities/Geometry/GeometryServer/project
+```
+
+The conversion runs on the server rather than in the browser because the Monte Mario and ED50 datum shifts are NTv2 grid transformations (`RER_AD400_MM_ETRS89_V1A`, `RER_ED50_ETRS89_GPS7_K2`) installed on that server and named in the request; a server without them answers with a plain, grid-less conversion. `COORDS_CONVERTER_URL` (or `VITE_COORDS_CONVERTER_URL`) follows the same build/deployment/runtime rules as the other variables above.
+
 ## Optional runtime mirrors (offline and air-gapped)
 
 The **Python (Pyodide)** vector engine loads its runtime from the public jsDelivr CDN by default. To self-host it for offline or production use, point it at a mirrored copy of the Pyodide distribution:

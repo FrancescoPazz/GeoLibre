@@ -44,6 +44,7 @@ import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
 import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
 import { isMaptoolkitBasemapActive } from "../../../lib/maptoolkit-basemap";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
+import { useCoordsConverterUrl } from "../../panels/CoordsConverterPanel";
 import {
   LOGO_CONTROL_IDS,
   MAP_CONTROL_ITEMS,
@@ -120,6 +121,7 @@ export function ControlsMenu({
   const { t } = useTranslation();
   const capabilities = useMapCapabilities();
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
+  const coordsConverterConfigured = Boolean(useCoordsConverterUrl());
   const show = (id: string) =>
     viewer && AUTHORING_CONTROL_ITEMS.includes(id) ? false : isMenuItemVisible(uiProfile, id);
   // Atmospheric effects only render on the globe (the engine idles in Mercator),
@@ -176,6 +178,7 @@ export function ControlsMenu({
     show("controls.lineOfSight") ||
     show("controls.globeClipping") ||
     show("controls.elevationBands") ||
+    (show("controls.coordsConverter") && coordsConverterConfigured) ||
     show("controls.directions") ||
     show("controls.reverseGeocode");
   // Whether the middle group (panels) has any visible item. The separator that
@@ -317,6 +320,15 @@ export function ControlsMenu({
             >
               {t("toolbar.item.elevationBands")}
               {panels.elevationBands.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.coordsConverter") && coordsConverterConfigured && (
+            <DropdownMenuItem
+              title={t("toolbar.item.coordsConverterTooltip")}
+              onSelect={panels.coordsConverter.toggle}
+            >
+              {t("toolbar.item.coordsConverter")}
+              {panels.coordsConverter.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.spinGlobe") && (

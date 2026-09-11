@@ -73,6 +73,12 @@ import {
   toggleEarthEnginePanel,
 } from "@geolibre/plugins";
 import { useSyncExternalStore } from "react";
+import {
+  closeCoordsConverterPanel,
+  isCoordsConverterPanelVisible,
+  openCoordsConverterPanel,
+  subscribeCoordsConverterPanel,
+} from "../lib/coords-converter-panel";
 import type { AppApi } from "../components/layout/toolbar/constants";
 
 /** Visibility flag plus a toggle handler for a single toolbar panel. */
@@ -93,6 +99,7 @@ export interface ToolbarPanels {
   playPath: ToolbarPanel;
   globeClipping: ToolbarPanel;
   elevationBands: ToolbarPanel;
+  coordsConverter: ToolbarPanel;
   print: ToolbarPanel;
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
@@ -158,6 +165,11 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeElevationBands,
     isElevationBandsPanelVisible,
     isElevationBandsPanelVisible,
+  );
+  const coordsConverterVisible = useSyncExternalStore(
+    subscribeCoordsConverterPanel,
+    isCoordsConverterPanelVisible,
+    isCoordsConverterPanelVisible,
   );
   const printVisible = useSyncExternalStore(
     subscribePrintPanel,
@@ -304,6 +316,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openElevationBandsPanel(appApi);
+      },
+    },
+    coordsConverter: {
+      visible: coordsConverterVisible,
+      toggle: () => {
+        if (coordsConverterVisible) {
+          closeCoordsConverterPanel();
+          return;
+        }
+        openCoordsConverterPanel();
       },
     },
     print: {
