@@ -11,6 +11,8 @@ import {
   closeLineOfSightPanel,
   closeMeasure3dPanel,
   closePlayPathPanel,
+  closeElevationBandsPanel,
+  closeGlobeClippingPanel,
   closeRouteAnimationPanel,
   closeSpinGlobePanel,
   closeSunPanel,
@@ -27,6 +29,8 @@ import {
   isLineOfSightPanelVisible,
   isMeasure3dPanelVisible,
   isPlayPathPanelVisible,
+  isElevationBandsPanelVisible,
+  isGlobeClippingPanelVisible,
   isRouteAnimationPanelVisible,
   isSpinGlobePanelVisible,
   isSunPanelVisible,
@@ -42,6 +46,8 @@ import {
   openLineOfSightPanel,
   openMeasure3dPanel,
   openPlayPathPanel,
+  openElevationBandsPanel,
+  openGlobeClippingPanel,
   openRouteAnimationPanel,
   openSpinGlobePanel,
   openSunPanel,
@@ -58,6 +64,8 @@ import {
   subscribeLineOfSight,
   subscribeMeasure3d,
   subscribePlayPath,
+  subscribeElevationBands,
+  subscribeGlobeClipping,
   subscribeRouteAnimationPanel,
   subscribeSpinGlobePanel,
   subscribeSunPanel,
@@ -83,6 +91,8 @@ export interface ToolbarPanels {
   lineOfSight: ToolbarPanel;
   measure3d: ToolbarPanel;
   playPath: ToolbarPanel;
+  globeClipping: ToolbarPanel;
+  elevationBands: ToolbarPanel;
   print: ToolbarPanel;
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
@@ -138,6 +148,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribePlayPath,
     isPlayPathPanelVisible,
     isPlayPathPanelVisible,
+  );
+  const globeClippingVisible = useSyncExternalStore(
+    subscribeGlobeClipping,
+    isGlobeClippingPanelVisible,
+    isGlobeClippingPanelVisible,
+  );
+  const elevationBandsVisible = useSyncExternalStore(
+    subscribeElevationBands,
+    isElevationBandsPanelVisible,
+    isElevationBandsPanelVisible,
   );
   const printVisible = useSyncExternalStore(
     subscribePrintPanel,
@@ -264,6 +284,26 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openPlayPathPanel(appApi);
+      },
+    },
+    globeClipping: {
+      visible: globeClippingVisible,
+      toggle: () => {
+        if (globeClippingVisible) {
+          closeGlobeClippingPanel(appApi);
+          return;
+        }
+        openGlobeClippingPanel(appApi);
+      },
+    },
+    elevationBands: {
+      visible: elevationBandsVisible,
+      toggle: () => {
+        if (elevationBandsVisible) {
+          closeElevationBandsPanel(appApi);
+          return;
+        }
+        openElevationBandsPanel(appApi);
       },
     },
     print: {

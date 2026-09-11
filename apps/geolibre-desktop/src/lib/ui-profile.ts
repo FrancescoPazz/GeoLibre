@@ -675,6 +675,18 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     tier: "advanced",
   },
   {
+    id: "controls.globeClipping",
+    menuId: "controls",
+    labelKey: "toolbar.item.globeClipping",
+    tier: "advanced",
+  },
+  {
+    id: "controls.elevationBands",
+    menuId: "controls",
+    labelKey: "toolbar.item.elevationBands",
+    tier: "advanced",
+  },
+  {
     id: "controls.spinGlobe",
     menuId: "controls",
     labelKey: "toolbar.item.spinGlobe",

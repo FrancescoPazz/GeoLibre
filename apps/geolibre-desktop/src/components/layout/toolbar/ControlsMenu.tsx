@@ -174,6 +174,8 @@ export function ControlsMenu({
     show("controls.measure3d") ||
     show("controls.playPath") ||
     show("controls.lineOfSight") ||
+    show("controls.globeClipping") ||
+    show("controls.elevationBands") ||
     show("controls.directions") ||
     show("controls.reverseGeocode");
   // Whether the middle group (panels) has any visible item. The separator that
@@ -297,6 +299,24 @@ export function ControlsMenu({
             >
               {t("toolbar.item.lineOfSight")}
               {panels.lineOfSight.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.globeClipping") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.globeClippingTooltip")}
+              onSelect={panels.globeClipping.toggle}
+            >
+              {t("toolbar.item.globeClipping")}
+              {panels.globeClipping.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.elevationBands") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.elevationBandsTooltip")}
+              onSelect={panels.elevationBands.toggle}
+            >
+              {t("toolbar.item.elevationBands")}
+              {panels.elevationBands.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.spinGlobe") && (

@@ -29,6 +29,7 @@ import {
   reattachFlightSimulator,
   reattachRer3dTools,
   createEgm96Geoid,
+  setElevationBandsGeoid,
   setMeasure3dGeoid,
   restoreArcGISViewportLayers,
   restoreRasterLayers,
@@ -183,6 +184,8 @@ import { FlightSimulatorPanel } from "../panels/FlightSimulatorPanel";
 import { LineOfSightPanel } from "../panels/LineOfSightPanel";
 import { Measure3dPanel } from "../panels/Measure3dPanel";
 import { PlayPathPanel } from "../panels/PlayPathPanel";
+import { GlobeClippingPanel } from "../panels/GlobeClippingPanel";
+import { ElevationBandsPanel } from "../panels/ElevationBandsPanel";
 import {
   PluginRightPanel,
   PLUGIN_PANEL_DEFAULT_WIDTH,
@@ -1386,8 +1389,13 @@ export function DesktopShell({
   // rather than something the renderer swap has to redo.
   useEffect(() => {
     const url = new URL(`${import.meta.env.BASE_URL}geoid/WW15MGH.DAC`, document.baseURI).href;
-    setMeasure3dGeoid(createEgm96Geoid(url).heights);
-    return () => setMeasure3dGeoid(undefined);
+    const geoid = createEgm96Geoid(url);
+    setMeasure3dGeoid(geoid.heights);
+    setElevationBandsGeoid(geoid);
+    return () => {
+      setMeasure3dGeoid(undefined);
+      setElevationBandsGeoid(undefined);
+    };
   }, []);
   useScreenshotReadiness(
     mapControllerRef,
@@ -2805,6 +2813,18 @@ export function DesktopShell({
             displayName={t("shell.section.lineOfSightPanel")}
           >
             <LineOfSightPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Globe clipping panel"
+            displayName={t("shell.section.globeClippingPanel")}
+          >
+            <GlobeClippingPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Elevation bands panel"
+            displayName={t("shell.section.elevationBandsPanel")}
+          >
+            <ElevationBandsPanel />
           </SectionErrorBoundary>
           <KnowledgeCardConsentDialog
             open={knowledgeNoticeOpen}
