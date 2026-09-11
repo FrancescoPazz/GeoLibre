@@ -27,6 +27,7 @@ import {
   reattachSun,
   reattachRouteAnimation,
   reattachFlightSimulator,
+  reattachRer3dTools,
   restoreArcGISViewportLayers,
   restoreRasterLayers,
   restoreThreeDTilesLayers,
@@ -177,6 +178,8 @@ import { FloatingPanels } from "../panels/FloatingPanels";
 import { SunPanel } from "../panels/SunPanel";
 import { RouteAnimationPanel } from "../panels/RouteAnimationPanel";
 import { FlightSimulatorPanel } from "../panels/FlightSimulatorPanel";
+import { LineOfSightPanel } from "../panels/LineOfSightPanel";
+import { Measure3dPanel } from "../panels/Measure3dPanel";
 import {
   PluginRightPanel,
   PLUGIN_PANEL_DEFAULT_WIDTH,
@@ -1300,6 +1303,10 @@ export function DesktopShell({
     // The flight simulator holds a reference to the live map (and suspends its
     // interaction handlers while flying), so rebind it after a map re-init too.
     reattachFlightSimulator(appAPI);
+    // The 3D tools draw entities on the primary globe, which a renderer swap
+    // destroys or brings into existence; rebinding here is also what makes an
+    // already-open panel come alive when the globe mounts.
+    reattachRer3dTools(appAPI);
     if (!engine.capabilities.nativeMapInstance) {
       void restoreLocalFileLayers();
       return;
@@ -2769,6 +2776,18 @@ export function DesktopShell({
             displayName={t("shell.section.flightSimulatorPanel")}
           >
             <FlightSimulatorPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="3D measure panel"
+            displayName={t("shell.section.measure3dPanel")}
+          >
+            <Measure3dPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Line of sight panel"
+            displayName={t("shell.section.lineOfSightPanel")}
+          >
+            <LineOfSightPanel />
           </SectionErrorBoundary>
           <KnowledgeCardConsentDialog
             open={knowledgeNoticeOpen}

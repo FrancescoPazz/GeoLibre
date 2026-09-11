@@ -197,6 +197,7 @@ export const PLUGIN_TIERS: Record<string, ComplexityTier> = {
   // since that one expects the user to bring a product id.
   "maplibre-gl-natural-earth": "basic",
   // Advanced web services and specialist tools.
+  "rer-3d-tools": "advanced",
   "maplibre-gl-fema-wms": "advanced",
   "maplibre-gl-nasa-earthdata": "advanced",
   "maplibre-gl-enviroatlas": "advanced",
@@ -654,6 +655,18 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     menuId: "controls",
     labelKey: "toolbar.item.flightSimulator",
     tier: "intermediate",
+  },
+  {
+    id: "controls.measure3d",
+    menuId: "controls",
+    labelKey: "toolbar.item.measure3d",
+    tier: "advanced",
+  },
+  {
+    id: "controls.lineOfSight",
+    menuId: "controls",
+    labelKey: "toolbar.item.lineOfSight",
+    tier: "advanced",
   },
   {
     id: "controls.spinGlobe",

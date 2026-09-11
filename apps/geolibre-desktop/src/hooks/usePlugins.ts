@@ -70,6 +70,7 @@ import {
   maplibreSunPlugin,
   maplibreRouteAnimationPlugin,
   flightSimulatorPlugin,
+  rer3dToolsPlugin,
   maplibreSwipePlugin,
   SWIPE_PLUGIN_ID,
   maplibreTimelapsePlugin,
@@ -243,6 +244,7 @@ manager.registerAll([
   maplibreSunPlugin,
   maplibreRouteAnimationPlugin,
   flightSimulatorPlugin,
+  rer3dToolsPlugin,
   // Last visible entry of the Plugins menu; the ids below are skipped by
   // PluginsMenu and surface elsewhere.
   maplibreSamGeoPlugin,

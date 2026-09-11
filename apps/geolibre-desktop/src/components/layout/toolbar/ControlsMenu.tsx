@@ -171,6 +171,8 @@ export function ControlsMenu({
     show("controls.sun") ||
     show("controls.routeAnimation") ||
     show("controls.flightSimulator") ||
+    show("controls.measure3d") ||
+    show("controls.lineOfSight") ||
     show("controls.directions") ||
     show("controls.reverseGeocode");
   // Whether the middle group (panels) has any visible item. The separator that
@@ -267,6 +269,24 @@ export function ControlsMenu({
             >
               {t("toolbar.item.flightSimulator")}
               {panels.flightSimulator.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.measure3d") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.measure3dTooltip")}
+              onSelect={panels.measure3d.toggle}
+            >
+              {t("toolbar.item.measure3d")}
+              {panels.measure3d.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.lineOfSight") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.lineOfSightTooltip")}
+              onSelect={panels.lineOfSight.toggle}
+            >
+              {t("toolbar.item.lineOfSight")}
+              {panels.lineOfSight.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.spinGlobe") && (

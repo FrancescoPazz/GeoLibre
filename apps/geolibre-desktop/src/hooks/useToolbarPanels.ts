@@ -8,6 +8,8 @@ import {
   closePrintPanel,
   closeSearchPlacesPanel,
   closeFlightSimulatorPanel,
+  closeLineOfSightPanel,
+  closeMeasure3dPanel,
   closeRouteAnimationPanel,
   closeSpinGlobePanel,
   closeSunPanel,
@@ -21,6 +23,8 @@ import {
   isPrintPanelVisible,
   isSearchPlacesPanelVisible,
   isFlightSimulatorPanelVisible,
+  isLineOfSightPanelVisible,
+  isMeasure3dPanelVisible,
   isRouteAnimationPanelVisible,
   isSpinGlobePanelVisible,
   isSunPanelVisible,
@@ -33,6 +37,8 @@ import {
   openPrintPanel,
   openSearchPlacesPanel,
   openFlightSimulatorPanel,
+  openLineOfSightPanel,
+  openMeasure3dPanel,
   openRouteAnimationPanel,
   openSpinGlobePanel,
   openSunPanel,
@@ -46,6 +52,8 @@ import {
   subscribePrintPanel,
   subscribeSearchPlacesPanel,
   subscribeFlightSimulatorPanel,
+  subscribeLineOfSight,
+  subscribeMeasure3d,
   subscribeRouteAnimationPanel,
   subscribeSpinGlobePanel,
   subscribeSunPanel,
@@ -68,6 +76,8 @@ export interface ToolbarPanels {
   sun: ToolbarPanel;
   routeAnimation: ToolbarPanel;
   flightSimulator: ToolbarPanel;
+  lineOfSight: ToolbarPanel;
+  measure3d: ToolbarPanel;
   print: ToolbarPanel;
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
@@ -108,6 +118,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeFlightSimulatorPanel,
     isFlightSimulatorPanelVisible,
     isFlightSimulatorPanelVisible,
+  );
+  const lineOfSightVisible = useSyncExternalStore(
+    subscribeLineOfSight,
+    isLineOfSightPanelVisible,
+    isLineOfSightPanelVisible,
+  );
+  const measure3dVisible = useSyncExternalStore(
+    subscribeMeasure3d,
+    isMeasure3dPanelVisible,
+    isMeasure3dPanelVisible,
   );
   const printVisible = useSyncExternalStore(
     subscribePrintPanel,
@@ -204,6 +224,26 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openFlightSimulatorPanel(appApi);
+      },
+    },
+    lineOfSight: {
+      visible: lineOfSightVisible,
+      toggle: () => {
+        if (lineOfSightVisible) {
+          closeLineOfSightPanel(appApi);
+          return;
+        }
+        openLineOfSightPanel(appApi);
+      },
+    },
+    measure3d: {
+      visible: measure3dVisible,
+      toggle: () => {
+        if (measure3dVisible) {
+          closeMeasure3dPanel(appApi);
+          return;
+        }
+        openMeasure3dPanel(appApi);
       },
     },
     print: {
