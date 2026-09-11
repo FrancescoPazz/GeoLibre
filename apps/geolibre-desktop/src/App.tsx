@@ -21,6 +21,7 @@ import { useStartupProject } from "./hooks/useStartupProject";
 import { useThemeMode } from "./hooks/useThemeMode";
 import { useThemeScheme } from "./hooks/useThemeScheme";
 import { useDocumentBranding } from "./hooks/useBranding";
+import { useDeploymentGeocoderDefault } from "./hooks/useDeploymentGeocoderDefault";
 import { useUiProfileBootstrap } from "./hooks/useUiProfileBootstrap";
 import { useUndoRedoShortcuts } from "./hooks/useUndoRedoShortcuts";
 import { useWhiteboxToolUrl } from "./hooks/useWhiteboxToolUrl";
@@ -56,6 +57,7 @@ export default function App() {
   useStyleLibraryPersistence();
   useLayerLibraryPersistence();
   useTemplateLibraryPersistence();
+  useDeploymentGeocoderDefault();
   useRuntimeEnvironmentVariables();
   useUndoRedoShortcuts();
   useBeforeUnloadGuard();

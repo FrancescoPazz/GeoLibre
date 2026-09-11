@@ -8,7 +8,17 @@ import {
   type RuntimeEnv,
 } from "../lib/assistant/provider";
 import { loadOsEnvVars, readOsEnv } from "../lib/assistant/os-env";
+import { readDeploymentEnv } from "../lib/deployment-env";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
+
+/** The deployment env's VITE_* entries with a value, as a runtime-env layer. */
+function deploymentViteEnv(): RuntimeEnv {
+  const env: RuntimeEnv = {};
+  for (const [key, value] of Object.entries(readDeploymentEnv() ?? {})) {
+    if (key.startsWith("VITE_") && typeof value === "string" && value.trim()) env[key] = value;
+  }
+  return env;
+}
 
 export function useRuntimeEnvironmentVariables() {
   const environmentVariables = useAppStore((s) => s.preferences.environmentVariables);
@@ -85,13 +95,19 @@ export function useRuntimeEnvironmentVariables() {
       ? { VITE_CESIUM_TOKEN: cesiumIonToken.trim() }
       : {};
 
-    // Precedence (low -> high): OS env < device AI keys < geocoder < cesium <
-    // explicit project Environment variables. See mergeRuntimeEnv for details.
+    // Precedence (low -> high): build < deployment < OS env < device AI keys <
+    // geocoder < cesium < explicit project Environment variables. See
+    // mergeRuntimeEnv for details.
     const runtimeEnv = mergeRuntimeEnv({
-      // Build-time keys are the lowest-precedence defaults. OS, saved profile,
-      // and project values can all override them without requiring a rebuild.
+      // Build-time keys are the lowest-precedence defaults. The Docker
+      // entrypoint's deployment env sits just above them: every VITE_* value an
+      // operator sets at container start (the Ion token and terrain asset, the
+      // feedback channel, the place-name and conversion services, the branding)
+      // reaches getRuntimeEnvironment() without a rebuild. OS, saved profile,
+      // and project values can all override them.
       osEnv: {
         ...readBuildTimeAssistantEnv(),
+        ...deploymentViteEnv(),
         ...readDeploymentAssistantEnv(),
         ...osEnv,
       },

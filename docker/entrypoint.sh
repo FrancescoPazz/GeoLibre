@@ -366,6 +366,82 @@ if collab_url:
         "GEOLIBRE_COLLAB_URL", collab_url, ("wss",), ("ws",), ("localhost", "127.0.0.1", "::1")
     )
 
+# Application settings a deployment configures without a rebuild: the Cesium
+# Ion token and terrain asset, the geocoder, the feedback channel, the place-
+# name and coordinate-conversion services, and the branding. Each is published
+# as the VITE_ name the app reads; the app validates values again on its side,
+# but a shape that can never work fails the boot here, where an operator sees
+# it, rather than turning into a silently absent feature. Keys are literals
+# from this table, never operator input.
+def http_url(name, value):
+    parsed = urlsplit(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise SystemExit(f"ERROR: {name} must be an http(s) URL.")
+    return value
+
+
+def asset_url(name, value):
+    if value.startswith("/") or value.startswith("./"):
+        return value
+    return http_url(name, value)
+
+
+def feedback_target(name, value):
+    if value.lower().startswith("mailto:") or ("@" in value and "/" not in value):
+        return value
+    return http_url(name, value)
+
+
+def hex_color(name, value):
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        raise SystemExit(f"ERROR: {name} must be a colour in #rrggbb form.")
+    return value.lower()
+
+
+def positive_int(name, value):
+    if not value.isdigit() or int(value) <= 0:
+        raise SystemExit(f"ERROR: {name} must be a positive integer.")
+    return value
+
+
+def flag(name, value):
+    if value.lower() not in ("0", "1", "true", "false", "yes", "no"):
+        raise SystemExit(f"ERROR: {name} must be 1/0, true/false or yes/no.")
+    return value
+
+
+def plain(name, value):
+    return value
+
+
+APP_SETTINGS = (
+    ("CESIUM_TOKEN", plain),
+    ("CESIUM_TERRAIN_ASSET_ID", positive_int),
+    ("ELEVATION_MEAN_SEA_LEVEL", flag),
+    ("GEOCODER_PROVIDER", plain),
+    ("GEOCODER_ENDPOINT", http_url),
+    ("GEOCODER_REVERSE_ENDPOINT", http_url),
+    ("GEOCODER_API_KEY", plain),
+    ("GEOCODER_EMAIL", plain),
+    ("FEEDBACK_URL", feedback_target),
+    ("FEEDBACK_SUBJECT", plain),
+    ("WHERE_AM_I_URL", http_url),
+    ("WHERE_AM_I_ACCURATE_URL", http_url),
+    ("WHERE_AM_I_ID_FIELD", plain),
+    ("WHERE_AM_I_FIELD", plain),
+    ("WHERE_AM_I_DETAIL_FIELD", plain),
+    ("COORDS_CONVERTER_URL", http_url),
+    ("BRAND_NAME", plain),
+    ("BRAND_LOGO_URL", asset_url),
+    ("BRAND_LOGO_LINK", http_url),
+    ("BRAND_FAVICON_URL", asset_url),
+    ("BRAND_ACCENT_COLOR", hex_color),
+)
+for name, check in APP_SETTINGS:
+    value = os.environ.get(f"GEOLIBRE_{name}", "").strip()
+    if value:
+        deployment[f"VITE_{name}"] = check(f"GEOLIBRE_{name}", value)
+
 with open("/usr/share/nginx/html/geolibre-runtime-config.js", "w") as output:
     output.write("window.__GEOLIBRE_DEPLOYMENT_ENV__ = ")
     json.dump(deployment, output, separators=(",", ":"))
@@ -408,6 +484,19 @@ fi
 
 if [ -n "${GEOLIBRE_EMBED_ORIGINS:-}" ]; then
   echo "Embed postMessage API enabled for: $GEOLIBRE_EMBED_ORIGINS"
+fi
+
+# Application settings passed through to the app. Names only: the Ion token
+# and the geocoder key are credentials as far as the log is concerned.
+APP_SETTINGS_SET=""
+for name in CESIUM_TOKEN CESIUM_TERRAIN_ASSET_ID ELEVATION_MEAN_SEA_LEVEL GEOCODER_PROVIDER GEOCODER_ENDPOINT GEOCODER_REVERSE_ENDPOINT GEOCODER_API_KEY GEOCODER_EMAIL FEEDBACK_URL FEEDBACK_SUBJECT WHERE_AM_I_URL WHERE_AM_I_ACCURATE_URL WHERE_AM_I_ID_FIELD WHERE_AM_I_FIELD WHERE_AM_I_DETAIL_FIELD COORDS_CONVERTER_URL BRAND_NAME BRAND_LOGO_URL BRAND_LOGO_LINK BRAND_FAVICON_URL BRAND_ACCENT_COLOR; do
+  eval "value=\${GEOLIBRE_${name}:-}"
+  if [ -n "$(trim "$value")" ]; then
+    APP_SETTINGS_SET="$APP_SETTINGS_SET $name"
+  fi
+done
+if [ -n "$APP_SETTINGS_SET" ]; then
+  echo "Application settings from the environment:$APP_SETTINGS_SET"
 fi
 
 if [ -n "$(trim "${GEOLIBRE_CLERK_PUBLISHABLE_KEY:-}")" ]; then
