@@ -8,6 +8,15 @@ import {
   type DrawMode,
 } from "./draw-geometry";
 import type { LngLatAlt } from "./line-of-sight-geometry";
+import {
+  SAMPLING_STEP_DISABLED,
+  buildTerrainProfile,
+  profileSamplingStep,
+  samplingStepRange,
+  snapSamplingStep,
+  type GeoidHeights,
+  type TerrainProfile,
+} from "./terrain-profile";
 
 /**
  * 3D measuring on the globe (Controls → 3D Measure): draw a line, polygon,
@@ -33,7 +42,22 @@ export interface Measure3dState {
   options: DrawOptions;
   geometry: DrawGeometry;
   measures: DrawMeasures;
+  /** The terrain-sampled path (lines and polygons with two or more vertices). */
+  profile: TerrainProfile | null;
+  /** A terrain read is in flight. */
+  sampling: boolean;
+  /** Whether the sampling step follows the path length and zoom. */
+  samplingStepAuto: boolean;
+  /** The step in use, in metres; 0 walks the vertices only. */
+  samplingStepM: number;
+  /** The steps worth offering for the current path. */
+  samplingStepRange: [number, number];
+  /** Index into `profile.samples` under the pointer on the chart. */
+  hoverSample: number | null;
 }
+
+/** How long after the last edit (a drag settling) before the terrain is read. */
+export const PROFILE_SAMPLING_DEBOUNCE_MS = 200;
 
 let open = false;
 let mode: DrawMode = "line";
@@ -41,6 +65,17 @@ let options: DrawOptions = { ...DEFAULT_DRAW_OPTIONS };
 let geometry: DrawGeometry = { mode, points: [], closed: false };
 let drawing: CesiumDrawing | null = null;
 let cesium: CesiumSceneHandle["Cesium"] | null = null;
+let profile: TerrainProfile | null = null;
+let sampling = false;
+let samplingStepAuto = true;
+let samplingStepManual = 0;
+let samplingStepM = SAMPLING_STEP_DISABLED;
+let stepRange: [number, number] = [0, 0];
+let hoverSample: number | null = null;
+let samplingRequest = 0;
+let samplingTimer: ReturnType<typeof setTimeout> | null = null;
+/** Geoid undulations to subtract, for heights above mean sea level; set by the host. */
+let geoid: GeoidHeights | undefined;
 
 const EMPTY_MEASURES: DrawMeasures = Object.freeze({
   segmentMeters: [],
@@ -57,7 +92,20 @@ let snapshot: Measure3dState = buildSnapshot();
 const listeners = new Set<() => void>();
 
 function buildSnapshot(): Measure3dState {
-  return { open, bound: liveDrawing() !== null, mode, options, geometry, measures };
+  return {
+    open,
+    bound: liveDrawing() !== null,
+    mode,
+    options,
+    geometry,
+    measures,
+    profile,
+    sampling,
+    samplingStepAuto,
+    samplingStepM,
+    samplingStepRange: stepRange,
+    hoverSample,
+  };
 }
 
 function publish(): void {
@@ -92,9 +140,107 @@ function liveDrawing(): CesiumDrawing | null {
   return drawing;
 }
 
+function profilable(g: DrawGeometry): boolean {
+  return (g.mode === "line" || g.mode === "polygon") && g.points.length >= 2;
+}
+
+/** The step to walk the current path at: manual, or blended from length and zoom. */
+function resolveSamplingStep(): number {
+  const pathLength = measures.totalMeters;
+  stepRange = samplingStepRange(pathLength);
+  if (!samplingStepAuto) {
+    const [min, max] = stepRange;
+    if (samplingStepManual === SAMPLING_STEP_DISABLED) return SAMPLING_STEP_DISABLED;
+    return min
+      ? Math.min(max, Math.max(min, snapSamplingStep(samplingStepManual)))
+      : samplingStepManual;
+  }
+  return profileSamplingStep(pathLength, liveDrawing()?.metersPerPixel());
+}
+
+/**
+ * Read the terrain along the path after the edits settle. A request counter
+ * discards a read that finishes after a newer one started, so a drag never
+ * publishes a stale profile over a fresh one.
+ */
+function scheduleSampling(): void {
+  if (samplingTimer) clearTimeout(samplingTimer);
+  samplingTimer = setTimeout(() => {
+    samplingTimer = null;
+    void sampleNow();
+  }, PROFILE_SAMPLING_DEBOUNCE_MS);
+}
+
+async function sampleNow(): Promise<void> {
+  const d = liveDrawing();
+  const C = cesium;
+  const request = ++samplingRequest;
+  if (!d || !C || !profilable(geometry)) {
+    profile = null;
+    sampling = false;
+    hoverSample = null;
+    d?.setMarker(null);
+    publish();
+    return;
+  }
+  samplingStepM = resolveSamplingStep();
+  sampling = true;
+  publish();
+  const snapshotGeometry = geometry;
+  const result = await buildTerrainProfile(C, d.getTerrainProvider(), snapshotGeometry.points, {
+    stepMeters: samplingStepM,
+    closed: snapshotGeometry.closed,
+    geoid,
+  });
+  if (request !== samplingRequest) return;
+  profile = result;
+  sampling = false;
+  if (hoverSample !== null && hoverSample >= result.samples.length) hoverSample = null;
+  publish();
+}
+
 function onDrawingChange(next: DrawGeometry, nextMeasures: DrawMeasures): void {
   geometry = next;
   measures = nextMeasures;
+  if (profilable(next)) {
+    scheduleSampling();
+  } else {
+    profile = null;
+    hoverSample = null;
+    samplingRequest += 1;
+    if (samplingTimer) clearTimeout(samplingTimer);
+    samplingTimer = null;
+  }
+  publish();
+}
+
+/** Supply (or clear) the geoid the host wants heights referred to. */
+export function setMeasure3dGeoid(next: GeoidHeights | undefined): void {
+  geoid = next;
+  if (profilable(geometry)) scheduleSampling();
+}
+
+/** Choose the sampling step by hand (snapped to the series), or hand it back to auto. */
+export function setMeasure3dSamplingStep(step: number | "auto"): void {
+  if (step === "auto") {
+    samplingStepAuto = true;
+  } else {
+    samplingStepAuto = false;
+    samplingStepManual =
+      Number.isFinite(step) && step > 0 ? snapSamplingStep(step) : SAMPLING_STEP_DISABLED;
+  }
+  if (profilable(geometry)) scheduleSampling();
+  else publish();
+}
+
+/** Highlight a profile sample on the globe (the chart's hover), or clear it. */
+export function setMeasure3dHover(index: number | null): void {
+  const next =
+    index !== null && profile && index >= 0 && index < profile.samples.length ? index : null;
+  if (next === hoverSample) return;
+  hoverSample = next;
+  const sample = next !== null && profile ? profile.samples[next] : null;
+  liveDrawing()?.setMarker(sample ? { lng: sample.lng, lat: sample.lat, alt: sample.alt } : null);
   publish();
 }
 
@@ -112,6 +258,11 @@ function detach(): void {
   const current = drawing;
   drawing = null;
   current?.destroy();
+  samplingRequest += 1;
+  if (samplingTimer) clearTimeout(samplingTimer);
+  samplingTimer = null;
+  sampling = false;
+  hoverSample = null;
 }
 
 export function openMeasure3dPanel(app: GeoLibreAppAPI): void {
@@ -132,6 +283,8 @@ export function setMeasure3dMode(next: DrawMode): void {
   mode = next;
   geometry = { mode, points: [], closed: false };
   measures = EMPTY_MEASURES;
+  profile = null;
+  hoverSample = null;
   const d = liveDrawing();
   if (d) d.setMode(next);
   else publish();
@@ -146,6 +299,8 @@ export function setMeasure3dOptions(patch: Partial<DrawOptions>): void {
 export function clearMeasure3d(): void {
   geometry = { mode, points: [], closed: false };
   measures = EMPTY_MEASURES;
+  profile = null;
+  hoverSample = null;
   const d = liveDrawing();
   if (d) d.clear();
   else publish();
@@ -201,6 +356,11 @@ export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
     options = { ...DEFAULT_DRAW_OPTIONS };
     geometry = { mode, points: [], closed: false };
     measures = EMPTY_MEASURES;
+    profile = null;
+    samplingStepAuto = true;
+    samplingStepManual = 0;
+    samplingStepM = SAMPLING_STEP_DISABLED;
+    stepRange = [0, 0];
     publish();
     return false;
   }
@@ -214,6 +374,14 @@ export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
     closed: mode === "polygon" && raw.closed === true && points.length >= 3,
   };
   measures = cesium ? computeMeasures(cesium, geometry) : EMPTY_MEASURES;
+  profile = null;
+  samplingStepAuto = raw.samplingStepAuto !== false;
+  samplingStepManual =
+    typeof raw.samplingStep === "number" &&
+    Number.isFinite(raw.samplingStep) &&
+    raw.samplingStep > 0
+      ? snapSamplingStep(raw.samplingStep)
+      : SAMPLING_STEP_DISABLED;
   if (raw.open === true) {
     open = true;
     detach();
@@ -230,12 +398,22 @@ export function getMeasure3dProjectState(): Record<string, unknown> | undefined 
   const defaultOptions =
     options.clampToGround === DEFAULT_DRAW_OPTIONS.clampToGround &&
     options.showLabels === DEFAULT_DRAW_OPTIONS.showLabels;
-  if (!open && geometry.points.length === 0 && mode === "line" && defaultOptions) return undefined;
+  if (
+    !open &&
+    geometry.points.length === 0 &&
+    mode === "line" &&
+    defaultOptions &&
+    samplingStepAuto
+  ) {
+    return undefined;
+  }
   return {
     open,
     mode,
     ...options,
     points: geometry.points,
     closed: geometry.closed,
+    samplingStepAuto,
+    ...(samplingStepAuto ? {} : { samplingStep: samplingStepManual }),
   };
 }

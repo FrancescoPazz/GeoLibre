@@ -1,4 +1,10 @@
-import type { Cartesian2, Cartesian3, Entity, ScreenSpaceEventHandler } from "@cesium/engine";
+import type {
+  Cartesian2,
+  Cartesian3,
+  Entity,
+  ScreenSpaceEventHandler,
+  TerrainProvider,
+} from "@cesium/engine";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import {
   angleArc,
@@ -75,6 +81,8 @@ export class CesiumDrawing {
   private preview: LngLatAlt | null = null;
   private dragging: { index: number; restoreInputs: () => void } | null = null;
   private entities: Entity[] = [];
+  /** The hover marker (a profile sample under the pointer), kept apart from the figure. */
+  private marker: Entity | null = null;
   private readonly handler: ScreenSpaceEventHandler;
   private readonly previousCursor: string;
   private destroyed = false;
@@ -111,6 +119,11 @@ export class CesiumDrawing {
   /** Whether the globe this drawing is bound to still exists. */
   isLive(): boolean {
     return this.live();
+  }
+
+  /** The terrain the globe is currently drawing, for sampling heights along the figure. */
+  getTerrainProvider(): TerrainProvider | undefined {
+    return this.handle.viewer.isDestroyed() ? undefined : this.handle.viewer.terrainProvider;
   }
 
   getGeometry(): DrawGeometry {
@@ -161,6 +174,7 @@ export class CesiumDrawing {
     const { viewer } = this.handle;
     if (!viewer.isDestroyed()) {
       this.removeEntities();
+      this.setMarker(null);
       viewer.canvas.style.cursor = this.previousCursor;
       this.handle.requestRender();
     }
@@ -286,11 +300,40 @@ export class CesiumDrawing {
   }
 
   /**
-   * Ground metres covered by one screen pixel at the camera's height, so the
-   * insert tolerance follows the zoom. Zero for an orthographic frustum, which
-   * leaves the historical per-mille rule on its own.
+   * Place (or remove, with `null`) the marker that shows where along the
+   * figure the pointer is on the profile chart.
    */
-  private metersPerPixel(): number {
+  setMarker(point: LngLatAlt | null): void {
+    const { Cesium: C, viewer } = this.handle;
+    if (viewer.isDestroyed()) return;
+    if (this.marker) {
+      viewer.entities.remove(this.marker);
+      this.marker = null;
+    }
+    if (point) {
+      this.marker = viewer.entities.add({
+        id: `${ID}-marker`,
+        position: fromLngLatAlt(C, point),
+        point: {
+          pixelSize: 10,
+          color: C.Color.fromCssColorString(FIRST_VERTEX_COLOR),
+          outlineColor: C.Color.WHITE,
+          outlineWidth: 2,
+          heightReference: C.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+    }
+    this.handle.requestRender();
+  }
+
+  /**
+   * Ground metres covered by one screen pixel at the camera's height, so the
+   * insert tolerance (and the profile's sampling step) follow the zoom. Zero
+   * for an orthographic frustum, which leaves the length-based rules on
+   * their own.
+   */
+  metersPerPixel(): number {
     const { camera, canvas } = this.handle;
     const fovy = (camera.frustum as { fovy?: number }).fovy;
     const height = camera.positionCartographic?.height;

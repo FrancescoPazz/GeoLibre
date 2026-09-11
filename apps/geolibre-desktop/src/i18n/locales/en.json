@@ -2370,6 +2370,19 @@
         "circle": "Click the centre of the circle.",
         "circleNext": "Move to set the radius and click to lock it; click again for a new circle."
       },
+      "profile": {
+        "title": "Terrain profile",
+        "sampling": "Sampling terrain…",
+        "autoStep": "Auto step",
+        "step": "Step",
+        "verticesOnly": "Vertices only",
+        "ground": "Ground distance",
+        "air": "Air distance",
+        "elevation": "Elevation",
+        "noTerrain": "No terrain loaded: heights are the vertices' own. Enable terrain for a real profile.",
+        "chart": "Elevation profile",
+        "hoverHint": "Hover the chart to locate a point on the globe."
+      },
       "clampToGround": "Drape on terrain",
       "showLabels": "Labels on the map",
       "vertices": "Vertices",

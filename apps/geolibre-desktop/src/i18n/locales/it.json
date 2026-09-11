@@ -2352,6 +2352,19 @@
         "circle": "Clicca il centro del cerchio.",
         "circleNext": "Muovi il puntatore per il raggio e clicca per fissarlo; clicca ancora per un nuovo cerchio."
       },
+      "profile": {
+        "title": "Profilo del terreno",
+        "sampling": "Campionamento del terreno…",
+        "autoStep": "Passo automatico",
+        "step": "Passo",
+        "verticesOnly": "Solo vertici",
+        "ground": "Distanza al suolo",
+        "air": "Distanza in aria",
+        "elevation": "Quota",
+        "noTerrain": "Nessun terreno caricato: le quote sono quelle dei vertici. Attiva il terreno per un profilo reale.",
+        "chart": "Profilo altimetrico",
+        "hoverHint": "Passa sul grafico per localizzare un punto sul globo."
+      },
       "clampToGround": "Adagia sul terreno",
       "showLabels": "Etichette sulla mappa",
       "vertices": "Vertici",

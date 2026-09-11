@@ -101,6 +101,7 @@ export {
 export {
   DRAW_MODES,
   MEASURE_3D_TOOL_ID,
+  PROFILE_SAMPLING_DEBOUNCE_MS,
   clearMeasure3d,
   closeMeasure3dPanel,
   getMeasure3dProjectState,
@@ -110,11 +111,31 @@ export {
   openMeasure3dPanel,
   reattachMeasure3d,
   restoreMeasure3d,
+  setMeasure3dGeoid,
+  setMeasure3dHover,
   setMeasure3dMode,
   setMeasure3dOptions,
+  setMeasure3dSamplingStep,
   subscribeMeasure3d,
   type Measure3dState,
 } from "./measure-3d";
+export {
+  SAMPLING_STEP_DISABLED,
+  SAMPLING_STEP_SERIES,
+  buildTerrainProfile,
+  densifyPath,
+  flightSamplingStep,
+  measureSampledPath,
+  profileSamplingStep,
+  sampleTerrain,
+  samplingStepRange,
+  snapSamplingStep,
+  type BuildProfileOptions,
+  type GeoidHeights,
+  type ProfileSample,
+  type SnapMode,
+  type TerrainProfile,
+} from "./terrain-profile";
 export { CesiumDrawing, DEFAULT_DRAW_OPTIONS, type DrawOptions } from "./draw-engine";
 export {
   INSERT_TOLERANCE_PIXELS,

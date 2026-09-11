@@ -1,16 +1,22 @@
 import {
   DRAW_MODES,
+  SAMPLING_STEP_DISABLED,
+  SAMPLING_STEP_SERIES,
+  buildChartGeometry,
   clearMeasure3d,
   closeMeasure3dPanel,
   formatDegrees,
   formatMeters,
   formatSquareMeters,
   getMeasure3dSnapshot,
+  setMeasure3dHover,
   setMeasure3dMode,
   setMeasure3dOptions,
+  setMeasure3dSamplingStep,
   subscribeMeasure3d,
   type DrawMode,
   type Measure3dState,
+  type TerrainProfile,
 } from "@geolibre/plugins";
 import { Button } from "@geolibre/ui";
 import {
@@ -25,12 +31,20 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useState, useSyncExternalStore } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { clamp } from "../../lib/clamp";
 
-const PANEL_WIDTH = 300;
+const PANEL_WIDTH = 320;
 const EDGE_MARGIN = 12;
+const CHART_WIDTH = PANEL_WIDTH - 24;
+const CHART_HEIGHT = 110;
 
 const MODE_ICON: Record<DrawMode, LucideIcon> = {
   line: Spline,
@@ -249,6 +263,195 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
             )}
           </div>
         )}
+
+        {(mode === "line" || mode === "polygon") && geometry.points.length >= 2 && (
+          <ProfileSection state={state} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The terrain-sampled part of a line or polygon: ground and air distances,
+ * the elevation range, the sampling step, and the profile chart whose hover
+ * puts a marker on the globe.
+ */
+function ProfileSection({ state }: { state: Measure3dState }) {
+  const { t } = useTranslation();
+  const { profile, sampling, samplingStepAuto, samplingStepM, samplingStepRange, hoverSample } =
+    state;
+  const [min, max] = samplingStepRange;
+  const steps = SAMPLING_STEP_SERIES.filter((step) => step >= min && step <= max);
+
+  return (
+    <div className="space-y-2 border-t border-border pt-2" data-testid="measure-3d-profile">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-medium">{t("toolbar.measure3d.profile.title")}</span>
+        {sampling && (
+          <span className="text-muted-foreground">{t("toolbar.measure3d.profile.sampling")}</span>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={samplingStepAuto}
+            onChange={(event) =>
+              setMeasure3dSamplingStep(event.target.checked ? "auto" : samplingStepM || min)
+            }
+          />
+          {t("toolbar.measure3d.profile.autoStep")}
+        </label>
+        <label className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">{t("toolbar.measure3d.profile.step")}</span>
+          <select
+            className="h-6 rounded border border-border bg-background px-1 text-xs"
+            value={samplingStepM}
+            disabled={samplingStepAuto || steps.length === 0}
+            aria-label={t("toolbar.measure3d.profile.step")}
+            onChange={(event) => setMeasure3dSamplingStep(Number(event.target.value))}
+          >
+            <option value={SAMPLING_STEP_DISABLED}>
+              {t("toolbar.measure3d.profile.verticesOnly")}
+            </option>
+            {steps.map((step) => (
+              <option key={step} value={step}>
+                {step} m
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      {profile && (
+        <>
+          <Row
+            label={t("toolbar.measure3d.profile.ground")}
+            value={formatMeters(profile.totalGroundM)}
+          />
+          <Row label={t("toolbar.measure3d.profile.air")} value={formatMeters(profile.totalAirM)} />
+          <Row
+            label={t("toolbar.measure3d.profile.elevation")}
+            value={`${profile.minAlt.toFixed(0)} – ${profile.maxAlt.toFixed(0)} m (Δ ${(profile.maxAlt - profile.minAlt).toFixed(0)} m)`}
+          />
+          {!profile.detailed && (
+            <div className="text-xs text-muted-foreground">
+              {t("toolbar.measure3d.profile.noTerrain")}
+            </div>
+          )}
+          <ProfileChart profile={profile} hover={hoverSample} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Inline SVG elevation profile. The ground series is the sampled terrain; the
+ * straight segments between the drawn vertices are overlaid as the air line,
+ * so the two distances the panel lists are visible on the same axes.
+ */
+function ProfileChart({ profile, hover }: { profile: TerrainProfile; hover: number | null }) {
+  const { t } = useTranslation();
+  const chart = useMemo(
+    () =>
+      buildChartGeometry(
+        profile.samples.map((sample) => ({ distance: sample.distanceM, elevation: sample.alt })),
+        CHART_WIDTH,
+        CHART_HEIGHT,
+      ),
+    [profile],
+  );
+  const airPath = useMemo(
+    () =>
+      profile.stopIndex
+        .map((index, i) => {
+          const sample = profile.samples[index];
+          if (!sample) return "";
+          return `${i === 0 ? "M" : "L"}${chart.xScale(sample.distanceM).toFixed(2)} ${chart.yScale(sample.alt).toFixed(2)}`;
+        })
+        .join(" "),
+    [profile, chart],
+  );
+  if (profile.samples.length < 2) return null;
+
+  const onMove = (event: ReactMouseEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scale = rect.width > 0 ? CHART_WIDTH / rect.width : 1;
+    setMeasure3dHover(chart.indexForX((event.clientX - rect.left) * scale));
+  };
+  const hovered = hover !== null ? profile.samples[hover] : undefined;
+
+  return (
+    <div className="space-y-1">
+      <svg
+        width="100%"
+        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
+        role="img"
+        aria-label={t("toolbar.measure3d.profile.chart")}
+        className="rounded border border-border bg-background/60"
+        onMouseMove={onMove}
+        onMouseLeave={() => setMeasure3dHover(null)}
+        data-testid="measure-3d-chart"
+      >
+        <path d={chart.areaPath} className="fill-emerald-500/20" />
+        <path d={chart.linePath} className="fill-none stroke-emerald-500" strokeWidth={1.5} />
+        <path
+          d={airPath}
+          className="fill-none stroke-red-500"
+          strokeWidth={1}
+          strokeDasharray="3 2"
+        />
+        {hovered && (
+          <>
+            <line
+              x1={chart.xScale(hovered.distanceM)}
+              x2={chart.xScale(hovered.distanceM)}
+              y1={chart.padding.top}
+              y2={CHART_HEIGHT - chart.padding.bottom}
+              className="stroke-foreground/50"
+              strokeWidth={1}
+            />
+            <circle
+              cx={chart.xScale(hovered.distanceM)}
+              cy={chart.yScale(hovered.alt)}
+              r={3}
+              className="fill-amber-500 stroke-background"
+            />
+          </>
+        )}
+        <text
+          x={chart.padding.left}
+          y={CHART_HEIGHT - 4}
+          className="fill-muted-foreground text-[9px]"
+        >
+          0
+        </text>
+        <text
+          x={CHART_WIDTH - chart.padding.right}
+          y={CHART_HEIGHT - 4}
+          textAnchor="end"
+          className="fill-muted-foreground text-[9px]"
+        >
+          {formatMeters(chart.totalDistance)}
+        </text>
+        <text x={2} y={chart.padding.top + 8} className="fill-muted-foreground text-[9px]">
+          {chart.maxElevation.toFixed(0)}
+        </text>
+        <text
+          x={2}
+          y={CHART_HEIGHT - chart.padding.bottom}
+          className="fill-muted-foreground text-[9px]"
+        >
+          {chart.minElevation.toFixed(0)}
+        </text>
+      </svg>
+      <div className="h-4 text-xs tabular-nums text-muted-foreground" aria-live="polite">
+        {hovered
+          ? `${formatMeters(hovered.distanceM)} · ${hovered.alt.toFixed(1)} m`
+          : t("toolbar.measure3d.profile.hoverHint")}
       </div>
     </div>
   );

@@ -20,9 +20,13 @@ import {
   openMeasure3dPanel,
   reattachMeasure3d,
   restoreMeasure3d,
+  setMeasure3dHover,
   setMeasure3dMode,
   setMeasure3dOptions,
+  setMeasure3dSamplingStep,
+  PROFILE_SAMPLING_DEBOUNCE_MS,
 } from "../packages/plugins/src/plugins/rer-3d-tools/measure-3d";
+import { SAMPLING_STEP_SERIES } from "../packages/plugins/src/plugins/rer-3d-tools/terrain-profile";
 import { rer3dToolsPlugin } from "../packages/plugins/src/plugins/rer-3d-tools";
 import { restoreLineOfSight } from "../packages/plugins/src/plugins/rer-3d-tools/line-of-sight";
 import type { GeoLibreAppAPI } from "../packages/plugins/src/types";
@@ -42,8 +46,18 @@ type Entity = Record<string, unknown> & { id: string };
 type Positioned = (m: { position: Cesium.Cartesian2 }) => void;
 type Motion = (m: { endPosition: Cesium.Cartesian2 }) => void;
 
-function makeGlobe(options: { primary?: boolean; metersPerPixel?: number } = {}) {
+function makeGlobe(
+  options: {
+    primary?: boolean;
+    metersPerPixel?: number;
+    /** A terrain height function; makes the globe's provider "detailed". */
+    terrain?: (lng: number, lat: number) => number;
+    /** Hold each terrain read until `releaseTerrain()` is called. */
+    holdTerrain?: boolean;
+  } = {},
+) {
   let destroyed = false;
+  const heldReads: Array<() => void> = [];
   const entities: Entity[] = [];
   const canvas = {
     style: { cursor: "" },
@@ -77,6 +91,7 @@ function makeGlobe(options: { primary?: boolean; metersPerPixel?: number } = {})
     scene,
     camera,
     canvas,
+    terrainProvider: options.terrain ? { availability: {} } : undefined,
     entities: {
       add: (entity: Entity) => {
         entities.push(entity);
@@ -103,9 +118,20 @@ function makeGlobe(options: { primary?: boolean; metersPerPixel?: number } = {})
       return handlerDestroyed;
     }
   }
+  const sampleTerrainMostDetailed = async (_p: unknown, positions: Cesium.Cartographic[]) => {
+    if (options.holdTerrain) await new Promise<void>((resolve) => heldReads.push(resolve));
+    for (const c of positions) {
+      c.height = options.terrain!(
+        Cesium.Math.toDegrees(c.longitude),
+        Cesium.Math.toDegrees(c.latitude),
+      );
+    }
+    return positions;
+  };
   const handle = {
     Cesium: {
       ...Cesium,
+      sampleTerrainMostDetailed,
       ScreenSpaceEventHandler: FakeHandler,
       ScreenSpaceEventType: {
         LEFT_DOWN: "LEFT_DOWN",
@@ -179,11 +205,16 @@ function makeGlobe(options: { primary?: boolean; metersPerPixel?: number } = {})
       nextGround = null;
     },
     handlerDestroyed: () => handlerDestroyed,
+    releaseTerrain: () => {
+      for (const release of heldReads.splice(0)) release();
+    },
     destroy: () => {
       destroyed = true;
     },
   };
 }
+
+const settle = (ms = PROFILE_SAMPLING_DEBOUNCE_MS + 30) => new Promise((r) => setTimeout(r, ms));
 
 function globeApp(globe: ReturnType<typeof makeGlobe>): GeoLibreAppAPI {
   return { getMap: () => null, getCesiumScene: () => globe.handle } as unknown as GeoLibreAppAPI;
@@ -480,5 +511,107 @@ describe("measure-3d tool", () => {
     assert.equal(getMeasure3dSnapshot().geometry.points.length, 1);
     rer3dToolsPlugin.deactivate(globeApp(globe));
     assert.equal(isMeasure3dPanelVisible(), false);
+  });
+});
+
+describe("measure-3d terrain profile", () => {
+  beforeEach(() => {
+    restoreMeasure3d(mapLessApp, undefined);
+  });
+
+  it("samples the terrain once the edits settle and publishes the profile", async () => {
+    const globe = makeGlobe({ terrain: (lng) => 200 + (lng - ORIGIN.lng) * 10_000 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    assert.equal(getMeasure3dSnapshot().profile, null, "one vertex has no profile");
+    globe.click(B);
+    assert.equal(getMeasure3dSnapshot().profile, null, "not before the debounce");
+    await settle();
+    const s = getMeasure3dSnapshot();
+    assert.equal(s.sampling, false);
+    assert.ok(s.profile, "a profile was published");
+    assert.equal(s.profile.detailed, true);
+    assert.ok(
+      SAMPLING_STEP_SERIES.includes(s.samplingStepM),
+      `step ${s.samplingStepM} from the series`,
+    );
+    assert.ok(s.profile.samples.length > 2, "the segment was densified");
+    assert.ok(Math.abs(s.profile.samples[0].alt - 200) < 1e-6);
+    assert.ok(s.profile.maxAlt > s.profile.minAlt);
+    assert.ok(
+      s.profile.totalGroundM > s.profile.totalGeodeticM,
+      "climbing ground is longer than the geodesic",
+    );
+    // A–B is ~798 m at this latitude: a thousand samples need a 1 m step, ten need 50 m.
+    assert.deepEqual(s.samplingStepRange, [1, 50]);
+  });
+
+  it("honours a manual step, snapped and clamped to the path's range, and returns to auto", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    setMeasure3dSamplingStep(20);
+    await settle();
+    assert.equal(getMeasure3dSnapshot().samplingStepAuto, false);
+    assert.equal(getMeasure3dSnapshot().samplingStepM, 20);
+    setMeasure3dSamplingStep(5000);
+    await settle();
+    assert.equal(getMeasure3dSnapshot().samplingStepM, 50, "clamped to the range's maximum");
+    setMeasure3dSamplingStep("auto");
+    await settle();
+    const s = getMeasure3dSnapshot();
+    assert.equal(s.samplingStepAuto, true);
+    assert.ok(SAMPLING_STEP_SERIES.includes(s.samplingStepM));
+    assert.equal(getMeasure3dProjectState()?.samplingStep, undefined, "auto persists no step");
+  });
+
+  it("marks the hovered sample on the globe and clears it", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    setMeasure3dHover(2);
+    assert.equal(getMeasure3dSnapshot().hoverSample, 2);
+    assert.ok(globe.ids().includes("geolibre-draw-marker"));
+    setMeasure3dHover(null);
+    assert.equal(getMeasure3dSnapshot().hoverSample, null);
+    assert.ok(!globe.ids().includes("geolibre-draw-marker"));
+    setMeasure3dHover(99_999);
+    assert.equal(getMeasure3dSnapshot().hoverSample, null, "out of range is ignored");
+  });
+
+  it("discards a terrain read that finishes after a newer edit", async () => {
+    const globe = makeGlobe({ terrain: () => 100, holdTerrain: true });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    assert.equal(getMeasure3dSnapshot().sampling, true, "the first read is held");
+    // A newer edit while the first read is still out.
+    globe.click(C);
+    await settle();
+    globe.releaseTerrain();
+    await settle(30);
+    const s = getMeasure3dSnapshot();
+    assert.ok(s.profile, "the second read landed");
+    assert.equal(s.profile.stopIndex.length, 3, "and it describes the three-vertex path");
+  });
+
+  it("drops the profile when the figure stops being a path", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    assert.ok(getMeasure3dSnapshot().profile);
+    clearMeasure3d();
+    assert.equal(getMeasure3dSnapshot().profile, null);
+    setMeasure3dMode("point");
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    assert.equal(getMeasure3dSnapshot().profile, null, "points are not a path");
   });
 });
