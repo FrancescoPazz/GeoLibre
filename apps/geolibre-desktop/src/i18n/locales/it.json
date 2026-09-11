@@ -237,7 +237,8 @@
     "sectionMars": "Marte",
     "sectionOther": "Altri corpi celesti",
     "sectionRegional": "Regionale",
-    "regionChina": "Cina (中国)"
+    "regionChina": "Cina (中国)",
+    "regionEmiliaRomagna": "Emilia-Romagna (Italia)"
   },
   "planetSwitcher": {
     "label": "Corpo celeste",

@@ -172,6 +172,8 @@ export type CesiumBasemapImagery =
        * basemap selection still yields a labelled satellite globe.
        */
       overlayTemplate?: string;
+      /** Opacity of the overlay, 0–1; absent means opaque. */
+      overlayAlpha?: number;
     };
 
 /**
@@ -277,7 +279,8 @@ export function sameCesiumImagery(a: CesiumBasemapImagery, b: CesiumBasemapImage
     a.attribution === b.attribution &&
     a.maximumLevel === b.maximumLevel &&
     a.scheme === b.scheme &&
-    a.overlayTemplate === b.overlayTemplate
+    a.overlayTemplate === b.overlayTemplate &&
+    a.overlayAlpha === b.overlayAlpha
   );
 }
 
@@ -393,6 +396,9 @@ export function basemapToCesiumImagery(
       maximumLevel: regional.maxZoom,
       ...(regional.scheme ? { scheme: regional.scheme } : {}),
       ...(regional.overlayTileUrl ? { overlayTemplate: regional.overlayTileUrl } : {}),
+      ...(regional.overlayTileUrl && regional.overlayOpacity !== undefined
+        ? { overlayAlpha: regional.overlayOpacity }
+        : {}),
     };
   }
 

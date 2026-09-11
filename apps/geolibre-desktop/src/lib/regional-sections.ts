@@ -13,5 +13,7 @@ export function regionalBasemapRegionKey(regionId: RegionalBasemapRegionId) {
   switch (regionId) {
     case "china":
       return "basemapPicker.regionChina" as const;
+    case "emilia-romagna":
+      return "basemapPicker.regionEmiliaRomagna" as const;
   }
 }

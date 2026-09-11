@@ -80,6 +80,20 @@ describe("basemapToCesiumImagery", () => {
     assert.equal(imagery.attribution, hybrid.attribution);
   });
 
+  it("carries a regional overlay's opacity through, and omits it when opaque", () => {
+    const translucent = REGIONAL_BASEMAPS.find((b) => b.overlayOpacity !== undefined);
+    assert.ok(translucent, "expected a regional basemap with a translucent overlay");
+    assert.equal(
+      asXyz(basemapToCesiumImagery(translucent.styleUrl)).overlayAlpha,
+      translucent.overlayOpacity,
+    );
+    const opaque = REGIONAL_BASEMAPS.find(
+      (b) => b.overlayTileUrl && b.overlayOpacity === undefined,
+    );
+    assert.ok(opaque);
+    assert.equal(asXyz(basemapToCesiumImagery(opaque.styleUrl)).overlayAlpha, undefined);
+  });
+
   it("omits the overlay for a regional basemap without one", () => {
     const plain = REGIONAL_BASEMAPS.find((b) => !b.overlayTileUrl);
     assert.ok(plain, "expected at least one regional basemap without an overlay");

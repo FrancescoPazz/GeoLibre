@@ -1,11 +1,15 @@
 /**
  * Raster basemaps for regions the default catalog does not serve well.
  *
- * Today that means mainland China: GeoLibre's defaults (OpenFreeMap, Protomaps)
- * and almost every provider in the Basemaps control are hosted outside it with
- * no presence inside, so from there they range from slow to unreachable. These
+ * Mainland China: GeoLibre's defaults (OpenFreeMap, Protomaps) and almost
+ * every provider in the Basemaps control are hosted outside it with no
+ * presence inside, so from there they range from slow to unreachable. These
  * entries are served from inside China and give those users a basemap that
  * loads.
+ *
+ * Emilia-Romagna: the region's own topographic database (DBTR) and its
+ * orthophoto campaigns, which no global provider carries and which a regional
+ * geoportal is expected to open on.
  *
  * The mechanism mirrors {@link PlanetaryBasemap}: `styleUrl` is a
  * `geolibre://regional-basemap/<id>` sentinel that the map controller's
@@ -20,7 +24,7 @@
  * heading and explanatory note inside the single "Regional" section, so a
  * future region slots in without the section itself becoming country-specific.
  */
-export type RegionalBasemapRegionId = "china";
+export type RegionalBasemapRegionId = "china" | "emilia-romagna";
 
 /**
  * A raster basemap for a region, rendered from XYZ (or TMS) tiles.
@@ -46,6 +50,12 @@ export interface RegionalBasemap {
    * basemap rather than something the user has to stack by hand.
    */
   overlayTileUrl?: string;
+  /**
+   * Opacity of {@link overlayTileUrl}, 0–1; absent means opaque. For an
+   * overlay that is a full map rather than transparent labels — a
+   * topographic map laid over an orthophoto — so both read through.
+   */
+  overlayOpacity?: number;
   /**
    * Tile row ordering. Tencent numbers rows from the bottom (**TMS**); Amap is
    * standard XYZ. Omit for XYZ; MapLibre defaults to `"xyz"` when absent.
@@ -149,8 +159,93 @@ export const CHINA_BASEMAPS: readonly RegionalBasemap[] = [
   },
 ];
 
+// Emilia-Romagna publishes its cartography as cached ArcGIS map services in
+// Web Mercator with the standard tile origin, so each is an ordinary XYZ set
+// at `.../MapServer/tile/{z}/{y}/{x}` (row before column, the ArcGIS order).
+// The region's own layers cover the region only; the old geoportal put CARTO
+// Positron underneath each so the map does not go blank at the border, and
+// that pairing is kept: Positron is the base, the regional layer the overlay.
+const RER_CACHE = "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache";
+const rerTiles = (service: string) => `${RER_CACHE}/${service}/MapServer/tile/{z}/{y}/{x}`;
+const POSITRON_URL = "https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
+const POSITRON_ATTRIBUTION =
+  '&copy; <a href="https://carto.com/attributions">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+const RER_ATTRIBUTION =
+  '&copy; <a href="https://geoportale.regione.emilia-romagna.it">Regione Emilia-Romagna</a>';
+const DBTR_WEB_URL = rerTiles("dbtr_wgs84wm");
+const CGR_2018_URL = rerTiles("cgr2018_rgb_wgs84wm");
+
+export const EMILIA_ROMAGNA_BASEMAPS: readonly RegionalBasemap[] = [
+  {
+    id: "rer-dbtr-web",
+    region: "emilia-romagna",
+    name: "DBTR webmap",
+    styleUrl: sentinel("rer-dbtr-web"),
+    tileUrl: POSITRON_URL,
+    overlayTileUrl: DBTR_WEB_URL,
+    maxZoom: 19,
+    attribution: `${RER_ATTRIBUTION} (DBTR) ${POSITRON_ATTRIBUTION}`,
+  },
+  {
+    id: "rer-dbtr-ctr",
+    region: "emilia-romagna",
+    name: "DBTR CTR multiscala",
+    styleUrl: sentinel("rer-dbtr-ctr"),
+    tileUrl: POSITRON_URL,
+    overlayTileUrl: rerTiles("dbtr_ctrmultiscala_wgs84wm"),
+    maxZoom: 23,
+    attribution: `${RER_ATTRIBUTION} (DBTR CTR) ${POSITRON_ATTRIBUTION}`,
+  },
+  {
+    id: "rer-ortofoto-agea-2020",
+    region: "emilia-romagna",
+    name: "Ortofoto AGEA 2020",
+    styleUrl: sentinel("rer-ortofoto-agea-2020"),
+    tileUrl: POSITRON_URL,
+    overlayTileUrl: rerTiles("agea2020_rgb_wgs84wm"),
+    maxZoom: 23,
+    attribution: `AGEA &copy; 2020, ${RER_ATTRIBUTION} ${POSITRON_ATTRIBUTION}`,
+  },
+  {
+    id: "rer-ortofoto-cgr-2018",
+    region: "emilia-romagna",
+    name: "Ortofoto CGR 2018",
+    styleUrl: sentinel("rer-ortofoto-cgr-2018"),
+    tileUrl: POSITRON_URL,
+    overlayTileUrl: CGR_2018_URL,
+    maxZoom: 23,
+    attribution: `CGR SpA &copy; 2018, ${RER_ATTRIBUTION} ${POSITRON_ATTRIBUTION}`,
+  },
+  {
+    id: "rer-ortofoto-agea-2011",
+    region: "emilia-romagna",
+    name: "Ortofoto AGEA 2011",
+    styleUrl: sentinel("rer-ortofoto-agea-2011"),
+    tileUrl: POSITRON_URL,
+    overlayTileUrl: rerTiles("agea2011_wgs84wm"),
+    maxZoom: 19,
+    attribution: `AGEA &copy; 2011, ${RER_ATTRIBUTION} ${POSITRON_ATTRIBUTION}`,
+  },
+  {
+    // The DBTR at 70% over the 2018 orthophoto: the topographic map reads
+    // through to the imagery, as the old geoportal composed it.
+    id: "rer-dbtr-ortomap",
+    region: "emilia-romagna",
+    name: "DBTR ortomap",
+    styleUrl: sentinel("rer-dbtr-ortomap"),
+    tileUrl: CGR_2018_URL,
+    overlayTileUrl: DBTR_WEB_URL,
+    overlayOpacity: 0.7,
+    maxZoom: 19,
+    attribution: `CGR SpA &copy; 2018, ${RER_ATTRIBUTION} (DBTR)`,
+  },
+];
+
 /** Every regional basemap, across all regions. */
-export const REGIONAL_BASEMAPS: readonly RegionalBasemap[] = CHINA_BASEMAPS;
+export const REGIONAL_BASEMAPS: readonly RegionalBasemap[] = [
+  ...CHINA_BASEMAPS,
+  ...EMILIA_ROMAGNA_BASEMAPS,
+];
 
 /**
  * The regional basemaps grouped for display, one entry per region. Both the New
@@ -161,7 +256,10 @@ export const REGIONAL_BASEMAPS: readonly RegionalBasemap[] = CHINA_BASEMAPS;
 export const REGIONAL_BASEMAP_GROUPS: readonly {
   id: RegionalBasemapRegionId;
   basemaps: readonly RegionalBasemap[];
-}[] = [{ id: "china", basemaps: CHINA_BASEMAPS }];
+}[] = [
+  { id: "china", basemaps: CHINA_BASEMAPS },
+  { id: "emilia-romagna", basemaps: EMILIA_ROMAGNA_BASEMAPS },
+];
 
 /** Look up a regional basemap by its `geolibre://regional-basemap/<id>` sentinel. */
 export function getRegionalBasemapByStyleUrl(

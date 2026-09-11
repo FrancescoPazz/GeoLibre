@@ -142,7 +142,15 @@ export function applyBasemapImagery(
     return [layer];
   }
 
-  const { template, attribution, maximumLevel, scheme, overlayTemplate, apiKeyProvider } = imagery;
+  const {
+    template,
+    attribution,
+    maximumLevel,
+    scheme,
+    overlayTemplate,
+    overlayAlpha,
+    apiKeyProvider,
+  } = imagery;
   const added = [
     viewer.imageryLayers.addImageryProvider(
       templateProvider(Cesium, template, { attribution, maximumLevel, scheme, apiKeyProvider }),
@@ -153,12 +161,12 @@ export function applyBasemapImagery(
     // A hybrid basemap's roads-and-labels tiles sit directly above its imagery
     // and still below the data layers. The provider carries no credit: the
     // imagery below it already credits the same provider once.
-    added.push(
-      viewer.imageryLayers.addImageryProvider(
-        templateProvider(Cesium, overlayTemplate, { maximumLevel, scheme }),
-        1,
-      ),
+    const overlay = viewer.imageryLayers.addImageryProvider(
+      templateProvider(Cesium, overlayTemplate, { maximumLevel, scheme }),
+      1,
     );
+    if (overlayAlpha !== undefined) overlay.alpha = overlayAlpha;
+    added.push(overlay);
   }
   return added;
 }

@@ -394,6 +394,9 @@ function createRegionalMapStyle(basemap: RegionalBasemap): maplibregl.StyleSpeci
               id: "regional-basemap-overlay",
               type: "raster" as const,
               source: "regional-basemap-overlay",
+              ...(basemap.overlayOpacity !== undefined
+                ? { paint: { "raster-opacity": basemap.overlayOpacity } }
+                : {}),
             },
           ]
         : []),

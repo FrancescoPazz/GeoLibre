@@ -237,7 +237,8 @@
     "sectionMars": "Mars",
     "sectionOther": "Other celestial bodies",
     "sectionRegional": "Regional",
-    "regionChina": "China (中国)"
+    "regionChina": "China (中国)",
+    "regionEmiliaRomagna": "Emilia-Romagna (Italy)"
   },
   "planetSwitcher": {
     "label": "Celestial body",

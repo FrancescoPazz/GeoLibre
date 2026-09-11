@@ -6,6 +6,7 @@ import {
 } from "../packages/core/src/ellipsoids";
 import {
   CHINA_BASEMAPS,
+  EMILIA_ROMAGNA_BASEMAPS,
   getRegionalBasemapById,
   getRegionalBasemapByStyleUrl,
   isRegionalBasemapSentinel,
@@ -145,6 +146,74 @@ describe("China basemaps", () => {
     for (const basemap of CHINA_BASEMAPS) {
       const expected = basemap.id.startsWith("amap-") ? "Amap" : "Tencent Maps";
       assert.ok(basemap.attribution.includes(expected), `${basemap.id} is missing its credit`);
+    }
+  });
+});
+
+describe("Emilia-Romagna basemaps", () => {
+  it("groups every Emilia-Romagna basemap under its region, on standard xyz, not offset", () => {
+    assert.equal(EMILIA_ROMAGNA_BASEMAPS.length, 6);
+    for (const basemap of EMILIA_ROMAGNA_BASEMAPS) {
+      assert.equal(basemap.region, "emilia-romagna");
+      assert.equal(basemap.scheme, undefined, `${basemap.id} should be plain xyz`);
+      assert.equal(basemap.gcj02, undefined, `${basemap.id} is not a GCJ-02 source`);
+    }
+  });
+
+  // The regional layers cover the region only, so each rides as the overlay
+  // above a Positron base that fills the map outside the border — except the
+  // ortomap, which is the topographic map read through onto the orthophoto.
+  it("pairs each regional layer with a base underneath, the ortomap at 70%", () => {
+    for (const basemap of EMILIA_ROMAGNA_BASEMAPS) {
+      assert.ok(basemap.overlayTileUrl, `${basemap.id} should carry the regional layer as overlay`);
+      assert.ok(
+        basemap.overlayTileUrl?.includes("servizigis.regione.emilia-romagna.it"),
+        `${basemap.id} overlay is not the regional service`,
+      );
+      assert.ok(
+        basemap.overlayTileUrl?.endsWith("/MapServer/tile/{z}/{y}/{x}"),
+        `${basemap.id} overlay is not an ArcGIS cached tile template`,
+      );
+      if (basemap.id === "rer-dbtr-ortomap") {
+        assert.equal(basemap.overlayOpacity, 0.7);
+        assert.ok(basemap.tileUrl.includes("cgr2018"), "the ortomap sits on the 2018 orthophoto");
+      } else {
+        assert.equal(basemap.overlayOpacity, undefined);
+        assert.ok(basemap.tileUrl.includes("cartocdn.com"), `${basemap.id} base is not Positron`);
+      }
+    }
+  });
+
+  // Probed against the live services: dbtr_wgs84wm and agea2011 publish LODs
+  // 0–19, the CTR and the 2018/2020 orthophotos 0–23.
+  it("caps each source at its published LOD range", () => {
+    const expected: Record<string, number> = {
+      "rer-dbtr-web": 19,
+      "rer-dbtr-ctr": 23,
+      "rer-ortofoto-agea-2020": 23,
+      "rer-ortofoto-cgr-2018": 23,
+      "rer-ortofoto-agea-2011": 19,
+      "rer-dbtr-ortomap": 19,
+    };
+    for (const basemap of EMILIA_ROMAGNA_BASEMAPS) {
+      assert.equal(
+        basemap.maxZoom,
+        expected[basemap.id],
+        `${basemap.id} has an unexpected maxZoom`,
+      );
+    }
+  });
+
+  it("credits the region, and the imagery campaign where there is one", () => {
+    for (const basemap of EMILIA_ROMAGNA_BASEMAPS) {
+      assert.ok(
+        basemap.attribution.includes("Regione Emilia-Romagna"),
+        `${basemap.id} lacks the region credit`,
+      );
+      if (basemap.id.includes("agea")) assert.ok(basemap.attribution.includes("AGEA"));
+      if (basemap.id.includes("cgr") || basemap.id === "rer-dbtr-ortomap") {
+        assert.ok(basemap.attribution.includes("CGR"));
+      }
     }
   });
 });
