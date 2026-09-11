@@ -112,6 +112,7 @@ export {
   reattachMeasure3d,
   restoreMeasure3d,
   setMeasure3dGeoid,
+  setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,
   setMeasure3dMode,
   setMeasure3dOptions,
@@ -136,6 +137,15 @@ export {
   type SnapMode,
   type TerrainProfile,
 } from "./terrain-profile";
+export {
+  EGM96_COLUMNS,
+  EGM96_GRID_BYTES,
+  EGM96_ROWS,
+  createEgm96Geoid,
+  decodeEgm96Grid,
+  egm96UndulationMeters,
+  type Egm96Geoid,
+} from "./egm96";
 export { CesiumDrawing, DEFAULT_DRAW_OPTIONS, type DrawOptions } from "./draw-engine";
 export {
   INSERT_TOLERANCE_PIXELS,

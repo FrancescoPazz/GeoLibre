@@ -9,6 +9,7 @@ import {
   formatMeters,
   formatSquareMeters,
   getMeasure3dSnapshot,
+  setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,
   setMeasure3dMode,
   setMeasure3dOptions,
@@ -279,8 +280,16 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
  */
 function ProfileSection({ state }: { state: Measure3dState }) {
   const { t } = useTranslation();
-  const { profile, sampling, samplingStepAuto, samplingStepM, samplingStepRange, hoverSample } =
-    state;
+  const {
+    profile,
+    sampling,
+    samplingStepAuto,
+    samplingStepM,
+    samplingStepRange,
+    hoverSample,
+    heightsAboveSeaLevel,
+    geoidAvailable,
+  } = state;
   const [min, max] = samplingStepRange;
   const steps = SAMPLING_STEP_SERIES.filter((step) => step >= min && step <= max);
 
@@ -322,6 +331,18 @@ function ProfileSection({ state }: { state: Measure3dState }) {
               </option>
             ))}
           </select>
+        </label>
+        <label
+          className="flex items-center gap-1.5"
+          title={geoidAvailable ? undefined : t("toolbar.measure3d.profile.noGeoid")}
+        >
+          <input
+            type="checkbox"
+            checked={heightsAboveSeaLevel}
+            disabled={!geoidAvailable}
+            onChange={(event) => setMeasure3dHeightsAboveSeaLevel(event.target.checked)}
+          />
+          {t("toolbar.measure3d.profile.meanSeaLevel")}
         </label>
       </div>
 

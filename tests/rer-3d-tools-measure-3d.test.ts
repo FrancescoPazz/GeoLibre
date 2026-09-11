@@ -24,6 +24,8 @@ import {
   setMeasure3dMode,
   setMeasure3dOptions,
   setMeasure3dSamplingStep,
+  setMeasure3dGeoid,
+  setMeasure3dHeightsAboveSeaLevel,
   PROFILE_SAMPLING_DEBOUNCE_MS,
 } from "../packages/plugins/src/plugins/rer-3d-tools/measure-3d";
 import { SAMPLING_STEP_SERIES } from "../packages/plugins/src/plugins/rer-3d-tools/terrain-profile";
@@ -613,5 +615,48 @@ describe("measure-3d terrain profile", () => {
     globe.click(B);
     await settle();
     assert.equal(getMeasure3dSnapshot().profile, null, "points are not a path");
+  });
+});
+
+describe("measure-3d heights above sea level", () => {
+  beforeEach(() => {
+    restoreMeasure3d(mapLessApp, undefined);
+    setMeasure3dGeoid(undefined);
+  });
+
+  it("is off, and the toggle inert, until the host supplies a geoid", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    openMeasure3dPanel(globeApp(globe));
+    assert.equal(getMeasure3dSnapshot().geoidAvailable, false);
+    assert.equal(getMeasure3dSnapshot().heightsAboveSeaLevel, false, "no deployment default in tests");
+    globe.click(A);
+    globe.click(B);
+    setMeasure3dHeightsAboveSeaLevel(true);
+    await settle();
+    assert.ok(Math.abs((getMeasure3dSnapshot().profile?.minAlt ?? 0) - 100) < 1e-6, "no geoid, ellipsoidal heights");
+  });
+
+  it("subtracts the geoid undulation once supplied and enabled, and restores it from the project", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    setMeasure3dGeoid(async (positions) => positions.map(() => 40));
+    assert.equal(getMeasure3dSnapshot().geoidAvailable, true);
+    setMeasure3dHeightsAboveSeaLevel(true);
+    await settle();
+    let s = getMeasure3dSnapshot();
+    assert.ok(Math.abs((s.profile?.minAlt ?? 0) - 60) < 1e-6, "100 m ellipsoidal − 40 m undulation");
+    assert.equal(getMeasure3dProjectState()?.meanSeaLevel, true);
+    setMeasure3dHeightsAboveSeaLevel(false);
+    await settle();
+    s = getMeasure3dSnapshot();
+    assert.ok(Math.abs((s.profile?.minAlt ?? 0) - 100) < 1e-6);
+    const saved = { ...getMeasure3dProjectState(), meanSeaLevel: true };
+    const reopened = makeGlobe({ terrain: () => 100 });
+    restoreMeasure3d(globeApp(reopened), saved);
+    await settle();
+    assert.equal(getMeasure3dSnapshot().heightsAboveSeaLevel, true);
+    assert.ok(Math.abs((getMeasure3dSnapshot().profile?.minAlt ?? 0) - 60) < 1e-6);
   });
 });

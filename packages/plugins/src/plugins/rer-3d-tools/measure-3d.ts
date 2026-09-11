@@ -1,3 +1,4 @@
+import { getElevationMeanSeaLevelDefault } from "@geolibre/core";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { GeoLibreAppAPI } from "../../types";
 import { CesiumDrawing, DEFAULT_DRAW_OPTIONS, type DrawOptions } from "./draw-engine";
@@ -54,6 +55,10 @@ export interface Measure3dState {
   samplingStepRange: [number, number];
   /** Index into `profile.samples` under the pointer on the chart. */
   hoverSample: number | null;
+  /** Report heights above mean sea level (EGM96) rather than the ellipsoid. */
+  heightsAboveSeaLevel: boolean;
+  /** Whether the host has supplied a geoid, so the toggle can do anything. */
+  geoidAvailable: boolean;
 }
 
 /** How long after the last edit (a drag settling) before the terrain is read. */
@@ -76,6 +81,7 @@ let samplingRequest = 0;
 let samplingTimer: ReturnType<typeof setTimeout> | null = null;
 /** Geoid undulations to subtract, for heights above mean sea level; set by the host. */
 let geoid: GeoidHeights | undefined;
+let heightsAboveSeaLevel = getElevationMeanSeaLevelDefault();
 
 const EMPTY_MEASURES: DrawMeasures = Object.freeze({
   segmentMeters: [],
@@ -105,6 +111,8 @@ function buildSnapshot(): Measure3dState {
     samplingStepM,
     samplingStepRange: stepRange,
     hoverSample,
+    heightsAboveSeaLevel,
+    geoidAvailable: geoid !== undefined,
   };
 }
 
@@ -190,7 +198,7 @@ async function sampleNow(): Promise<void> {
   const result = await buildTerrainProfile(C, d.getTerrainProvider(), snapshotGeometry.points, {
     stepMeters: samplingStepM,
     closed: snapshotGeometry.closed,
-    geoid,
+    geoid: heightsAboveSeaLevel ? geoid : undefined,
   });
   if (request !== samplingRequest) return;
   profile = result;
@@ -217,7 +225,16 @@ function onDrawingChange(next: DrawGeometry, nextMeasures: DrawMeasures): void {
 /** Supply (or clear) the geoid the host wants heights referred to. */
 export function setMeasure3dGeoid(next: GeoidHeights | undefined): void {
   geoid = next;
+  if (profilable(geometry) && heightsAboveSeaLevel) scheduleSampling();
+  else publish();
+}
+
+/** Refer heights to mean sea level (needs a geoid) or to the ellipsoid. */
+export function setMeasure3dHeightsAboveSeaLevel(enabled: boolean): void {
+  if (enabled === heightsAboveSeaLevel) return;
+  heightsAboveSeaLevel = enabled;
   if (profilable(geometry)) scheduleSampling();
+  else publish();
 }
 
 /** Choose the sampling step by hand (snapped to the series), or hand it back to auto. */
@@ -361,6 +378,7 @@ export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
     samplingStepManual = 0;
     samplingStepM = SAMPLING_STEP_DISABLED;
     stepRange = [0, 0];
+    heightsAboveSeaLevel = getElevationMeanSeaLevelDefault();
     publish();
     return false;
   }
@@ -376,6 +394,8 @@ export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
   measures = cesium ? computeMeasures(cesium, geometry) : EMPTY_MEASURES;
   profile = null;
   samplingStepAuto = raw.samplingStepAuto !== false;
+  heightsAboveSeaLevel =
+    typeof raw.meanSeaLevel === "boolean" ? raw.meanSeaLevel : getElevationMeanSeaLevelDefault();
   samplingStepManual =
     typeof raw.samplingStep === "number" &&
     Number.isFinite(raw.samplingStep) &&
@@ -403,7 +423,8 @@ export function getMeasure3dProjectState(): Record<string, unknown> | undefined 
     geometry.points.length === 0 &&
     mode === "line" &&
     defaultOptions &&
-    samplingStepAuto
+    samplingStepAuto &&
+    heightsAboveSeaLevel === getElevationMeanSeaLevelDefault()
   ) {
     return undefined;
   }
@@ -415,5 +436,6 @@ export function getMeasure3dProjectState(): Record<string, unknown> | undefined 
     closed: geometry.closed,
     samplingStepAuto,
     ...(samplingStepAuto ? {} : { samplingStep: samplingStepManual }),
+    meanSeaLevel: heightsAboveSeaLevel,
   };
 }

@@ -27,10 +27,14 @@ repos:
         # catalogs), and package-lock.json, which npm writes and which grows
         # with the dependency tree -- raising the limit for every file in the
         # repo just to admit it would buy a bump on every dependency wave.
+        # The EGM96 geoid grid (NGA WW15MGH.DAC, 2 MB, public domain) is a fixed
+        # reference dataset the 3D tools read heights above sea level from; it
+        # is fetched on first use and never regenerated.
         exclude: >-
           (?x)^(
             apps/geolibre-desktop/src/i18n/locales/(en|zh)\.json
             |package-lock\.json
+            |apps/geolibre-desktop/public/geoid/WW15MGH\.DAC
           )$
       - id: check-merge-conflict
       - id: check-toml

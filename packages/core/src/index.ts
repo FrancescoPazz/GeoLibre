@@ -132,6 +132,7 @@ export {
   getBuildEnvironment,
   getCesiumIonToken,
   getCesiumTerrainAssetId,
+  getElevationMeanSeaLevelDefault,
   getGoogleMapsApiKey,
   getMapboxAccessToken,
   getProtomapsApiKey,

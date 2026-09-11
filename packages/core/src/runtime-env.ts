@@ -205,6 +205,23 @@ export function getCesiumTerrainAssetId(
 }
 
 /**
+ * Whether elevations should be reported above mean sea level (EGM96) rather
+ * than above the WGS84 ellipsoid, as a deployment default. Terrain heights
+ * are ellipsoidal; a geoportal whose users read heights off official
+ * cartography wants them referred to sea level, which in Italy differs from
+ * the ellipsoid by some 40–50 m. Set `VITE_ELEVATION_MEAN_SEA_LEVEL` (or the
+ * bare `ELEVATION_MEAN_SEA_LEVEL`) to `1`/`true` at build or deployment time;
+ * the user can still toggle it per tool.
+ */
+export function getElevationMeanSeaLevelDefault(env?: Record<string, string | undefined>): boolean {
+  const runtimeEnv = env ?? getRuntimeEnvironment();
+  const raw = (runtimeEnv.VITE_ELEVATION_MEAN_SEA_LEVEL ?? runtimeEnv.ELEVATION_MEAN_SEA_LEVEL)
+    ?.trim()
+    .toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+/**
  * Builds a full Protomaps v5 style URL for a flavor, injecting the API key.
  *
  * @param flavor - The Protomaps flavor name (e.g. `light`, `dark`, `white`,

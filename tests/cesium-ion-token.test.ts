@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { getCesiumIonToken, getCesiumTerrainAssetId } from "@geolibre/core";
+import {
+  getCesiumIonToken,
+  getCesiumTerrainAssetId,
+  getElevationMeanSeaLevelDefault,
+} from "@geolibre/core";
 
 describe("getCesiumIonToken", () => {
   it("returns undefined when env is missing or empty", () => {
@@ -74,5 +78,22 @@ describe("getCesiumTerrainAssetId", () => {
         `expected ${JSON.stringify(value)} to be rejected`,
       );
     }
+  });
+});
+
+describe("getElevationMeanSeaLevelDefault", () => {
+  it("is off unless a deployment turns it on", () => {
+    assert.equal(getElevationMeanSeaLevelDefault({}), false);
+    assert.equal(getElevationMeanSeaLevelDefault({ VITE_ELEVATION_MEAN_SEA_LEVEL: "0" }), false);
+    assert.equal(getElevationMeanSeaLevelDefault({ VITE_ELEVATION_MEAN_SEA_LEVEL: "no" }), false);
+  });
+
+  it("accepts 1, true and yes, in either name, trimmed and case-insensitive", () => {
+    assert.equal(getElevationMeanSeaLevelDefault({ VITE_ELEVATION_MEAN_SEA_LEVEL: "1" }), true);
+    assert.equal(
+      getElevationMeanSeaLevelDefault({ VITE_ELEVATION_MEAN_SEA_LEVEL: " TRUE " }),
+      true,
+    );
+    assert.equal(getElevationMeanSeaLevelDefault({ ELEVATION_MEAN_SEA_LEVEL: "yes" }), true);
   });
 });

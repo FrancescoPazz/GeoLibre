@@ -2363,7 +2363,9 @@
         "elevation": "Quota",
         "noTerrain": "Nessun terreno caricato: le quote sono quelle dei vertici. Attiva il terreno per un profilo reale.",
         "chart": "Profilo altimetrico",
-        "hoverHint": "Passa sul grafico per localizzare un punto sul globo."
+        "hoverHint": "Passa sul grafico per localizzare un punto sul globo.",
+        "meanSeaLevel": "Quote sul livello del mare (EGM96)",
+        "noGeoid": "La griglia del geoide EGM96 non è disponibile in questo deployment."
       },
       "clampToGround": "Adagia sul terreno",
       "showLabels": "Etichette sulla mappa",

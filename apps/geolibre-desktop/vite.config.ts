@@ -82,6 +82,18 @@ if (!process.env.VITE_CESIUM_TOKEN) {
 // getCesiumTerrainAssetId() and the globe loads that asset instead of World
 // Terrain. Not a credential — it is just an id — but it is only meaningful
 // with the token that owns the asset.
+// Whether elevations default to mean sea level (EGM96) rather than the
+// ellipsoid: same bridge, for deployments that set the bare name.
+if (!process.env.VITE_ELEVATION_MEAN_SEA_LEVEL) {
+  const msl =
+    process.env.ELEVATION_MEAN_SEA_LEVEL ||
+    FILE_ENV.VITE_ELEVATION_MEAN_SEA_LEVEL ||
+    FILE_ENV.ELEVATION_MEAN_SEA_LEVEL;
+  if (msl) {
+    process.env.VITE_ELEVATION_MEAN_SEA_LEVEL = msl;
+  }
+}
+
 if (!process.env.VITE_CESIUM_TERRAIN_ASSET_ID) {
   const cesiumTerrainAssetId =
     process.env.CESIUM_TERRAIN_ASSET_ID ||
@@ -235,6 +247,7 @@ const BUILD_ENV_KEYS = [
   "VITE_CESIUM_TERRAIN_ASSET_ID",
   "VITE_CESIUM_TOKEN",
   "VITE_DUCKDB_SPATIAL_EXTENSION_PATH",
+  "VITE_ELEVATION_MEAN_SEA_LEVEL",
   "VITE_GEE_OAUTH_CLIENT_ID",
   "VITE_GEE_PROJECT_ID",
   "VITE_GEOCODER_API_KEY",

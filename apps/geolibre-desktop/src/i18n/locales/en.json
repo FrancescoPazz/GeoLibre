@@ -2381,7 +2381,9 @@
         "elevation": "Elevation",
         "noTerrain": "No terrain loaded: heights are the vertices' own. Enable terrain for a real profile.",
         "chart": "Elevation profile",
-        "hoverHint": "Hover the chart to locate a point on the globe."
+        "hoverHint": "Hover the chart to locate a point on the globe.",
+        "meanSeaLevel": "Heights above sea level (EGM96)",
+        "noGeoid": "The EGM96 geoid grid is not available in this deployment."
       },
       "clampToGround": "Drape on terrain",
       "showLabels": "Labels on the map",

@@ -28,6 +28,8 @@ import {
   reattachRouteAnimation,
   reattachFlightSimulator,
   reattachRer3dTools,
+  createEgm96Geoid,
+  setMeasure3dGeoid,
   restoreArcGISViewportLayers,
   restoreRasterLayers,
   restoreThreeDTilesLayers,
@@ -1378,6 +1380,14 @@ export function DesktopShell({
    */
   const primaryRenderer = useAppStore((s) => s.primaryRenderer);
   const cesiumPrimary = primaryRenderer === "cesium";
+  // The EGM96 grid the 3D tools refer heights to mean sea level with. It is
+  // a static asset fetched on first use, so wiring it is a one-time hand-over
+  // rather than something the renderer swap has to redo.
+  useEffect(() => {
+    const url = new URL(`${import.meta.env.BASE_URL}geoid/WW15MGH.DAC`, document.baseURI).href;
+    setMeasure3dGeoid(createEgm96Geoid(url).heights);
+    return () => setMeasure3dGeoid(undefined);
+  }, []);
   useScreenshotReadiness(
     mapControllerRef,
     mapReadyGeneration,

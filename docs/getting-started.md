@@ -744,6 +744,16 @@ CESIUM_TERRAIN_ASSET_ID=2473055
 
 `CESIUM_TERRAIN_ASSET_ID` (or `VITE_CESIUM_TERRAIN_ASSET_ID`) follows the same rules as the token: it is baked in at build time and can be overridden at runtime as a free-form `VITE_CESIUM_TERRAIN_ASSET_ID` variable in Settings → Environment Variables, taking effect without a reload. The id is not a credential, but it is only meaningful with the token that owns the asset — without a token the globe stays on the keyless Terrarium terrain and the id is ignored. Anything that is not a positive integer is ignored too.
 
+### Heights above mean sea level
+
+Terrain heights on the globe are ellipsoidal (WGS84). The 3D tools can refer them to mean sea level with the EGM96 geoid — a 2 MB grid shipped with the app and fetched on first use — which in Italy, for instance, lowers every height by some 40–50 m to the value official cartography shows. Users toggle it per tool; a deployment whose readers expect sea-level heights sets the default:
+
+```env
+ELEVATION_MEAN_SEA_LEVEL=1
+```
+
+`ELEVATION_MEAN_SEA_LEVEL` (or `VITE_ELEVATION_MEAN_SEA_LEVEL`) follows the same build/deployment/runtime rules as the other variables above.
+
 ## Optional runtime mirrors (offline and air-gapped)
 
 The **Python (Pyodide)** vector engine loads its runtime from the public jsDelivr CDN by default. To self-host it for offline or production use, point it at a mirrored copy of the Pyodide distribution:
