@@ -10,6 +10,7 @@ import {
   resetPrimaryCesiumBuiltInControlState,
   type MapEngine,
 } from "@geolibre/map";
+import { useBranding } from "../../hooks/useBranding";
 import { useMapCapabilities } from "../../hooks/useMapCapabilities";
 import {
   closeDuckDBLayerPanel,
@@ -2126,7 +2127,13 @@ export function TopToolbar({
   // on iOS and Android too — where the app is named plain "GeoLibre" (the bundle
   // name from tauri.ios.conf.json, the home-screen icon, and the store listing),
   // so titling it "GeoLibre Desktop" there contradicts every other surface.
-  const appTitle = isTauri() && !isMobile() ? "GeoLibre Desktop" : "GeoLibre";
+  const branding = useBranding();
+  const appTitle = branding.name ?? (isTauri() && !isMobile() ? "GeoLibre Desktop" : "GeoLibre");
+  const brandMark = branding.logoUrl ? (
+    <img src={branding.logoUrl} alt="" className="h-6 max-w-32 object-contain" />
+  ) : (
+    <Map className="h-4 w-4" />
+  );
   const renderToolbarLabel = (label: string) =>
     showLabels ? <span className="hidden sm:inline">{label}</span> : null;
   const chrome: ToolbarChrome = {
@@ -2147,8 +2154,23 @@ export function TopToolbar({
             "flex-wrap px-2 md:flex-nowrap md:overflow-x-auto",
       )}
     >
-      <span className="me-1 flex shrink-0 items-center gap-1.5 text-sm font-semibold text-primary md:me-2">
-        <Map className="h-4 w-4" />
+      <span
+        className="me-1 flex shrink-0 items-center gap-1.5 text-sm font-semibold text-primary md:me-2"
+        data-testid="toolbar-brand"
+      >
+        {branding.logoLink ? (
+          <a
+            href={branding.logoLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center"
+            aria-label={appTitle}
+          >
+            {brandMark}
+          </a>
+        ) : (
+          brandMark
+        )}
         {showProjectInfo ? <span className="hidden sm:inline">{appTitle}</span> : null}
       </span>
       {!viewer && isMenuVisible(uiProfile, "project") && (

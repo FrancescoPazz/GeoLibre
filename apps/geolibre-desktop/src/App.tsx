@@ -20,6 +20,7 @@ import { useStartupUpdateCheck } from "./hooks/useStartupUpdateCheck";
 import { useStartupProject } from "./hooks/useStartupProject";
 import { useThemeMode } from "./hooks/useThemeMode";
 import { useThemeScheme } from "./hooks/useThemeScheme";
+import { useDocumentBranding } from "./hooks/useBranding";
 import { useUiProfileBootstrap } from "./hooks/useUiProfileBootstrap";
 import { useUndoRedoShortcuts } from "./hooks/useUndoRedoShortcuts";
 import { useWhiteboxToolUrl } from "./hooks/useWhiteboxToolUrl";
@@ -48,6 +49,7 @@ export default function App() {
   const { pending: pendingUpdate, remindLater, skipVersion } = useStartupUpdateCheck();
   useDesktopSettingsPersistence();
   useThemeScheme();
+  useDocumentBranding();
   useRecentProjectsPersistence();
   const { warning: startupProjectWarning, restoring: restoringStartupProject } =
     useStartupProject();

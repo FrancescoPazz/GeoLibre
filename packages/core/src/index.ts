@@ -175,6 +175,7 @@ export {
   type CoordinateInput,
   type CrsConversion,
 } from "./crs-conversion";
+export { getBranding, isBrandAssetUrl, type Branding } from "./branding";
 export {
   getBuildEnvironment,
   getCesiumIonToken,

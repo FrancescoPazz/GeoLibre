@@ -790,6 +790,20 @@ COORDS_CONVERTER_URL=https://gis.example.org/arcgis/rest/services/Utilities/Geom
 
 The conversion runs on the server rather than in the browser because the Monte Mario and ED50 datum shifts are NTv2 grid transformations (`RER_AD400_MM_ETRS89_V1A`, `RER_ED50_ETRS89_GPS7_K2`) installed on that server and named in the request; a server without them answers with a plain, grid-less conversion. `COORDS_CONVERTER_URL` (or `VITE_COORDS_CONVERTER_URL`) follows the same build/deployment/runtime rules as the other variables above.
 
+### Branding
+
+A hosted GeoLibre can present itself under its own name and mark:
+
+```env
+BRAND_NAME=Geoportale
+BRAND_LOGO_URL=/branding/logo.svg
+BRAND_LOGO_LINK=https://example.org/
+BRAND_FAVICON_URL=/branding/favicon.png
+BRAND_ACCENT_COLOR=#519ac2
+```
+
+`BRAND_NAME` replaces "GeoLibre" in the toolbar and the page title; `BRAND_LOGO_URL` puts an image in the toolbar's brand spot (an http(s) URL or a path served next to the app — put the file in the docroot), optionally linked to `BRAND_LOGO_LINK`; `BRAND_FAVICON_URL` swaps the favicon; `BRAND_ACCENT_COLOR` (`#rrggbb`) is the accent colour the app starts with — any scheme or custom colour a user picks in Settings → Appearance wins over it. All five (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above; a value that is not what the field wants is ignored.
+
 ## Optional runtime mirrors (offline and air-gapped)
 
 The **Python (Pyodide)** vector engine loads its runtime from the public jsDelivr CDN by default. To self-host it for offline or production use, point it at a mirrored copy of the Pyodide distribution:
