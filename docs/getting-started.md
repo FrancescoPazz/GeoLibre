@@ -36,7 +36,7 @@ You can load browser-selected vector data supported by DuckDB-WASM Spatial, drag
 
 ### On the desktop
 
-The desktop app adds local filesystem dialogs, local MBTiles, local raster file reads, and project save/open. Installers are available for Windows, macOS, and Linux, including the Microsoft Store, the Mac App Store, Homebrew, winget, the AUR, COPR, and Flatpak. (The Mac App Store listing is the sandboxed *desktop* build; the [App Store](https://apps.apple.com/app/geolibre/id6796039674) listing is the iPhone and iPad app.)
+The desktop app adds local filesystem dialogs, local MBTiles, local raster file reads, and project save/open. Installers are available for Windows, macOS, and Linux, including the Microsoft Store, the Mac App Store, Homebrew, winget, the AUR, COPR, and Flatpak. (The Mac App Store listing is the sandboxed _desktop_ build; the [App Store](https://apps.apple.com/app/geolibre/id6796039674) listing is the iPhone and iPad app.)
 
 [Download the desktop app](downloads.md){ .md-button .md-button--primary }
 
@@ -145,12 +145,12 @@ Desktop filesystem dialogs, local MBTiles, local raster file reads, project save
 ### Run with Docker
 
 !!! tip "Private deployments"
-    If you are deploying GeoLibre so a team can work with data that must stay on
-    your own infrastructure, read
-    [Self-Hosting & Private Data](self-hosting.md) alongside this section: it
-    covers hosting the data (with [GeoLens](https://getgeolens.com)), putting
-    both behind one sign-on layer, and why serving them from the same origin
-    removes the CORS and cookie problems.
+If you are deploying GeoLibre so a team can work with data that must stay on
+your own infrastructure, read
+[Self-Hosting & Private Data](self-hosting.md) alongside this section: it
+covers hosting the data (with [GeoLens](https://getgeolens.com)), putting
+both behind one sign-on layer, and why serving them from the same origin
+removes the CORS and cookie problems.
 
 The repository includes a Dockerfile for the browser version of GeoLibre. It builds the Vite app and serves the production files with nginx:
 
@@ -347,7 +347,7 @@ whole container must be protected before its assets are served.
 
 The same whole-app sign-in gate, for deployments that already use Auth0. Create
 a **Single Page Application** in the Auth0 Dashboard and pass its domain and
-client ID — both are public values, and an Auth0 client *secret* is neither
+client ID — both are public values, and an Auth0 client _secret_ is neither
 needed nor accepted here:
 
 ```bash
@@ -357,7 +357,7 @@ docker run --rm -p 8080:80 \
   ghcr.io/opengeos/geolibre:latest
 ```
 
-Both variables are required together, and configuring Auth0 *and* Clerk at once
+Both variables are required together, and configuring Auth0 _and_ Clerk at once
 is refused at startup rather than resolved silently — pick one provider. As with
 Clerk, neither SDK is loaded when nothing is configured, the gate applies only
 to the hosted web application (the Tauri, mobile, and embedded/Jupyter builds
@@ -380,7 +380,7 @@ value:
   existing session.
 
 Auth0 has no embedded sign-in card, so GeoLibre uses **Universal Login**: the
-visitor clicks *Sign in*, is redirected to your tenant's hosted login page, and
+visitor clicks _Sign in_, is redirected to your tenant's hosted login page, and
 is returned to the app. The URL they arrived on is carried through the round
 trip, so a shared `?project=…` link still opens its project after signing in.
 
@@ -484,10 +484,10 @@ docker run --rm -p 8080:80 \
   ghcr.io/opengeos/geolibre:latest
 ```
 
-| Variable | Effect |
-| --- | --- |
-| `GEOLIBRE_SHARE_URL` | Base URL of the project sharing server. Unset uses `share.geolibre.app`. Set it to `off` to remove Share and the Project Gallery from the UI entirely. |
-| `GEOLIBRE_COLLAB_URL` | Base URL of the [collaboration](collaboration.md) relay. Unset leaves live collaboration disabled. |
+| Variable              | Effect                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GEOLIBRE_SHARE_URL`  | Base URL of the project sharing server. Unset uses `share.geolibre.app`. Set it to `off` to remove Share and the Project Gallery from the UI entirely. |
+| `GEOLIBRE_COLLAB_URL` | Base URL of the [collaboration](collaboration.md) relay. Unset leaves live collaboration disabled.                                                     |
 
 Both are read at container startup, so a prebuilt image can be repointed by
 restarting it with different values — no rebuild. (The equivalent build
@@ -610,17 +610,17 @@ Where to find the output:
 
 ### Build-time flags
 
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `GEOLIBRE_PGLITE_CDN` | `1` (CDN) | Set `0` to bundle PGlite/PostGIS into the build (~22 MB) instead of loading from jsDelivr. |
-| `GEOLIBRE_CEREUS_CDN` | `1` (CDN) | Set `0` to bundle CereusDB WASM (~40 MB) instead of loading from jsDelivr. |
-| `GEOLIBRE_GDAL_CDN` | `1` (CDN) | Set `0` to disable GDAL export (the ~40 MB WASM/data are not bundled, just unavailable). |
-| `GEOLIBRE_DUCKDB_WASM_CDN` | `0` (bundled) | Set `1` to move DuckDB-WASM to jsDelivr (required for Cloudflare Pages' 25 MiB per-file limit). |
-| `GEOLIBRE_NO_EXTERNAL_CDN` | unset | Set `1` to strip **all GeoLibre-controlled** external CDN references from the build. Forces all `*_CDN=0` flags (so PGlite, CereusDB and DuckDB-WASM are bundled rather than fetched) and disables features that embed CDN URLs (storymap HTML export, built-in detection models, ONNX WASM, 3D Tiles decoders, GDAL export). Pyodide is not hard-disabled: the flag drops only its default index URL, so point `VITE_PYODIDE_INDEX_URL` at an approved mirror to keep it working. Some third-party packages keep their own internal CDN URLs, which this flag cannot remove — see [architecture.md](architecture.md). Mutually exclusive with `npm run lite:build` (and so with Cloudflare Pages/Workers hosting), which needs `GEOLIBRE_DUCKDB_WASM_CDN=1` to stay under the 25 MiB per-file cap; the build rejects that combination outright. Intended for enterprise deployments that cannot reference untrusted CDNs. |
-| `GEOLIBRE_STORE_BUILD` | unset | Set `1` for Microsoft Store MSIX builds (removes in-app updater). |
-| `GEOLIBRE_MAS_BUILD` | unset | Set `1` for Mac App Store builds (removes sidecar/server features). |
-| `GEOLIBRE_EMBED` | unset | Set `1` for the Jupyter embed wheel build. |
-| `VITE_GEOLIBRE_GA_MEASUREMENT_ID` | unset | Set a GA4 measurement ID (`G-…`) to load Google Analytics in the **web** build. Unset ships no analytics code at all, which is the default for every build; the desktop and Jupyter embed builds ignore it entirely. Used only by the hosted geolibre.app and web.geolibre.app deploys; see [Privacy Policy](privacy.md#website-analytics). |
+| Variable                          | Default       | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GEOLIBRE_PGLITE_CDN`             | `1` (CDN)     | Set `0` to bundle PGlite/PostGIS into the build (~22 MB) instead of loading from jsDelivr.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `GEOLIBRE_CEREUS_CDN`             | `1` (CDN)     | Set `0` to bundle CereusDB WASM (~40 MB) instead of loading from jsDelivr.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `GEOLIBRE_GDAL_CDN`               | `1` (CDN)     | Set `0` to disable GDAL export (the ~40 MB WASM/data are not bundled, just unavailable).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `GEOLIBRE_DUCKDB_WASM_CDN`        | `0` (bundled) | Set `1` to move DuckDB-WASM to jsDelivr (required for Cloudflare Pages' 25 MiB per-file limit).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `GEOLIBRE_NO_EXTERNAL_CDN`        | unset         | Set `1` to strip **all GeoLibre-controlled** external CDN references from the build. Forces all `*_CDN=0` flags (so PGlite, CereusDB and DuckDB-WASM are bundled rather than fetched) and disables features that embed CDN URLs (storymap HTML export, built-in detection models, ONNX WASM, 3D Tiles decoders, GDAL export). Pyodide is not hard-disabled: the flag drops only its default index URL, so point `VITE_PYODIDE_INDEX_URL` at an approved mirror to keep it working. Some third-party packages keep their own internal CDN URLs, which this flag cannot remove — see [architecture.md](architecture.md). Mutually exclusive with `npm run lite:build` (and so with Cloudflare Pages/Workers hosting), which needs `GEOLIBRE_DUCKDB_WASM_CDN=1` to stay under the 25 MiB per-file cap; the build rejects that combination outright. Intended for enterprise deployments that cannot reference untrusted CDNs. |
+| `GEOLIBRE_STORE_BUILD`            | unset         | Set `1` for Microsoft Store MSIX builds (removes in-app updater).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `GEOLIBRE_MAS_BUILD`              | unset         | Set `1` for Mac App Store builds (removes sidecar/server features).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `GEOLIBRE_EMBED`                  | unset         | Set `1` for the Jupyter embed wheel build.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `VITE_GEOLIBRE_GA_MEASUREMENT_ID` | unset         | Set a GA4 measurement ID (`G-…`) to load Google Analytics in the **web** build. Unset ships no analytics code at all, which is the default for every build; the desktop and Jupyter embed builds ignore it entirely. Used only by the hosted geolibre.app and web.geolibre.app deploys; see [Privacy Policy](privacy.md#website-analytics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 Example — build with no external CDN dependencies:
 
@@ -671,7 +671,7 @@ Google Traffic and Google Photorealistic 3D Tiles reuse the same `VITE_GOOGLE_MA
 
 ## Optional Amazon Location styles
 
-The **Amazon Location** entries in the Basemaps control are *style basemaps* (they replace the whole map style, unlike the traffic overlays above). They authenticate with your own Amazon Location API key, set in **Settings → Environment Variables** (or baked into `apps/geolibre-desktop/.env.local`):
+The **Amazon Location** entries in the Basemaps control are _style basemaps_ (they replace the whole map style, unlike the traffic overlays above). They authenticate with your own Amazon Location API key, set in **Settings → Environment Variables** (or baked into `apps/geolibre-desktop/.env.local`):
 
 ```env
 VITE_AMAZON_LOCATION_API_KEY=your_amazon_location_api_key   # Amazon Location styles
@@ -711,11 +711,11 @@ Tianditu ships each basemap and its labels as separate layers. Turn on **Add bas
 
 ### Which to pick
 
-| Provider | Datum | Key | Where |
-|----------|-------|-----|-------|
-| Tianditu (天地图) | CGCS2000 | required | Basemaps control |
-| Amap (高德地图) | GCJ-02 | none | Regional section, Basemaps control |
-| Tencent Maps (腾讯地图) | GCJ-02 | none | Regional section, Basemaps control |
+| Provider                | Datum    | Key      | Where                              |
+| ----------------------- | -------- | -------- | ---------------------------------- |
+| Tianditu (天地图)       | CGCS2000 | required | Basemaps control                   |
+| Amap (高德地图)         | GCJ-02   | none     | Regional section, Basemaps control |
+| Tencent Maps (腾讯地图) | GCJ-02   | none     | Regional section, Basemaps control |
 
 **Prefer Tianditu whenever the map also carries your own data.** Chinese law requires public map services to publish in GCJ-02, an offset datum that displaces features by roughly 100 to 700 m from WGS84; nothing in GeoLibre or MapLibre applies the shift, so your layers will visibly misalign over Amap or Tencent. Tianditu publishes in CGCS2000, which is close enough to WGS84 that ordinary data lines up.
 
@@ -753,6 +753,17 @@ ELEVATION_MEAN_SEA_LEVEL=1
 ```
 
 `ELEVATION_MEAN_SEA_LEVEL` (or `VITE_ELEVATION_MEAN_SEA_LEVEL`) follows the same build/deployment/runtime rules as the other variables above.
+
+### Feedback channel
+
+**Help → Give feedback** opens the GeoLibre issue tracker by default. A deployment can point it at its own page, or at an e-mail address so the message lands in the mail client already addressed:
+
+```env
+FEEDBACK_URL=mailto:mappe@example.org
+FEEDBACK_SUBJECT=Geoportale 3D — segnalazione
+```
+
+`FEEDBACK_URL` (or `VITE_FEEDBACK_URL`) is an http(s) page or a `mailto:` address (a bare address works too); `FEEDBACK_SUBJECT` pre-fills the subject line of an e-mail and is ignored for a page. Both follow the same build/deployment/runtime rules as the other variables above. Anything that is not a page or an address is ignored and the default link stays.
 
 ## Optional runtime mirrors (offline and air-gapped)
 

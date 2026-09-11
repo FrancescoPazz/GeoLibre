@@ -4,6 +4,7 @@ import {
   getCesiumIonToken,
   getCesiumTerrainAssetId,
   getElevationMeanSeaLevelDefault,
+  getFeedbackTarget,
 } from "@geolibre/core";
 
 describe("getCesiumIonToken", () => {
@@ -78,6 +79,50 @@ describe("getCesiumTerrainAssetId", () => {
         `expected ${JSON.stringify(value)} to be rejected`,
       );
     }
+  });
+});
+
+describe("getFeedbackTarget", () => {
+  it("is unset without a configured channel, or with one that is not a page or an address", () => {
+    assert.equal(getFeedbackTarget({}), undefined);
+    assert.equal(getFeedbackTarget({ VITE_FEEDBACK_URL: "   " }), undefined);
+    assert.equal(getFeedbackTarget({ VITE_FEEDBACK_URL: "javascript:alert(1)" }), undefined);
+    assert.equal(getFeedbackTarget({ VITE_FEEDBACK_URL: "not a url" }), undefined);
+    assert.equal(getFeedbackTarget({ VITE_FEEDBACK_URL: "mailto:" }), undefined);
+  });
+
+  it("keeps an http(s) page as a web target", () => {
+    assert.deepEqual(getFeedbackTarget({ FEEDBACK_URL: "https://example.org/feedback " }), {
+      kind: "web",
+      href: "https://example.org/feedback",
+    });
+  });
+
+  it("turns a mailto: address into a pre-addressed message with the subject filled in", () => {
+    assert.deepEqual(
+      getFeedbackTarget({
+        VITE_FEEDBACK_URL: "mailto:mappe@example.org",
+        VITE_FEEDBACK_SUBJECT: "Geoportale 3D — segnalazione",
+      }),
+      {
+        kind: "mailto",
+        href: "mailto:mappe@example.org?subject=Geoportale+3D+%E2%80%94+segnalazione",
+      },
+    );
+    assert.deepEqual(getFeedbackTarget({ FEEDBACK_URL: "mappe@example.org" }), {
+      kind: "mailto",
+      href: "mailto:mappe@example.org",
+    });
+  });
+
+  it("does not override a subject the address already carries", () => {
+    assert.deepEqual(
+      getFeedbackTarget({
+        FEEDBACK_URL: "mailto:mappe@example.org?subject=Fixed&cc=x@example.org",
+        FEEDBACK_SUBJECT: "Ignored",
+      }),
+      { kind: "mailto", href: "mailto:mappe@example.org?subject=Fixed&cc=x%40example.org" },
+    );
   });
 });
 

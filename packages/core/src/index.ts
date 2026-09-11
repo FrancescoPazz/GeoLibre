@@ -150,6 +150,8 @@ export {
   getCesiumIonToken,
   getCesiumTerrainAssetId,
   getElevationMeanSeaLevelDefault,
+  getFeedbackTarget,
+  type FeedbackTarget,
   getGoogleMapsApiKey,
   getMapboxAccessToken,
   getProtomapsApiKey,

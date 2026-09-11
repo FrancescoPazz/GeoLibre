@@ -221,6 +221,52 @@ export function getElevationMeanSeaLevelDefault(env?: Record<string, string | un
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
+/** Where Help → Give feedback goes: a web page or a pre-addressed e-mail. */
+export interface FeedbackTarget {
+  kind: "web" | "mailto";
+  /** The full href: an http(s) URL, or `mailto:` with the subject filled in. */
+  href: string;
+}
+
+/**
+ * The deployment's feedback channel, if it names one. `VITE_FEEDBACK_URL`
+ * (or the bare `FEEDBACK_URL`) is either an http(s) page — an issue tracker,
+ * a form — or a `mailto:` address (a bare e-mail address is accepted too);
+ * for e-mail, `VITE_FEEDBACK_SUBJECT` / `FEEDBACK_SUBJECT` pre-fills the
+ * subject line, the way a geoportal wants "Geoportale 3D — segnalazione"
+ * on every message. Anything else, or nothing, yields undefined and the app
+ * keeps its default feedback link.
+ */
+export function getFeedbackTarget(
+  env?: Record<string, string | undefined>,
+): FeedbackTarget | undefined {
+  const runtimeEnv = env ?? getRuntimeEnvironment();
+  const raw = (runtimeEnv.VITE_FEEDBACK_URL ?? runtimeEnv.FEEDBACK_URL)?.trim();
+  if (!raw) return undefined;
+  const subject = (runtimeEnv.VITE_FEEDBACK_SUBJECT ?? runtimeEnv.FEEDBACK_SUBJECT)?.trim();
+  const mailto = /^mailto:/i.test(raw)
+    ? raw.slice("mailto:".length)
+    : /^[^s@/?#]+@[^s@/?#]+$/.test(raw)
+      ? raw
+      : null;
+  if (mailto !== null) {
+    const [address, query] = mailto.split("?", 2);
+    if (!address) return undefined;
+    const params = new URLSearchParams(query ?? "");
+    if (subject && !params.has("subject")) params.set("subject", subject);
+    const search = params.toString();
+    return { kind: "mailto", href: `mailto:${address}${search ? `?${search}` : ""}` };
+  }
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "https:" || url.protocol === "http:")
+      return { kind: "web", href: url.href };
+  } catch {
+    // not a URL: fall through
+  }
+  return undefined;
+}
+
 /**
  * Builds a full Protomaps v5 style URL for a flavor, injecting the API key.
  *

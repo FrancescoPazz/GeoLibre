@@ -171,12 +171,12 @@ import {
   ALL_BUILT_IN_CONTROL_IDS,
   type AddLayerHandlers,
   CONVERSION_COMMANDS,
-  FEEDBACK_URL,
   GITHUB_URL,
   MAP_CONTROL_ITEMS,
   NEW_PROJECT_VISIBLE_BUILT_IN_CONTROLS,
   newProjectToolbarControlVisibility,
   openExternalLink,
+  openFeedback,
   RASTER_TOOL_COMMANDS,
   type ToolbarChrome,
   type ToolbarMapControl,
@@ -1991,7 +1991,7 @@ export function TopToolbar({
       title: t("toolbar.command.giveFeedback"),
       group: t("toolbar.commandGroup.help"),
       icon: MessageSquare,
-      run: () => void openExternalLink(FEEDBACK_URL),
+      run: () => void openFeedback(),
     },
     // The Microsoft Store build omits the "Check for updates" command so the app
     // updates only through the Store (policy 10.2.5).

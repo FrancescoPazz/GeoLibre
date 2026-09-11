@@ -23,9 +23,9 @@ import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
 import { IS_STORE_BUILD } from "../../../lib/updates";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import {
-  FEEDBACK_URL,
   GITHUB_URL,
   openExternalLink,
+  openFeedback,
   type ToolbarChrome,
   WEBSITE_URL,
 } from "./constants";
@@ -128,7 +128,7 @@ export function HelpMenu({
           </DropdownMenuItem>
         )}
         {show("help.feedback") && (
-          <DropdownMenuItem onSelect={() => void openExternalLink(FEEDBACK_URL)}>
+          <DropdownMenuItem onSelect={() => void openFeedback()}>
             <MessageSquare className="me-2 h-3.5 w-3.5" />
             {t("toolbar.command.giveFeedback")}
           </DropdownMenuItem>

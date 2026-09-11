@@ -86,7 +86,6 @@ export const PLUGIN_POSITION_ITEMS: Array<{
   { value: "bottom-right", labelKey: "toolbar.position.bottomRight" },
 ];
 
-export const FEEDBACK_URL = "https://github.com/opengeos/GeoLibre/issues";
 export const WEBSITE_URL = "https://geolibre.app";
 export const GITHUB_URL = "https://github.com/opengeos/GeoLibre";
 // A small (~350 KB) CORS-enabled Las Vegas Strip sample, so the URL field works
@@ -209,6 +208,7 @@ export const RASTER_TOOL_COMMANDS: Array<{
 // Re-exported so existing toolbar imports keep working; the shared helper
 // guards the URL scheme and logs opener failures instead of rejecting.
 export { openExternalLink } from "../../../lib/open-external";
+export { openFeedback } from "../../../lib/feedback";
 
 /** Format a recent-project timestamp for display, or "" if unparseable. */
 export function formatRecentProjectTime(openedAt: string): string {

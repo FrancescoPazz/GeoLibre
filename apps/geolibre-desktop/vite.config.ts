@@ -94,6 +94,15 @@ if (!process.env.VITE_ELEVATION_MEAN_SEA_LEVEL) {
   }
 }
 
+// The deployment's feedback channel (a page or a mailto: address, with an
+// optional subject): same bridge. Not a secret; it is shown to every user.
+for (const key of ["FEEDBACK_URL", "FEEDBACK_SUBJECT"]) {
+  if (!process.env[`VITE_${key}`]) {
+    const value = process.env[key] || FILE_ENV[`VITE_${key}`] || FILE_ENV[key];
+    if (value) process.env[`VITE_${key}`] = value;
+  }
+}
+
 if (!process.env.VITE_CESIUM_TERRAIN_ASSET_ID) {
   const cesiumTerrainAssetId =
     process.env.CESIUM_TERRAIN_ASSET_ID ||
@@ -248,6 +257,8 @@ const BUILD_ENV_KEYS = [
   "VITE_CESIUM_TOKEN",
   "VITE_DUCKDB_SPATIAL_EXTENSION_PATH",
   "VITE_ELEVATION_MEAN_SEA_LEVEL",
+  "VITE_FEEDBACK_SUBJECT",
+  "VITE_FEEDBACK_URL",
   "VITE_GEE_OAUTH_CLIENT_ID",
   "VITE_GEE_PROJECT_ID",
   "VITE_GEOCODER_API_KEY",
