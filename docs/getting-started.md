@@ -804,6 +804,16 @@ BRAND_ACCENT_COLOR=#519ac2
 
 `BRAND_NAME` replaces "GeoLibre" in the toolbar and the page title; `BRAND_LOGO_URL` puts an image in the toolbar's brand spot (an http(s) URL or a path served next to the app — put the file in the docroot), optionally linked to `BRAND_LOGO_LINK`; `BRAND_FAVICON_URL` swaps the favicon; `BRAND_ACCENT_COLOR` (`#rrggbb`) is the accent colour the app starts with — any scheme or custom colour a user picks in Settings → Appearance wins over it. All five (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above; a value that is not what the field wants is ignored.
 
+### Catalog
+
+The **Catalog** plugin lists a geoportal's data services as a tree read from TerriaJS init files (`{ "catalog": [...] }` with `group`, `wms`, `wmts`, `esri-mapServer` and `esri-mapServer-group` entries). A deployment names its files and the panel opens by default:
+
+```env
+CATALOG_URLS=/init/catalogo.json,https://geoportal.example.org/init/basemaps.json
+```
+
+Comma or whitespace separated; http(s) URLs or paths served next to the app. Users can also load a catalog from the panel, and the catalogs a project used are kept in its file. Clicking an entry adds it to the map as a regular layer (removable from the Layers panel or by clicking the entry again); a file's initial `workbench` is added when the project is empty. `CATALOG_URLS` (or `VITE_CATALOG_URLS`) follows the same build/deployment/runtime rules as the other variables above.
+
 ### Deployment defaults in the Docker image
 
 Every variable in the sections above can also be given to the prebuilt Docker image at container start as `GEOLIBRE_<NAME>` (`GEOLIBRE_CESIUM_TOKEN`, `GEOLIBRE_BRAND_NAME`, …): the entrypoint validates it and publishes it to the app as `VITE_<NAME>`, so no rebuild is needed. The deployment layer sits between the build and whatever a user or project sets. For the geocoder, the deployment's provider (with its key and endpoints) becomes the default of every project that has not chosen one; a project that carries its own choice keeps it. See [Self-hosting](self-hosting.md#2-host-the-geolibre-web-build-next-to-it).

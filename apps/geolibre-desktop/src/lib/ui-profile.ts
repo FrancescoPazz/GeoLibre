@@ -203,6 +203,7 @@ export const PLUGIN_TIERS: Record<string, ComplexityTier> = {
   "maplibre-gl-enviroatlas": "advanced",
   "maplibre-gl-national-map": "advanced",
   "maplibre-gl-arcgis-hub": "advanced",
+  "terria-catalog": "basic",
   "maplibre-gl-source-coop": "advanced",
   "maplibre-gl-huggingface": "advanced",
   "maplibre-gl-vantor": "advanced",

@@ -41,6 +41,8 @@ import {
   maplibreNationalMapPlugin,
   maplibreOpenAerialMapPlugin,
   maplibreArcGisHubPlugin,
+  TERRIA_CATALOG_PLUGIN_ID,
+  terriaCatalogPlugin,
   maplibreCkanPlugin,
   maplibreSocrataPlugin,
   maplibreStacCatalogsPlugin,
@@ -156,6 +158,7 @@ import {
   saveBinaryFileWithFallback,
   saveTextFileWithFallback,
 } from "../lib/tauri-io";
+import { readDeploymentEnvValue } from "../lib/deployment-env";
 import { useDesktopSettingsStore } from "./useDesktopSettings";
 import { ensureFileExtension, useFileNamePrompt } from "./useFileNamePrompt";
 
@@ -245,6 +248,7 @@ manager.registerAll([
   maplibreRouteAnimationPlugin,
   flightSimulatorPlugin,
   rer3dToolsPlugin,
+  terriaCatalogPlugin,
   // Last visible entry of the Plugins menu; the ids below are skipped by
   // PluginsMenu and surface elsewhere.
   maplibreSamGeoPlugin,
@@ -253,6 +257,14 @@ manager.registerAll([
   maplibreDeckGlVizPlugin,
   maplibreComponentsPlugin,
 ]);
+
+// A deployment that names catalog files (`CATALOG_URLS`) wants the Catalog
+// panel open from the start, the way a geoportal opens on its data tree.
+// Marked default-active rather than activated here: activation needs the
+// app API, which restoreProjectState supplies for every default-active plugin.
+if (readDeploymentEnvValue("VITE_CATALOG_URLS")?.trim()) {
+  manager.markDefaultActive(TERRIA_CATALOG_PLUGIN_ID);
+}
 
 // The Timelapse plugin records the map to a video blob but cannot depend on
 // the app's Tauri I/O helpers, so the save step (native dialog under Tauri,

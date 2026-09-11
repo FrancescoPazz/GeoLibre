@@ -1,0 +1,205 @@
+{
+  "workbench": ["ttjh8y", "ySZw6F"],
+  "homeCamera": {
+    "west": 9.278,
+    "south": 43.736,
+    "east": 12.81,
+    "north": 45.325
+  },
+  "catalog": [
+    {
+      "id": "yQevWE",
+      "type": "group",
+      "name": "Catalogo rapido Regione Emilia-Romagna",
+      "members": [
+        {
+          "id": "CJgy1w",
+          "type": "group",
+          "name": "0 - Prodotti recenti ",
+          "members": [
+            {
+              "type": "esri-mapServer",
+              "name": "Mappa DBTR",
+              "description": "https://geoportale.regione.emilia-romagna.it/it/services/servizi-OGC/servizio-di-consultazione/cartografia-di-base/dbtr-cache-wms",
+              "show": false,
+              "url": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/dbtr_wgs84wm/MapServer",
+              "opacity": 0.5,
+              "isOpenInWorkbench": false,
+              "hideLayerAfterMinScaleDenominator": false,
+              "id": "ySZw6F",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/0 - Prodotti recenti /Mappa DBTR"
+              ]
+            },
+            {
+              "type": "esri-mapServer",
+              "name": "DBTR_CTRMultiscala",
+              "description": "https://geoportale.regione.emilia-romagna.it/it/services/servizi-OGC/servizio-di-consultazione/cartografia-di-base/database-topografico-regionale-ctr-multiscala-wms",
+              "show": false,
+              "url": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/dbtr_ctrmultiscala_wgs84wm/MapServer",
+              "metadataUrls": [
+                {
+                  "url": "http://servizigis.regione.emilia-romagna.it/ctwmetadatiRER/metadatoISO.ejb?stato_IdMetadato=iOrg01iEnP1idMetadato78150",
+                  "title": "metadati ISO"
+                }
+              ],
+              "isOpenInWorkbench": false,
+              "hideLayerAfterMinScaleDenominator": false,
+              "id": "ttjh8y",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/0 - Prodotti recenti /DBTR_CTRMultiscala"
+              ]
+            },
+            {
+              "type": "esri-mapServer",
+              "name": "AGEA2020 RGB",
+              "description": "Ortofoto AGEA 20cm 2020 - TUTTI I DIRITTI RISERVATI",
+              "attribution": "Ortofoto AGEA 20cm 2020 - TUTTI I DIRITTI RISERVATI",
+              "initialMessage": {
+                "title": "AGEA2020",
+                "content": "Ortofoto AGEA 20cm 2020 - TUTTI I DIRITTI RISERVATI",
+                "confirmation": true,
+                "confirmText": "Ok",
+                "width": 500,
+                "height": 180
+              },
+              "show": false,
+              "url": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/agea2020_rgb_wgs84wm/MapServer",
+              "opacity": 1,
+              "isOpenInWorkbench": false,
+              "allowFeaturePicking": false,
+              "hideSource": true,
+              "hideLayerAfterMinScaleDenominator": false,
+              "id": "AGEA2020_rgb1",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/2 - OrtoImmagini/AGEA2020 rgb"
+              ]
+            },
+            {
+              "id": "rer7678wmts",
+              "name": "RER 1976-1978",
+              "description": "ortofoto 30 cm/px realizzata a partire dalla digitalizzazione dei fotogrammi del Volo aerofotogrammetrico RER dal 1976 al 1978",
+              "type": "wmts",
+              "isGeoServer": "false",
+              "getCapabilitiesUrl": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/volorer_1976_78_wgs84wm/MapServer/WMTS?service=WMTS&version=1.0.0&request=GetCapabilities",
+              "url": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/volorer_1976_78_wgs84wm/MapServer/WMTS",
+              "layer": "cache_volorer_1976_78_wgs84wm",
+              "opacity": 1,
+              "hideSource": true,
+              "attribution": "RER © 1976-1978"
+            }
+          ],
+          "shareKeys": ["Root Group/Catalogo rapido Regione Emilia-Romagna/0 - Prodotti recenti "]
+        },
+        {
+          "id": "Uw2aKm",
+          "type": "group",
+          "name": "2 - Database Topografico Regionale",
+          "members": [
+            {
+              "type": "esri-mapServer",
+              "name": "Mappa DBTR",
+              "description": "https://geoportale.regione.emilia-romagna.it/it/services/servizi-OGC/servizio-di-consultazione/cartografia-di-base/dbtr-cache-wms",
+              "show": false,
+              "url": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/dbtr_wgs84wm/MapServer",
+              "opacity": 0.5,
+              "isOpenInWorkbench": false,
+              "hideLayerAfterMinScaleDenominator": false,
+              "id": "GumVvR",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/2 - Database Topografico Regionale/Mappa DBTR"
+              ]
+            },
+            {
+              "type": "esri-mapServer",
+              "name": "DBTR_CTRMultiscala",
+              "description": "https://geoportale.regione.emilia-romagna.it/it/services/servizi-OGC/servizio-di-consultazione/cartografia-di-base/database-topografico-regionale-ctr-multiscala-wms",
+              "show": false,
+              "url": "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/cache/dbtr_ctrmultiscala_wgs84wm/MapServer",
+              "isOpenInWorkbench": false,
+              "hideLayerAfterMinScaleDenominator": false,
+              "allowFeaturePicking": false,
+              "id": "1GTu4f",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/2 - Database Topografico Regionale/DBTR_CTRMultiscala"
+              ]
+            },
+            {
+              "type": "wms",
+              "name": "DBTR CTR5k WMS",
+              "info": [
+                {
+                  "name": "Keywords:",
+                  "content": "ambiente, ambiti amministrativi, cartografia tecnica regionale, ctr, ctr5, database topografico, naturali, territorio, topografia, viabilità"
+                },
+                {
+                  "name": "Descrizione:",
+                  "content": "Rappresentazione cartografica dei contenuti del Database Topografico Regionale alle grandi scale, con simbologia analoga alla Carta Tecnica Regionale alla scala 1:5000 che costituisce la nuova CTR 5k. Versione monocromatica completa, in formato raster a 600 dpi. I metadati di sezione (es. Data di acquisizione, ecc.) sono contenute nel WMS - metadati_raster."
+                },
+                {
+                  "name": "Scopo:",
+                  "content": "Rendere disponibile in modo digitale e georeferenziato il contenuto del Database Topografico Regionale con una rappresentazione e con simbologie analoghe alla CTR5, per un utilizzo tramite i sistemi cartografici e GIS."
+                },
+                {
+                  "name": "Licenza:",
+                  "content": "Creative Commons 4.0 BY"
+                },
+                {
+                  "name": "Informazioni:",
+                  "content": "https://geoportale.regione.emilia-romagna.it/it/catalogo/dati-cartografici/cartografia-di-base/cartografia-tecnica/dbtr-carta-tecnica-regionale-1-5000"
+                },
+                {
+                  "name": "Quadro di unione:",
+                  "content": "http://servizigis.regione.emilia-romagna.it/wms/metadati_raster"
+                },
+                {
+                  "name": "Download:",
+                  "content": "https://geoportale.regione.emilia-romagna.it/it/download/prodottiraster"
+                },
+                {
+                  "name": "Metadati:",
+                  "content": "http://servizigis.regione.emilia-romagna.it/ctwmetadatiRER/metadatoISO.ejb?stato_IdMetadato=iOrg01iEnP1idMetadato7825"
+                }
+              ],
+              "show": false,
+              "url": "https://servizigis.regione.emilia-romagna.it/wms/DBTR_Ctr5",
+              "opacity": 1,
+              "isOpenInWorkbench": false,
+              "layers": "DBTR_Ctr5",
+              "id": "DexQu5",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/2 - Database Topografico Regionale/DBTR CTR5k WMS"
+              ]
+            },
+            {
+              "type": "esri-mapServer-group",
+              "name": "DBTR Layers",
+              "description": "https://geoportale.regione.emilia-romagna.it/it/services/servizi-OGC/servizio-di-consultazione/cartografia-di-base/database-topografico-regionale-wms",
+              "url": "https://servizigis.regione.emilia-romagna.it/geoags/rest/services/portale/dbtr/MapServer",
+              "isOpenInWorkbench": false,
+              "id": "bMyL8M",
+              "shareKeys": [
+                "Root Group/Catalogo rapido Regione Emilia-Romagna/2 - Database Topografico Regionale/DBTR Layers"
+              ]
+            }
+          ],
+          "shareKeys": [
+            "Root Group/Catalogo rapido Regione Emilia-Romagna/2 - Database Topografico Regionale"
+          ]
+        }
+      ],
+      "info": [
+        {
+          "name": "Origine:",
+          "content": "Catalogo metadati regione Emilia-Romagna"
+        },
+        {
+          "name": "Descrizione:",
+          "content": "Catalogo dei prodotti e servizi cartografici di utilizzo frequente, intesa come insieme di temi che costituiscono una rappresentazione generale alle grandi, medie e piccole scale del territorio reginale orientata ad un utilizzo generale di pianificazione, monitoraggio e gestione del territorio."
+        }
+      ],
+      "infoSectionOrder": ["Descrizione", "Origine"],
+      "shareKeys": ["Root Group/Catalogo rapido Regione Emilia-Romagna"]
+    }
+  ]
+}

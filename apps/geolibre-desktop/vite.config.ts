@@ -112,6 +112,7 @@ for (const key of [
   "BRAND_LOGO_LINK",
   "BRAND_FAVICON_URL",
   "BRAND_ACCENT_COLOR",
+  "CATALOG_URLS",
 ]) {
   if (!process.env[`VITE_${key}`]) {
     const value = process.env[key] || FILE_ENV[`VITE_${key}`] || FILE_ENV[key];
@@ -274,6 +275,7 @@ const BUILD_ENV_KEYS = [
   "VITE_BRAND_LOGO_LINK",
   "VITE_BRAND_LOGO_URL",
   "VITE_BRAND_NAME",
+  "VITE_CATALOG_URLS",
   "VITE_CESIUM_TERRAIN_ASSET_ID",
   "VITE_CESIUM_TOKEN",
   "VITE_COORDS_CONVERTER_URL",

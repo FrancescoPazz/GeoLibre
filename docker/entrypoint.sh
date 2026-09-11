@@ -414,6 +414,13 @@ def plain(name, value):
     return value
 
 
+def url_list(name, value):
+    for entry in re.split(r"[\s,]+", value):
+        if entry and not (entry.startswith("/") or entry.startswith("./")):
+            http_url(name, entry)
+    return value
+
+
 APP_SETTINGS = (
     ("CESIUM_TOKEN", plain),
     ("CESIUM_TERRAIN_ASSET_ID", positive_int),
@@ -436,6 +443,7 @@ APP_SETTINGS = (
     ("BRAND_LOGO_LINK", http_url),
     ("BRAND_FAVICON_URL", asset_url),
     ("BRAND_ACCENT_COLOR", hex_color),
+    ("CATALOG_URLS", url_list),
 )
 for name, check in APP_SETTINGS:
     value = os.environ.get(f"GEOLIBRE_{name}", "").strip()
@@ -489,7 +497,7 @@ fi
 # Application settings passed through to the app. Names only: the Ion token
 # and the geocoder key are credentials as far as the log is concerned.
 APP_SETTINGS_SET=""
-for name in CESIUM_TOKEN CESIUM_TERRAIN_ASSET_ID ELEVATION_MEAN_SEA_LEVEL GEOCODER_PROVIDER GEOCODER_ENDPOINT GEOCODER_REVERSE_ENDPOINT GEOCODER_API_KEY GEOCODER_EMAIL FEEDBACK_URL FEEDBACK_SUBJECT WHERE_AM_I_URL WHERE_AM_I_ACCURATE_URL WHERE_AM_I_ID_FIELD WHERE_AM_I_FIELD WHERE_AM_I_DETAIL_FIELD COORDS_CONVERTER_URL BRAND_NAME BRAND_LOGO_URL BRAND_LOGO_LINK BRAND_FAVICON_URL BRAND_ACCENT_COLOR; do
+for name in CESIUM_TOKEN CESIUM_TERRAIN_ASSET_ID ELEVATION_MEAN_SEA_LEVEL GEOCODER_PROVIDER GEOCODER_ENDPOINT GEOCODER_REVERSE_ENDPOINT GEOCODER_API_KEY GEOCODER_EMAIL FEEDBACK_URL FEEDBACK_SUBJECT WHERE_AM_I_URL WHERE_AM_I_ACCURATE_URL WHERE_AM_I_ID_FIELD WHERE_AM_I_FIELD WHERE_AM_I_DETAIL_FIELD COORDS_CONVERTER_URL BRAND_NAME BRAND_LOGO_URL BRAND_LOGO_LINK BRAND_FAVICON_URL BRAND_ACCENT_COLOR CATALOG_URLS; do
   eval "value=\${GEOLIBRE_${name}:-}"
   if [ -n "$(trim "$value")" ]; then
     APP_SETTINGS_SET="$APP_SETTINGS_SET $name"
