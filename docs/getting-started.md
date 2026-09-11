@@ -765,6 +765,21 @@ FEEDBACK_SUBJECT=Geoportale 3D — segnalazione
 
 `FEEDBACK_URL` (or `VITE_FEEDBACK_URL`) is an http(s) page or a `mailto:` address (a bare address works too); `FEEDBACK_SUBJECT` pre-fills the subject line of an e-mail and is ignored for a page. Both follow the same build/deployment/runtime rules as the other variables above. Anything that is not a page or an address is ignored and the default link stays.
 
+### Place name under the pointer
+
+The status bar can show the name of the place under the pointer — the municipality, district or locality — beside the coordinates, read from a place-name service the deployment names. The service is an ArcGIS feature query URL carrying its own `outFields`, `spatialRel` and `f=json`; the pointer position is added as a point `geometry` and the first feature's attribute is shown:
+
+```env
+WHERE_AM_I_URL=https://gis.example.org/rest/services/where/MapServer/0/query?geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIndexIntersects&outFields=OBJECTID,LOCALIZZAZ,DETTAGLIO&returnGeometry=false&f=pjson
+WHERE_AM_I_FIELD=LOCALIZZAZ
+# Optional
+WHERE_AM_I_ACCURATE_URL=https://gis.example.org/rest/services/where/MapServer/0/query?geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=OBJECTID,LOCALIZZAZ,DETTAGLIO&returnGeometry=false&f=pjson
+WHERE_AM_I_ID_FIELD=OBJECTID
+WHERE_AM_I_DETAIL_FIELD=DETTAGLIO
+```
+
+`WHERE_AM_I_URL` and `WHERE_AM_I_FIELD` are both needed. When the fast query — typically an index-only spatial relation — returns several candidates and `WHERE_AM_I_ACCURATE_URL` is set, that query is asked with the candidates' ids (`WHERE_AM_I_ID_FIELD`, default `OBJECTID`) as `objectIds` and decides among them; `WHERE_AM_I_DETAIL_FIELD` names a longer description shown as the tooltip. Lookups run only once the pointer settles and are cached, but they do send the pointer position to that service, so name one only when its operator expects the traffic. All five follow the same build/deployment/runtime rules as the other variables above.
+
 ## Optional runtime mirrors (offline and air-gapped)
 
 The **Python (Pyodide)** vector engine loads its runtime from the public jsDelivr CDN by default. To self-host it for offline or production use, point it at a mirrored copy of the Pyodide distribution:

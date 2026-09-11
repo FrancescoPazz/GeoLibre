@@ -192,6 +192,8 @@
   "statusBar": {
     "elevation": "Quota",
     "elevationLong": "Quota",
+    "place": "Località",
+    "placeLong": "Località sotto il puntatore, dal servizio di toponomastica del deployment",
     "cameraAltitude": "Quota vista",
     "cameraAltitudeLong": "Quota della camera sul livello del mare",
     "coordinateFormat": {

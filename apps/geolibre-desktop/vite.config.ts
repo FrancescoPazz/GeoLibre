@@ -96,7 +96,17 @@ if (!process.env.VITE_ELEVATION_MEAN_SEA_LEVEL) {
 
 // The deployment's feedback channel (a page or a mailto: address, with an
 // optional subject): same bridge. Not a secret; it is shown to every user.
-for (const key of ["FEEDBACK_URL", "FEEDBACK_SUBJECT"]) {
+// The deployment's place-name service for the status bar (Where am I):
+// same bridge, same reasoning.
+for (const key of [
+  "FEEDBACK_URL",
+  "FEEDBACK_SUBJECT",
+  "WHERE_AM_I_URL",
+  "WHERE_AM_I_ACCURATE_URL",
+  "WHERE_AM_I_ID_FIELD",
+  "WHERE_AM_I_FIELD",
+  "WHERE_AM_I_DETAIL_FIELD",
+]) {
   if (!process.env[`VITE_${key}`]) {
     const value = process.env[key] || FILE_ENV[`VITE_${key}`] || FILE_ENV[key];
     if (value) process.env[`VITE_${key}`] = value;
@@ -292,6 +302,11 @@ const BUILD_ENV_KEYS = [
   "VITE_TIANDITU_API_KEY",
   "VITE_TOMTOM_API_KEY",
   "VITE_WELCOME_DISABLED",
+  "VITE_WHERE_AM_I_ACCURATE_URL",
+  "VITE_WHERE_AM_I_DETAIL_FIELD",
+  "VITE_WHERE_AM_I_FIELD",
+  "VITE_WHERE_AM_I_ID_FIELD",
+  "VITE_WHERE_AM_I_URL",
 ] as const;
 
 // Vars that authenticate as, and bill to, whoever ran the build. Read from the

@@ -13,6 +13,7 @@ import {
 import { cn } from "@geolibre/ui";
 import { Bug } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { usePointerPlace } from "../../hooks/usePointerPlace";
 import { formatAccuracy, formatSpeedKmh } from "../../lib/gps-tracking";
 
 /**
@@ -44,6 +45,7 @@ export function StatusBar({
   const { t } = useTranslation();
   const pointerCoords = useAppStore((s) => s.pointerCoords);
   const pointerElevation = useAppStore((s) => s.pointerElevation);
+  const pointerPlace = usePointerPlace();
   const cameraAltitude = useAppStore((s) => s.cameraAltitude);
   const scaleUnit = useAppStore((s) => s.preferences.map.scaleUnit);
   const coordinateFormat = normalizeCoordinateFormat(
@@ -127,6 +129,15 @@ export function StatusBar({
       {elevationText && (
         <span className="shrink-0" title={t("statusBar.elevationLong")}>
           {t("statusBar.elevation")}: {elevationText}
+        </span>
+      )}
+      {pointerPlace && (
+        <span
+          className="shrink-0"
+          title={pointerPlace.detail ?? t("statusBar.placeLong")}
+          data-testid="status-bar-place"
+        >
+          {t("statusBar.place")}: {pointerPlace.name}
         </span>
       )}
       {gpsText && <span className="shrink-0">GPS: {gpsText}</span>}

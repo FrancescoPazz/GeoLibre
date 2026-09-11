@@ -146,6 +146,19 @@ export {
   type RerAddressRecord,
 } from "./rer-geocoder";
 export {
+  WHERE_AM_I_CACHE_LIMIT,
+  WHERE_AM_I_DEBOUNCE_MS,
+  WHERE_AM_I_DEFAULT_ID_FIELD,
+  createWhereAmIResolver,
+  getWhereAmIConfig,
+  lookupWhereAmI,
+  whereAmIQueryUrl,
+  type WhereAmIConfig,
+  type WhereAmIPlace,
+  type WhereAmIResolver,
+  type WhereAmIResolverOptions,
+} from "./where-am-i";
+export {
   getBuildEnvironment,
   getCesiumIonToken,
   getCesiumTerrainAssetId,
