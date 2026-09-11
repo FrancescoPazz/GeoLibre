@@ -118,7 +118,9 @@ function parseNode(
   const id = str(r.id) ?? fallbackId(path, index);
   const name = str(r.name) ?? id;
   if (type === "group") {
-    const members = Array.isArray(r.members) ? r.members : [];
+    // v8 files nest under `members`; the older v7 files this format grew out
+    // of used `items`, and geoportals still carry some of those.
+    const members = Array.isArray(r.members) ? r.members : Array.isArray(r.items) ? r.items : [];
     return {
       kind: "group",
       id,

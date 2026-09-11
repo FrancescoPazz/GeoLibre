@@ -102,6 +102,17 @@ describe("parseTerriaCatalog", () => {
     assert.equal(wms.layers, "a,b");
     assert.deepEqual(wms.parameters, { format: "image/jpeg" });
     assert.deepEqual(parseTerriaCatalog(null), { roots: [], workbench: [], homeExtent: undefined });
+    // A v7-era file nests under `items`.
+    const v7 = parseTerriaCatalog({
+      catalog: [
+        {
+          type: "group",
+          name: "G",
+          items: [{ type: "wms", name: "W", url: "https://x/wms", layers: "l" }],
+        },
+      ],
+    });
+    assert.equal(catalogItems(v7.roots).length, 1);
   });
 
   it("strips // and /* */ comments outside strings before parsing", () => {
