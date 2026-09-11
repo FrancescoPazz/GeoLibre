@@ -77,6 +77,21 @@ if (!process.env.VITE_CESIUM_TOKEN) {
   }
 }
 
+// The deployment's own Ion terrain asset, if it has one: the same bridge, so a
+// bare `CESIUM_TERRAIN_ASSET_ID` next to `CESIUM_TOKEN` reaches
+// getCesiumTerrainAssetId() and the globe loads that asset instead of World
+// Terrain. Not a credential — it is just an id — but it is only meaningful
+// with the token that owns the asset.
+if (!process.env.VITE_CESIUM_TERRAIN_ASSET_ID) {
+  const cesiumTerrainAssetId =
+    process.env.CESIUM_TERRAIN_ASSET_ID ||
+    FILE_ENV.VITE_CESIUM_TERRAIN_ASSET_ID ||
+    FILE_ENV.CESIUM_TERRAIN_ASSET_ID;
+  if (cesiumTerrainAssetId) {
+    process.env.VITE_CESIUM_TERRAIN_ASSET_ID = cesiumTerrainAssetId;
+  }
+}
+
 // Mapbox access token for the basemap control's Mapbox styles: same
 // bare→prefixed bridge as the Google Maps and Cesium keys. `MAPBOX_TOKEN` is the
 // spelling Mapbox's own tooling uses, so accept it from the shell or an .env
@@ -217,6 +232,7 @@ const PWA_DISABLED = IS_TAURI_BUILD || IS_EMBED;
 const BUILD_ENV_KEYS = [
   "VITE_AMAZON_LOCATION_API_KEY",
   "VITE_AMAZON_LOCATION_AWS_REGION",
+  "VITE_CESIUM_TERRAIN_ASSET_ID",
   "VITE_CESIUM_TOKEN",
   "VITE_DUCKDB_SPATIAL_EXTENSION_PATH",
   "VITE_GEE_OAUTH_CLIENT_ID",

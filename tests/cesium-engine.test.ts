@@ -108,6 +108,9 @@ function makeCesium() {
       },
     },
     createWorldTerrainAsync: () => Promise.resolve({ kind: "world-terrain" }),
+    CesiumTerrainProvider: {
+      fromIonAssetId: (assetId: number) => Promise.resolve({ kind: "ion-terrain", assetId }),
+    },
   } as unknown as typeof import("@cesium/engine");
 }
 
@@ -643,6 +646,61 @@ describe("CesiumEngine terrain", () => {
     await engine.enableWorldTerrain();
     assert.equal(engine.isTerrainEnabled(), true);
     assert.deepEqual(fakes.viewer.terrainProvider, { kind: "world-terrain" });
+    engine.destroy();
+  });
+
+  it("loads the deployment's own Ion terrain asset in place of World Terrain", async () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer, { terrainIonAssetId: 2473055 });
+    await engine.enableWorldTerrain();
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.deepEqual(fakes.viewer.terrainProvider, { kind: "ion-terrain", assetId: 2473055 });
+    engine.destroy();
+  });
+
+  it("ignores a terrain asset id without Ion credentials and stays keyless", async () => {
+    const fakes = makeViewer();
+    const cesium = makeCesium();
+    Object.assign(cesium, {
+      WebMercatorTilingScheme,
+      Event,
+      Credit,
+      TileAvailability,
+      TerrainProvider,
+    });
+    // The asset is private to the token that owns it: with no token the id
+    // cannot be honoured, and silently trying would surface as an Ion 401.
+    const engine = new CesiumEngine(cesium, fakes.viewer, {
+      worldTerrainAvailable: false,
+      terrainIonAssetId: 2473055,
+    });
+    await engine.enableWorldTerrain();
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.equal(
+      fakes.viewer.terrainProvider.tilingScheme instanceof WebMercatorTilingScheme,
+      true,
+    );
+    engine.destroy();
+  });
+
+  it("retries the Ion terrain asset after a failed load, like World Terrain", async () => {
+    const fakes = makeViewer();
+    const cesium = makeCesium();
+    let attempts = 0;
+    cesium.CesiumTerrainProvider = {
+      fromIonAssetId: async (assetId: number) => {
+        if (++attempts === 1) throw new Error("temporary network failure");
+        return { kind: "ion-terrain", assetId } as never;
+      },
+    } as never;
+    const engine = new CesiumEngine(cesium, fakes.viewer, { terrainIonAssetId: 42 });
+    await engine.enableWorldTerrain();
+    assert.equal(engine.isTerrainEnabled(), false);
+    assert.equal(engine.setTerrainEnabled(true), true);
+    await Promise.resolve();
+    assert.equal(attempts, 2);
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.deepEqual(fakes.viewer.terrainProvider, { kind: "ion-terrain", assetId: 42 });
     engine.destroy();
   });
 

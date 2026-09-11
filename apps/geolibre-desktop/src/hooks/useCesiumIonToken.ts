@@ -1,4 +1,4 @@
-import { getCesiumIonToken } from "@geolibre/core";
+import { getCesiumIonToken, getCesiumTerrainAssetId } from "@geolibre/core";
 import { useEffect, useState } from "react";
 
 /**
@@ -27,4 +27,25 @@ export function useCesiumIonToken(): string | undefined {
     return () => window.removeEventListener("geolibre:runtime-env-change", refresh);
   }, []);
   return token;
+}
+
+/**
+ * The Cesium Ion asset id of the deployment's own terrain, if any, re-resolved
+ * on the same runtime-environment changes as the token (`CESIUM_TERRAIN_ASSET_ID`
+ * at build time, `VITE_CESIUM_TERRAIN_ASSET_ID` in Settings → Environment
+ * variables). The globe substitutes it for Cesium World Terrain when a token is
+ * present; both mount sites key the canvas on it so a change takes effect
+ * without a reload, exactly as a swapped token does.
+ *
+ * @returns The asset id, or `undefined` when none is configured.
+ */
+export function useCesiumTerrainAssetId(): number | undefined {
+  const [assetId, setAssetId] = useState<number | undefined>(() => getCesiumTerrainAssetId());
+  useEffect(() => {
+    const refresh = () => setAssetId(getCesiumTerrainAssetId());
+    refresh();
+    window.addEventListener("geolibre:runtime-env-change", refresh);
+    return () => window.removeEventListener("geolibre:runtime-env-change", refresh);
+  }, []);
+  return assetId;
 }

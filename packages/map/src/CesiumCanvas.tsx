@@ -88,6 +88,14 @@ export interface CesiumCanvasProps {
    */
   ionToken?: string;
   /**
+   * Cesium Ion asset id of a terrain to load instead of Cesium World Terrain,
+   * for a deployment that uploaded its own DTM to Ion. Needs `ionToken` — the
+   * asset is private to the token — and is otherwise ignored. The app injects
+   * this from the CESIUM_TERRAIN_ASSET_ID env var; parents key the canvas on it
+   * the way they key on the token, since the engine reads it once at mount.
+   */
+  terrainAssetId?: number;
+  /**
    * Ref the globe publishes its {@link CesiumEngine} into, so the app can drive
    * it the way it drives `MapController` through `MapCanvas`'s `controllerRef`
    * (issue #2260). Set once the engine exists and nulled on unmount.
@@ -154,6 +162,7 @@ function prepareCesiumEnvironment(): void {
 export const CesiumCanvas = memo(function CesiumCanvas({
   viewId,
   ionToken,
+  terrainAssetId,
   engineRef,
   onEngineReady,
   controlLabels,
@@ -183,6 +192,8 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   viewIdRef.current = viewId;
   const ionTokenRef = useRef(ionToken);
   ionTokenRef.current = ionToken;
+  const terrainAssetIdRef = useRef(terrainAssetId);
+  terrainAssetIdRef.current = terrainAssetId;
   const engineRefProp = useRef(engineRef);
   engineRefProp.current = engineRef;
   const onEngineReadyRef = useRef(onEngineReady);
@@ -386,6 +397,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
         const engine = new CesiumEngine(Cesium, viewer, {
           viewId: viewIdRef.current,
           worldTerrainAvailable: Boolean(token),
+          terrainIonAssetId: terrainAssetIdRef.current,
         });
         engineInstanceRef.current = engine;
 

@@ -1,7 +1,7 @@
 import { CesiumCanvas, type CesiumWidgetControlLabels, type MapEngine } from "@geolibre/map";
 import { useMemo, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { useCesiumIonToken } from "../../hooks/useCesiumIonToken";
+import { useCesiumIonToken, useCesiumTerrainAssetId } from "../../hooks/useCesiumIonToken";
 
 export interface PrimaryCesiumCanvasProps {
   /**
@@ -33,6 +33,7 @@ export interface PrimaryCesiumCanvasProps {
 export function PrimaryCesiumCanvas({ engineRef, onEngineReady }: PrimaryCesiumCanvasProps) {
   const { t } = useTranslation();
   const ionToken = useCesiumIonToken();
+  const terrainAssetId = useCesiumTerrainAssetId();
   // Cesium's toolbar widgets render outside React and hardcode English, so the
   // translated tooltips are handed to the canvas the way `MapController`'s
   // compass and terrain labels are pushed in. Memoized on the language rather
@@ -58,13 +59,15 @@ export function PrimaryCesiumCanvas({ engineRef, onEngineReady }: PrimaryCesiumC
 
   return (
     <div className="absolute inset-0" data-testid="primary-cesium">
-      {/* Key on the token so changing the Cesium Ion token in Settings remounts
-          the globe: `Cesium.Ion.defaultAccessToken` is applied once at viewer
-          creation, so without a remount a swapped token would never take
-          effect. Mirrors the globe panes in MapGrid. */}
+      {/* Key on the token and terrain asset so changing either in Settings
+          remounts the globe: `Cesium.Ion.defaultAccessToken` is applied once
+          at viewer creation and the engine reads the terrain asset id once at
+          mount, so without a remount a swapped value would never take effect.
+          Mirrors the globe panes in MapGrid. */}
       <CesiumCanvas
-        key={ionToken}
+        key={`${ionToken ?? ""}:${terrainAssetId ?? ""}`}
         ionToken={ionToken}
+        terrainAssetId={terrainAssetId}
         engineRef={engineRef}
         onEngineReady={onEngineReady}
         controlLabels={controlLabels}

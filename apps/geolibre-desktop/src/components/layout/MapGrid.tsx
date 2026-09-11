@@ -12,7 +12,7 @@ import {
 import { Globe, Layers, Map as MapIcon, X } from "lucide-react";
 import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useCesiumIonToken } from "../../hooks/useCesiumIonToken";
+import { useCesiumIonToken, useCesiumTerrainAssetId } from "../../hooks/useCesiumIonToken";
 
 /**
  * An editable label shown centered at the top of a map pane. Empty by default;
@@ -70,6 +70,7 @@ export function MapGrid({ children }: MapGridProps) {
   const primaryMapLabel = useAppStore((s) => s.primaryMapLabel);
   const setPrimaryMapLabel = useAppStore((s) => s.setPrimaryMapLabel);
   const cesiumToken = useCesiumIonToken();
+  const cesiumTerrainAssetId = useCesiumTerrainAssetId();
 
   if (rows * cols <= 1) {
     return <>{children}</>;
@@ -93,7 +94,13 @@ export function MapGrid({ children }: MapGridProps) {
         />
       </div>
       {secondaryMapViews.map((pane, index) => (
-        <SecondaryMapPane key={pane.id} viewId={pane.id} index={index} cesiumToken={cesiumToken} />
+        <SecondaryMapPane
+          key={pane.id}
+          viewId={pane.id}
+          index={index}
+          cesiumToken={cesiumToken}
+          cesiumTerrainAssetId={cesiumTerrainAssetId}
+        />
       ))}
     </div>
   );
@@ -108,9 +115,16 @@ interface SecondaryMapPaneProps {
    * Ion imagery, but the pane is offered without one.
    */
   cesiumToken?: string;
+  /** The deployment's own Ion terrain asset, substituted for World Terrain when set. */
+  cesiumTerrainAssetId?: number;
 }
 
-function SecondaryMapPane({ viewId, index, cesiumToken }: SecondaryMapPaneProps) {
+function SecondaryMapPane({
+  viewId,
+  index,
+  cesiumToken,
+  cesiumTerrainAssetId,
+}: SecondaryMapPaneProps) {
   const { t } = useTranslation();
   const removeSecondaryMapView = useAppStore((s) => s.removeSecondaryMapView);
   const setSecondaryMapLabel = useAppStore((s) => s.setSecondaryMapLabel);
@@ -124,11 +138,17 @@ function SecondaryMapPane({ viewId, index, cesiumToken }: SecondaryMapPaneProps)
   return (
     <div className="relative isolate min-h-0 min-w-0 overflow-hidden bg-background">
       {is3d ? (
-        // Key on the token so changing the Cesium Ion token in Settings remounts
-        // the globe: `Cesium.Ion.defaultAccessToken` is applied once at viewer
-        // creation, so without a remount a swapped (e.g. corrected) token would
-        // never take effect on an already-mounted pane.
-        <CesiumCanvas key={cesiumToken} viewId={viewId} ionToken={cesiumToken} />
+        // Key on the token and terrain asset so changing either in Settings
+        // remounts the globe: `Cesium.Ion.defaultAccessToken` is applied once at
+        // viewer creation and the terrain asset id is read once at mount, so
+        // without a remount a swapped (e.g. corrected) value would never take
+        // effect on an already-mounted pane.
+        <CesiumCanvas
+          key={`${cesiumToken ?? ""}:${cesiumTerrainAssetId ?? ""}`}
+          viewId={viewId}
+          ionToken={cesiumToken}
+          terrainAssetId={cesiumTerrainAssetId}
+        />
       ) : (
         <SecondaryMapCanvas viewId={viewId} />
       )}

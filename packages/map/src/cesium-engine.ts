@@ -7,7 +7,7 @@ import {
   type StoryChapterAnimation,
   type StoryChapterLocation,
 } from "@geolibre/core";
-import type { Cartesian2, CesiumWidget } from "@cesium/engine";
+import type { Cartesian2, CesiumWidget, TerrainProvider } from "@cesium/engine";
 import type { FeatureCollection } from "geojson";
 import type * as maplibregl from "maplibre-gl";
 import {
@@ -158,6 +158,14 @@ export interface CesiumEngineOptions {
   /** Whether this canvas has credentials for Cesium World Terrain. */
   worldTerrainAvailable?: boolean;
   /**
+   * Cesium Ion asset id of a terrain to load in place of Cesium World Terrain
+   * (`getCesiumTerrainAssetId()` in `@geolibre/core`). Lets a deployment that
+   * uploaded its own DTM to Ion have the globe drape and sample against it. Only
+   * consulted when `worldTerrainAvailable` — the asset is private to the token
+   * that owns it, so without credentials the engine stays on keyless Terrarium.
+   */
+  terrainIonAssetId?: number;
+  /**
    * Id of the `secondaryMapViews` record this globe draws, or `undefined` when
    * it *is* the primary map area. Decides which camera the engine publishes to
    * and whether per-pane visibility overrides apply — see `CesiumCanvas`.
@@ -289,6 +297,7 @@ export class CesiumEngine implements MapEngine {
   private maxZoom = 24;
 
   private readonly worldTerrainAvailable: boolean;
+  private readonly terrainIonAssetId: number | undefined;
   private terrainEnabled = false;
   private terrainRequest = 0;
   private terrainExaggeration = 1;
@@ -308,6 +317,7 @@ export class CesiumEngine implements MapEngine {
     this.viewer = viewer;
     this.viewId = options.viewId;
     this.worldTerrainAvailable = options.worldTerrainAvailable ?? true;
+    this.terrainIonAssetId = options.terrainIonAssetId;
     this.capabilities =
       options.viewId === undefined ? CESIUM_CAPABILITIES : CESIUM_PANE_CAPABILITIES;
     this.layerSync = new CesiumLayerSync(Cesium, viewer, undefined, {
@@ -1008,7 +1018,8 @@ export class CesiumEngine implements MapEngine {
   }
 
   /**
-   * Toggle native terrain (COG, World Terrain, or keyless Terrarium). Unlike MapLibre — where terrain is a raster-DEM
+   * Toggle native terrain (COG, an Ion terrain asset, World Terrain, or keyless
+   * Terrarium). Unlike MapLibre — where terrain is a raster-DEM
    * source added to the style — this swaps the globe's terrain provider, so the
    * relief is real geometry rather than a displacement of the basemap.
    *
@@ -1028,6 +1039,19 @@ export class CesiumEngine implements MapEngine {
     }
     void this.enableWorldTerrain();
     return true;
+  }
+
+  /**
+   * The Ion-backed terrain: the deployment's own asset when one is configured,
+   * otherwise Cesium World Terrain. Both are `CesiumTerrainProvider`s behind the
+   * same token, so everything downstream — the terrain correction, sampling,
+   * the retry-on-failure path — is indifferent to which one loaded.
+   */
+  private loadIonTerrain(): Promise<TerrainProvider> {
+    const assetId = this.terrainIonAssetId;
+    return assetId === undefined
+      ? this.Cesium.createWorldTerrainAsync()
+      : this.Cesium.CesiumTerrainProvider.fromIonAssetId(assetId);
   }
 
   /**
@@ -1051,7 +1075,7 @@ export class CesiumEngine implements MapEngine {
               this.cogTerrain?.renderTile,
               this.cogTerrain ? 22 : 15,
             ))
-          : await this.Cesium.createWorldTerrainAsync();
+          : await this.loadIonTerrain();
       const viewer = this.live();
       // The toggle may have been reversed, or the viewer destroyed, while the
       // provider loaded; applying it then would resurrect terrain the user just

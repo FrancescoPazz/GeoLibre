@@ -7,6 +7,8 @@
  * a rebuild. Carries no React/MapLibre dependency so callers stay unit-testable.
  */
 
+import { parseCesiumIonAssetId } from "./cesium-ion";
+
 // Injected by `vite.config.ts`'s `define` from an explicit allowlist
 // (BUILD_ENV_KEYS), with credential-bearing names withheld from redistributable
 // builds such as the Jupyter wheel.
@@ -173,6 +175,33 @@ export function getCesiumIonToken(env?: Record<string, string | undefined>): str
   const runtimeEnv = env ?? getRuntimeEnvironment();
   const trimmed = runtimeEnv.VITE_CESIUM_TOKEN?.trim() || runtimeEnv.CESIUM_TOKEN?.trim();
   return trimmed || undefined;
+}
+
+/**
+ * The Cesium Ion asset id of the terrain the globe should load in place of
+ * Cesium World Terrain (Ion asset 1). A deployment that has uploaded its own
+ * DTM to Ion — a regional model at a finer resolution than World Terrain, say —
+ * sets `CESIUM_TERRAIN_ASSET_ID` (or the prefixed `VITE_CESIUM_TERRAIN_ASSET_ID`)
+ * next to its Ion token, and the globe samples and drapes against that asset.
+ *
+ * The asset is private to the token that owns it, so the id is meaningless
+ * without a token: the globe engine only consults it when Ion credentials
+ * are present, and otherwise stays on the keyless Terrarium path. It is read
+ * the same way as the token — build-time value overridden by a runtime one —
+ * so a web deployment can repoint terrain from Settings with no rebuild.
+ *
+ * @param env - Environment record (defaults to the runtime environment);
+ *   injectable for testing.
+ * @returns The asset id as a positive integer, or undefined when unset or not a
+ *   valid id (blank, non-numeric, zero, negative, or fractional).
+ */
+export function getCesiumTerrainAssetId(
+  env?: Record<string, string | undefined>,
+): number | undefined {
+  const runtimeEnv = env ?? getRuntimeEnvironment();
+  const raw =
+    runtimeEnv.VITE_CESIUM_TERRAIN_ASSET_ID?.trim() || runtimeEnv.CESIUM_TERRAIN_ASSET_ID?.trim();
+  return parseCesiumIonAssetId(raw) ?? undefined;
 }
 
 /**

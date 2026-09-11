@@ -733,6 +733,17 @@ CESIUM_TOKEN=your_cesium_ion_access_token
 
 `CESIUM_TOKEN` (or the `VITE_`-prefixed `VITE_CESIUM_TOKEN`) is read by `vite.config.ts` and baked into the build. You can **also set it at runtime** — with no rebuild — in the Settings dialog's **Environment Variables** section, which has a dedicated masked **Cesium Ion token** field. That token is stored locally on the device (in browser storage on the web build), **not** in the shared project file, and overrides the build-time value; it is how a web user brings their own Ion token. (A free-form `VITE_CESIUM_TOKEN` variable in the same section still works and takes precedence, as an override.) Without a token from any source the globe is still offered, showing a one-line hint about what a token would add. Ion access tokens are designed to ship in client bundles. In CI/CD, pass the token as a build-time environment variable (the GitHub Pages, web, studio, and PR-preview workflows read it from the `CESIUM_TOKEN` repository secret, or `VITE_CESIUM_TOKEN` if you prefer the prefixed name), so visitors to your deployment get terrain and Ion imagery without entering a token of their own. Because the token ends up publicly readable in the served JS, scope it in the Ion dashboard to only the assets your deployment needs. The container image build deliberately does **not** bake one in: it is redistributed, so its users supply their own. See [Architecture](architecture.md#3d-globe-view-cesiumjs) for how the globe integrates.
 
+### Your own terrain instead of Cesium World Terrain
+
+A deployment that has uploaded its own digital terrain model to Cesium Ion — a regional DTM at a finer resolution than World Terrain, say — can have the globe drape and sample against that asset instead. Set its Ion asset id next to the token:
+
+```env
+CESIUM_TOKEN=your_cesium_ion_access_token
+CESIUM_TERRAIN_ASSET_ID=2473055
+```
+
+`CESIUM_TERRAIN_ASSET_ID` (or `VITE_CESIUM_TERRAIN_ASSET_ID`) follows the same rules as the token: it is baked in at build time and can be overridden at runtime as a free-form `VITE_CESIUM_TERRAIN_ASSET_ID` variable in Settings → Environment Variables, taking effect without a reload. The id is not a credential, but it is only meaningful with the token that owns the asset — without a token the globe stays on the keyless Terrarium terrain and the id is ignored. Anything that is not a positive integer is ignored too.
+
 ## Optional runtime mirrors (offline and air-gapped)
 
 The **Python (Pyodide)** vector engine loads its runtime from the public jsDelivr CDN by default. To self-host it for offline or production use, point it at a mirrored copy of the Pyodide distribution:

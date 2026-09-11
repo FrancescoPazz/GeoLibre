@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { getCesiumIonToken } from "@geolibre/core";
+import { getCesiumIonToken, getCesiumTerrainAssetId } from "@geolibre/core";
 
 describe("getCesiumIonToken", () => {
   it("returns undefined when env is missing or empty", () => {
@@ -36,5 +36,43 @@ describe("getCesiumIonToken", () => {
       }),
       "bare",
     );
+  });
+});
+
+describe("getCesiumTerrainAssetId", () => {
+  it("returns undefined when env is missing or empty", () => {
+    assert.equal(getCesiumTerrainAssetId({}), undefined);
+    assert.equal(getCesiumTerrainAssetId({ VITE_CESIUM_TERRAIN_ASSET_ID: "" }), undefined);
+    assert.equal(getCesiumTerrainAssetId({ VITE_CESIUM_TERRAIN_ASSET_ID: "   " }), undefined);
+    assert.equal(getCesiumTerrainAssetId({ CESIUM_TERRAIN_ASSET_ID: "  " }), undefined);
+  });
+
+  it("returns the asset id as a number, trimming whitespace", () => {
+    assert.equal(getCesiumTerrainAssetId({ VITE_CESIUM_TERRAIN_ASSET_ID: " 2473055 " }), 2473055);
+  });
+
+  it("falls back to the bare CESIUM_TERRAIN_ASSET_ID", () => {
+    assert.equal(getCesiumTerrainAssetId({ CESIUM_TERRAIN_ASSET_ID: "754445" }), 754445);
+  });
+
+  it("prefers the VITE_ name, and falls back to the bare one when it is blank", () => {
+    assert.equal(
+      getCesiumTerrainAssetId({ VITE_CESIUM_TERRAIN_ASSET_ID: "1", CESIUM_TERRAIN_ASSET_ID: "2" }),
+      1,
+    );
+    assert.equal(
+      getCesiumTerrainAssetId({ VITE_CESIUM_TERRAIN_ASSET_ID: "  ", CESIUM_TERRAIN_ASSET_ID: "2" }),
+      2,
+    );
+  });
+
+  it("rejects values that are not a positive integer id", () => {
+    for (const value of ["abc", "0", "-5", "12.5", "1e3x", "NaN"]) {
+      assert.equal(
+        getCesiumTerrainAssetId({ VITE_CESIUM_TERRAIN_ASSET_ID: value }),
+        undefined,
+        `expected ${JSON.stringify(value)} to be rejected`,
+      );
+    }
   });
 });
