@@ -10,6 +10,7 @@ import {
   closeFlightSimulatorPanel,
   closeLineOfSightPanel,
   closeMeasure3dPanel,
+  closePlayPathPanel,
   closeRouteAnimationPanel,
   closeSpinGlobePanel,
   closeSunPanel,
@@ -25,6 +26,7 @@ import {
   isFlightSimulatorPanelVisible,
   isLineOfSightPanelVisible,
   isMeasure3dPanelVisible,
+  isPlayPathPanelVisible,
   isRouteAnimationPanelVisible,
   isSpinGlobePanelVisible,
   isSunPanelVisible,
@@ -39,6 +41,7 @@ import {
   openFlightSimulatorPanel,
   openLineOfSightPanel,
   openMeasure3dPanel,
+  openPlayPathPanel,
   openRouteAnimationPanel,
   openSpinGlobePanel,
   openSunPanel,
@@ -54,6 +57,7 @@ import {
   subscribeFlightSimulatorPanel,
   subscribeLineOfSight,
   subscribeMeasure3d,
+  subscribePlayPath,
   subscribeRouteAnimationPanel,
   subscribeSpinGlobePanel,
   subscribeSunPanel,
@@ -78,6 +82,7 @@ export interface ToolbarPanels {
   flightSimulator: ToolbarPanel;
   lineOfSight: ToolbarPanel;
   measure3d: ToolbarPanel;
+  playPath: ToolbarPanel;
   print: ToolbarPanel;
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
@@ -128,6 +133,11 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeMeasure3d,
     isMeasure3dPanelVisible,
     isMeasure3dPanelVisible,
+  );
+  const playPathVisible = useSyncExternalStore(
+    subscribePlayPath,
+    isPlayPathPanelVisible,
+    isPlayPathPanelVisible,
   );
   const printVisible = useSyncExternalStore(
     subscribePrintPanel,
@@ -244,6 +254,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openMeasure3dPanel(appApi);
+      },
+    },
+    playPath: {
+      visible: playPathVisible,
+      toggle: () => {
+        if (playPathVisible) {
+          closePlayPathPanel(appApi);
+          return;
+        }
+        openPlayPathPanel(appApi);
       },
     },
     print: {

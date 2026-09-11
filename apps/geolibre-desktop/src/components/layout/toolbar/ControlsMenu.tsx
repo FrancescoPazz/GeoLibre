@@ -172,6 +172,7 @@ export function ControlsMenu({
     show("controls.routeAnimation") ||
     show("controls.flightSimulator") ||
     show("controls.measure3d") ||
+    show("controls.playPath") ||
     show("controls.lineOfSight") ||
     show("controls.directions") ||
     show("controls.reverseGeocode");
@@ -278,6 +279,15 @@ export function ControlsMenu({
             >
               {t("toolbar.item.measure3d")}
               {panels.measure3d.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.playPath") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.playPathTooltip")}
+              onSelect={panels.playPath.toggle}
+            >
+              {t("toolbar.item.playPath")}
+              {panels.playPath.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.lineOfSight") && (

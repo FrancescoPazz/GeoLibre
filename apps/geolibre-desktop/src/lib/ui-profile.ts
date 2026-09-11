@@ -663,6 +663,12 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     tier: "advanced",
   },
   {
+    id: "controls.playPath",
+    menuId: "controls",
+    labelKey: "toolbar.item.playPath",
+    tier: "advanced",
+  },
+  {
     id: "controls.lineOfSight",
     menuId: "controls",
     labelKey: "toolbar.item.lineOfSight",

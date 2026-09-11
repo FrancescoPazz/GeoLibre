@@ -12,6 +12,12 @@ import {
   reattachMeasure3d,
   restoreMeasure3d,
 } from "./measure-3d";
+import {
+  closePlayPathPanel,
+  getPlayPathProjectState,
+  reattachPlayPath,
+  restorePlayPath,
+} from "./play-path";
 
 /**
  * 3D tools for the Cesium globe.
@@ -35,6 +41,7 @@ export const RER_3D_TOOLS_PLUGIN_ID = "rer-3d-tools";
 /** Re-bind every tool to the current primary globe after an engine mounts. */
 export function reattachRer3dTools(app: GeoLibreAppAPI): void {
   reattachMeasure3d(app);
+  reattachPlayPath(app);
   reattachLineOfSight(app);
 }
 
@@ -46,6 +53,7 @@ export const rer3dToolsPlugin: GeoLibrePlugin = {
   engines: ["maplibre", "cesium"],
   activate: (app: GeoLibreAppAPI) => openMeasure3dPanel(app),
   deactivate: (app: GeoLibreAppAPI) => {
+    closePlayPathPanel(app);
     closeMeasure3dPanel(app);
     closeLineOfSightPanel(app);
   },
@@ -54,15 +62,22 @@ export const rer3dToolsPlugin: GeoLibrePlugin = {
   // against whatever terrain the globe has when it mounts.
   getProjectState: () => {
     const measure = getMeasure3dProjectState();
+    const playPath = getPlayPathProjectState();
     const lineOfSight = getLineOfSightProjectState();
-    if (!measure && !lineOfSight) return undefined;
-    return { ...(measure ? { measure } : {}), ...(lineOfSight ? { lineOfSight } : {}) };
+    if (!measure && !playPath && !lineOfSight) return undefined;
+    return {
+      ...(measure ? { measure } : {}),
+      ...(playPath ? { playPath } : {}),
+      ...(lineOfSight ? { lineOfSight } : {}),
+    };
   },
   applyProjectState: (app: GeoLibreAppAPI, state: unknown) => {
     const raw = (state && typeof state === "object" ? state : {}) as Record<string, unknown>;
+    // The measure figure first: Play Path reads its path.
     const measure = restoreMeasure3d(app, raw.measure);
+    const playPath = restorePlayPath(app, raw.playPath);
     const lineOfSight = restoreLineOfSight(app, raw.lineOfSight);
-    return measure || lineOfSight;
+    return measure || playPath || lineOfSight;
   },
 };
 
@@ -140,6 +155,36 @@ export {
   type SnapMode,
   type TerrainProfile,
 } from "./terrain-profile";
+export {
+  DEFAULT_PITCH_THRESHOLD_DEG,
+  DEFAULT_PLAY_SPEED,
+  PLAY_COUNTDOWN_SECONDS,
+  PLAY_MIN_RANGE_METERS,
+  PLAY_PATH_TOOL_ID,
+  PLAY_RETURN_SECONDS,
+  PLAY_SPEED_MAX,
+  PLAY_SPEED_MIN,
+  PLAY_STEP_SECONDS,
+  closePlayPathPanel,
+  getPlayPathProjectState,
+  getPlayPathSnapshot,
+  isPlayPathPanelVisible,
+  lookAtCameraPosition,
+  openPlayPathPanel,
+  pausePath,
+  playPath,
+  reattachPlayPath,
+  resamplePathForFlight,
+  restorePlayPath,
+  setPlayPathPitchThreshold,
+  setPlayPathSamplingStep,
+  setPlayPathSpeed,
+  setPlayPathTiming,
+  stopPath,
+  subscribePlayPath,
+  type PlayPathState,
+  type PlayPathTiming,
+} from "./play-path";
 export {
   buildMeasureFeatureCollection,
   measureFileStem,

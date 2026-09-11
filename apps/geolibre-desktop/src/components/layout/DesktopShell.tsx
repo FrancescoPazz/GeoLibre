@@ -182,6 +182,7 @@ import { RouteAnimationPanel } from "../panels/RouteAnimationPanel";
 import { FlightSimulatorPanel } from "../panels/FlightSimulatorPanel";
 import { LineOfSightPanel } from "../panels/LineOfSightPanel";
 import { Measure3dPanel } from "../panels/Measure3dPanel";
+import { PlayPathPanel } from "../panels/PlayPathPanel";
 import {
   PluginRightPanel,
   PLUGIN_PANEL_DEFAULT_WIDTH,
@@ -2792,6 +2793,12 @@ export function DesktopShell({
             displayName={t("shell.section.measure3dPanel")}
           >
             <Measure3dPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Play path panel"
+            displayName={t("shell.section.playPathPanel")}
+          >
+            <PlayPathPanel />
           </SectionErrorBoundary>
           <SectionErrorBoundary
             label="Line of sight panel"
