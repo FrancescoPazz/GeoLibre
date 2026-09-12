@@ -43,6 +43,7 @@ http(s) URL), naming the variable.
 | `GEOLIBRE_COORDS_CONVERTER_URL`                             | Controls → Coordinate converter, on the region's GeometryServer (Monte Mario, ED50, ETRS89, RDN2008, UTM, with its NTv2 grids)                                                                                                                         |
 | `GEOLIBRE_FEEDBACK_*`                                       | Help → Give feedback opens a pre-addressed e-mail                                                                                                                                                                                                      |
 | `GEOLIBRE_LOGIN_SERVICE_URL`, `GEOLIBRE_USER_PROFILES`      | **Sign in** in the toolbar (HTTP Basic against GeoServer, session in memory only), which unlocks catalog entries with `allowedGroups`, carries the header to services with `useAuthentication`, and gates the query tools by profile                   |
+| `GEOLIBRE_MICROZONATION_*`                                  | Controls → Seismic microzonation on the civil-protection WFS (studies, CLE, documents, emergency plans page)                                                                                                                                           |
 
 The Emilia-Romagna basemaps (DBTR webmap, DBTR CTR, the AGEA/CGR orthophotos)
 are built into the basemap picker's Regional section; the start project selects
