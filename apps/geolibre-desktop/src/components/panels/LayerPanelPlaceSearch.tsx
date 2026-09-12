@@ -18,11 +18,12 @@ import {
   useAppStore,
 } from "@geolibre/core";
 import { getPrimaryCesiumControlHost, type MapEngine } from "@geolibre/map";
+import { addCatalogItem, searchCatalogItems, type CatalogSearchMatch } from "@geolibre/plugins";
 // Type-only: the Cesium engine itself is imported lazily, inside the globe
 // branch of handleSelect, so it stays off this panel's load path.
 import type { PointPrimitive, PointPrimitiveCollection, Primitive } from "@cesium/engine";
 import { Input } from "@geolibre/ui";
-import { Hexagon, Loader2, LocateFixed, MapPin, Search, Table2, X } from "lucide-react";
+import { FolderTree, Hexagon, Loader2, LocateFixed, MapPin, Search, Table2, X } from "lucide-react";
 import { formatLatLon, parseLatLon } from "../../lib/coordinates";
 import { type H3CellMatch, parseH3Cell } from "../../lib/h3-search";
 import {
@@ -73,7 +74,8 @@ type SearchRow =
   | { kind: "place"; match: GeocodeMatch }
   | { kind: "coordinate"; match: GeocodeMatch }
   | { kind: "h3"; match: GeocodeMatch; cell: H3CellMatch }
-  | { kind: "feature"; match: FeatureSearchMatch };
+  | { kind: "feature"; match: FeatureSearchMatch }
+  | { kind: "catalog"; match: CatalogSearchMatch };
 
 /**
  * A compact "Search places" geocoder input pinned to the bottom of the Layers
@@ -105,6 +107,10 @@ export function LayerPanelPlaceSearch({
   const [query, setQuery] = useState("");
   const [placeRows, setPlaceRows] = useState<SearchRow[]>([]);
   const [featureGroups, setFeatureGroups] = useState<FeatureSearchGroup[]>([]);
+  // Entries of the loaded catalogs (the Catalog plugin) whose name matches:
+  // the geoportal habit of adding a dataset by typing its name in the search
+  // box, rather than walking the tree.
+  const [catalogRows, setCatalogRows] = useState<SearchRow[]>([]);
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<SearchStatus>("idle");
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -252,6 +258,7 @@ export function LayerPanelPlaceSearch({
     const trimmed = query.trim();
     if (trimmed.length < MIN_FEATURE_QUERY_LENGTH) {
       setFeatureGroups([]);
+      setCatalogRows([]);
       setActiveIndex(-1);
       return;
     }
@@ -262,6 +269,10 @@ export function LayerPanelPlaceSearch({
       if (settledQuery.current !== null) return;
       const groups = searchLayerFeatures(layers, trimmed, { groups: layerGroups });
       setFeatureGroups(groups);
+      const catalogMatches = searchCatalogItems(trimmed).map(
+        (match): SearchRow => ({ kind: "catalog", match }),
+      );
+      setCatalogRows(catalogMatches);
       // A layers change re-runs this effect without touching `query`, so the
       // query-change effect below never gets to reset the highlight: rebuilding
       // the rows under a stale index could leave it past the end of the list.
@@ -269,7 +280,12 @@ export function LayerPanelPlaceSearch({
       // Only pop the dropdown open while the user is actually typing here: a
       // later layer change re-runs this effect, and reopening then would be a
       // dropdown appearing out of nowhere.
-      if (groups.length > 0 && document.activeElement === inputRef.current) setOpen(true);
+      if (
+        (groups.length > 0 || catalogMatches.length > 0) &&
+        document.activeElement === inputRef.current
+      ) {
+        setOpen(true);
+      }
     }, FEATURE_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [query, layers, layerGroups]);
@@ -343,7 +359,8 @@ export function LayerPanelPlaceSearch({
   // something under it — a list, a spinner, or a message. Keeping it tied to
   // what renders rather than to the two minimum-length constants agreeing means
   // a query short enough for one half but not the other cannot strand it.
-  const showPlaceHeading = featureGroups.length > 0 && (showPlaceRows || status !== "idle");
+  const showPlaceHeading =
+    (featureGroups.length > 0 || catalogRows.length > 0) && (showPlaceRows || status !== "idle");
 
   /**
    * Every selectable row, data groups first, in the order they render. Place
@@ -356,9 +373,10 @@ export function LayerPanelPlaceSearch({
       ...featureGroups.flatMap((group) =>
         group.matches.map((match): SearchRow => ({ kind: "feature", match })),
       ),
+      ...catalogRows,
       ...(showPlaceRows ? placeRows : []),
     ],
-    [featureGroups, placeRows, showPlaceRows],
+    [featureGroups, catalogRows, placeRows, showPlaceRows],
   );
 
   /** Reset the input and dropdown after a row has been acted on. */
@@ -395,6 +413,13 @@ export function LayerPanelPlaceSearch({
         const store = useAppStore.getState();
         if (holdsOwnedSelection(ownedSelection.current, store)) store.selectFeature(null);
         ownedSelection.current = null;
+      }
+
+      if (row.kind === "catalog") {
+        // The plugin adds the layer and tags it; the Layers panel shows it.
+        void addCatalogItem(row.match.sourceUrl, row.match.item.id);
+        settle(row.match.item.name);
+        return;
       }
 
       if (row.kind === "feature") {
@@ -606,6 +631,8 @@ export function LayerPanelPlaceSearch({
     >
       {row.kind === "feature" ? (
         <Table2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      ) : row.kind === "catalog" ? (
+        <FolderTree className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       ) : row.kind === "h3" ? (
         <Hexagon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       ) : row.kind === "coordinate" ? (
@@ -618,6 +645,15 @@ export function LayerPanelPlaceSearch({
           <span className="line-clamp-2 block">{row.match.value}</span>
           <span className="block truncate text-[10px] text-muted-foreground">
             {row.match.field}
+          </span>
+        </span>
+      ) : row.kind === "catalog" ? (
+        <span className="min-w-0 flex-1">
+          <span className="line-clamp-2 block">{row.match.item.name}</span>
+          <span className="block truncate text-[10px] text-muted-foreground">
+            {row.match.path.length > 0
+              ? row.match.path.join(" › ")
+              : t("layers.searchCatalogGroup")}
           </span>
         </span>
       ) : (
@@ -644,7 +680,9 @@ export function LayerPanelPlaceSearch({
     offsets.push(index === 0 ? 0 : offsets[index - 1] + featureGroups[index - 1].matches.length);
     return offsets;
   }, []);
-  /** Row index of the first place row: every feature row precedes them. */
+  /** Row index of the first catalog row: every feature row precedes them. */
+  const catalogOffset = featureGroups.reduce((total, group) => total + group.matches.length, 0);
+  /** Row index of the first place row: every feature and catalog row precedes them. */
   const placeOffset = rows.length - placeRows.length;
 
   return (
@@ -674,6 +712,16 @@ export function LayerPanelPlaceSearch({
                 </div>
               </div>
             ))}
+            {catalogRows.length > 0 ? (
+              <div role="group" aria-label={t("layers.searchCatalogGroup")}>
+                <div className="border-b bg-muted/50 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {t("layers.searchCatalogGroup")}
+                </div>
+                <div className="py-1">
+                  {catalogRows.map((row, offset) => renderRow(row, catalogOffset + offset))}
+                </div>
+              </div>
+            ) : null}
             {/* The places half keeps its own heading only when data groups sit
                 above it, so a query with no data match looks exactly as before. */}
             {showPlaceHeading ? (

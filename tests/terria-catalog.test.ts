@@ -19,6 +19,7 @@ import {
   parseWmtsCapabilities,
   removeCatalogItem,
   resetTerriaCatalog,
+  searchCatalogItems,
   setTerriaCatalogAdapters,
   stripJsonComments,
   terriaCatalogPlugin,
@@ -459,6 +460,46 @@ describe("terria catalog plugin", () => {
     assert.match(state.status ?? "", /Could not load the catalog/);
     assert.equal(await loadCatalog(CATALOG_URL), true);
     assert.equal(getTerriaCatalogState().sources.length, 2);
+  });
+
+  it("finds entries by name for the search box, with their place in the tree", async () => {
+    const host = fakeHost();
+    useAppStore.getState().addLayer({
+      id: "keep",
+      name: "Keep",
+      type: "geojson",
+      source: {},
+      visible: true,
+      opacity: 1,
+      style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
+    });
+    terriaCatalogPlugin.activate(host.app);
+    assert.deepEqual(searchCatalogItems("dbtr"), []);
+    await loadCatalog(CATALOG_URL);
+    const hits = searchCatalogItems("ctr5");
+    assert.deepEqual(
+      hits.map((h) => [h.item.id, h.path]),
+      [
+        [
+          "DexQu5",
+          ["Catalogo rapido Regione Emilia-Romagna", "2 - Database Topografico Regionale"],
+        ],
+      ],
+    );
+    assert.equal(searchCatalogItems("dbtr").length, 5, "matches across groups, the group itself excluded");
+    assert.equal(searchCatalogItems("dbtr", 2).length, 2, "capped");
+    assert.equal(searchCatalogItems("  ").length, 0);
+    assert.ok(
+      searchCatalogItems("DBTR Layers").length === 0,
+      "a map-service group is not an entry to add by itself",
+    );
+    await expandMapServerGroup(CATALOG_URL, "bMyL8M");
+    const sub = searchCatalogItems("provincia");
+    assert.deepEqual(
+      sub.map((h) => [h.item.id, h.path]),
+      [["bMyL8M/1", ["DBTR Layers"]]],
+    );
   });
 
   it("restores its catalogs from the project state", async () => {

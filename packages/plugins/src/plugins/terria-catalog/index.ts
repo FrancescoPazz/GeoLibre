@@ -444,6 +444,56 @@ export async function toggleCatalogItem(sourceUrl: string, itemId: string): Prom
   await addCatalogItem(sourceUrl, itemId);
 }
 
+/** A catalog entry matched by the search box, with where it sits in the tree. */
+export interface CatalogSearchMatch {
+  sourceUrl: string;
+  item: CatalogItem;
+  /** Group names from the root down to the item's parent. */
+  path: string[];
+}
+
+/**
+ * Entries of every loaded catalog whose name contains `query`, for the
+ * search box: supported items only (an entry nobody can open is noise
+ * there), the sublayers of an already-expanded map-service group included,
+ * up to `limit`.
+ */
+export function searchCatalogItems(query: string, limit = 6): CatalogSearchMatch[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const out: CatalogSearchMatch[] = [];
+  const walk = (sourceUrl: string, nodes: readonly CatalogNode[], path: string[]) => {
+    for (const node of nodes) {
+      if (out.length >= limit) return;
+      if (node.kind === "group") {
+        walk(sourceUrl, node.members, [...path, node.name]);
+        continue;
+      }
+      if (
+        node.supported &&
+        node.type !== "esri-mapServer-group" &&
+        node.name.toLowerCase().includes(q)
+      ) {
+        out.push({ sourceUrl, item: node, path });
+      }
+    }
+  };
+  for (const source of sources) {
+    if (!source.catalog) continue;
+    walk(source.url, source.catalog.roots, []);
+    for (const [groupId, children] of source.resolvedGroups) {
+      const group = findCatalogNode(source.catalog.roots, groupId);
+      const path = group ? [group.name] : [];
+      for (const child of children) {
+        if (out.length >= limit) break;
+        if (child.name.toLowerCase().includes(q))
+          out.push({ sourceUrl: source.url, item: child, path });
+      }
+    }
+  }
+  return out.slice(0, limit);
+}
+
 export function setCatalogQuery(next: string): void {
   query = next;
   notify();

@@ -7359,6 +7359,7 @@
     "searchPlacesGoToCoordinate": "Vai a {{coordinate}}",
     "searchPlacesGoToH3Cell": "Vai alla cella H3 {{cell}} (ris. {{resolution}})",
     "searchPlacesGroup": "Luoghi",
+    "searchCatalogGroup": "Catalogo",
     "searchFeaturesPartial": "(parziale)",
     "background": "Sfondo",
     "typeBackground": "sfondo",
