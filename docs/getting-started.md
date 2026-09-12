@@ -842,6 +842,20 @@ USER_PROFILES={"Cittadino":{"allowed":["QueryData"]},"Tecnico":{"allowed":["Quer
 
 Without it every tool is open to everyone. The names the query panel checks are `QueryData` (opening it) and `DownloadQueryData` (its downloads). Both variables (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above. The visibility rules are applied in the browser, as they were in the old geoportal: a service that must stay private has to check the header itself.
 
+### Seismic microzonation
+
+A civil-protection geoportal can offer the municipalities' seismic microzonation studies (MS) and emergency limit condition (CLE) analyses from a WFS layer of the region's GeoServer. Name the endpoint and the projects layer (`MICROZONATION_TYPENAME` is accepted too, as the old geoportal's configuration spelled it); a documents layer, filtered per project on `id_stato_progetto`, and a page listing the municipal emergency plans are optional:
+
+```env
+MICROZONATION_URL=https://geosrv.example.org/geoserver/wfs
+MICROZONATION_PROJECTS_LAYER=qmap_mzs:qmp_mzs_stato_progetto_view
+MICROZONATION_DOCUMENTS_LAYER=qmap_mzs:qmp_mzs_documenti
+MICROZONATION_OUTPUT_FORMAT=application/json
+MICROZONATION_PLANS_URL=https://example.org/piani-emergenza-comunali
+```
+
+Controls → Seismic microzonation then appears: search by province, municipality, study level and CLE, pick a result to zoom to it and read its detail and documents. The layer is read as GeoJSON in EPSG:4326 with the regions' own field names (`prov`, `comune`, `microzonazione`, `cle_convalida`, `ordinanza`, `piano_prot_civile`, …). All six (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above.
+
 ### Deployment defaults in the Docker image
 
 Every variable in the sections above can also be given to the prebuilt Docker image at container start as `GEOLIBRE_<NAME>` (`GEOLIBRE_CESIUM_TOKEN`, `GEOLIBRE_BRAND_NAME`, …): the entrypoint validates it and publishes it to the app as `VITE_<NAME>`, so no rebuild is needed. The deployment layer sits between the build and whatever a user or project sets. For the geocoder, the deployment's provider (with its key and endpoints) becomes the default of every project that has not chosen one; a project that carries its own choice keeps it. See [Self-hosting](self-hosting.md#2-host-the-geolibre-web-build-next-to-it).

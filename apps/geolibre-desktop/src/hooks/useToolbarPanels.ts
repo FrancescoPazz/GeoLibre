@@ -85,6 +85,12 @@ import {
   openQueryPanel,
   subscribeQueryPanel,
 } from "../lib/query-panel";
+import {
+  closeMicrozonationPanel,
+  isMicrozonationPanelVisible,
+  openMicrozonationPanel,
+  subscribeMicrozonationPanel,
+} from "../lib/microzonation-panel";
 import type { AppApi } from "../components/layout/toolbar/constants";
 
 /** Visibility flag plus a toggle handler for a single toolbar panel. */
@@ -107,6 +113,7 @@ export interface ToolbarPanels {
   elevationBands: ToolbarPanel;
   coordsConverter: ToolbarPanel;
   queryData: ToolbarPanel;
+  microzonation: ToolbarPanel;
   print: ToolbarPanel;
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
@@ -182,6 +189,11 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeQueryPanel,
     isQueryPanelVisible,
     isQueryPanelVisible,
+  );
+  const microzonationVisible = useSyncExternalStore(
+    subscribeMicrozonationPanel,
+    isMicrozonationPanelVisible,
+    isMicrozonationPanelVisible,
   );
   const printVisible = useSyncExternalStore(
     subscribePrintPanel,
@@ -348,6 +360,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openQueryPanel();
+      },
+    },
+    microzonation: {
+      visible: microzonationVisible,
+      toggle: () => {
+        if (microzonationVisible) {
+          closeMicrozonationPanel();
+          return;
+        }
+        openMicrozonationPanel();
       },
     },
     print: {

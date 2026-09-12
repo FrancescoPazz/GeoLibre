@@ -46,6 +46,7 @@ import { isMaptoolkitBasemapActive } from "../../../lib/maptoolkit-basemap";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import { useCoordsConverterUrl } from "../../panels/CoordsConverterPanel";
 import { useHasQueryableLayer } from "../../panels/QueryPanel";
+import { useMicrozonationConfig } from "../../panels/MicrozonationPanel";
 import {
   LOGO_CONTROL_IDS,
   MAP_CONTROL_ITEMS,
@@ -124,6 +125,7 @@ export function ControlsMenu({
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
   const coordsConverterConfigured = Boolean(useCoordsConverterUrl());
   const queryableLayerPresent = useHasQueryableLayer();
+  const microzonationConfigured = Boolean(useMicrozonationConfig());
   const show = (id: string) =>
     viewer && AUTHORING_CONTROL_ITEMS.includes(id) ? false : isMenuItemVisible(uiProfile, id);
   // Atmospheric effects only render on the globe (the engine idles in Mercator),
@@ -182,6 +184,7 @@ export function ControlsMenu({
     show("controls.elevationBands") ||
     (show("controls.coordsConverter") && coordsConverterConfigured) ||
     (show("controls.queryData") && queryableLayerPresent) ||
+    (show("controls.microzonation") && microzonationConfigured) ||
     show("controls.directions") ||
     show("controls.reverseGeocode");
   // Whether the middle group (panels) has any visible item. The separator that
@@ -341,6 +344,15 @@ export function ControlsMenu({
             >
               {t("toolbar.item.queryData")}
               {panels.queryData.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.microzonation") && microzonationConfigured && (
+            <DropdownMenuItem
+              title={t("toolbar.item.microzonationTooltip")}
+              onSelect={panels.microzonation.toggle}
+            >
+              {t("toolbar.item.microzonation")}
+              {panels.microzonation.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.spinGlobe") && (

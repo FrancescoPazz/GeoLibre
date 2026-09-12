@@ -54,6 +54,12 @@ services:
       # without protected entries.
       GEOLIBRE_LOGIN_SERVICE_URL: "${GEOLIBRE_LOGIN_SERVICE_URL:-}"
       GEOLIBRE_USER_PROFILES: "${GEOLIBRE_USER_PROFILES:-}"
+      # Seismic microzonation (optional): the civil-protection WFS and its
+      # projects layer; the old config.json's `typeName` goes in _TYPENAME.
+      GEOLIBRE_MICROZONATION_URL: "${GEOLIBRE_MICROZONATION_URL:-}"
+      GEOLIBRE_MICROZONATION_TYPENAME: "${GEOLIBRE_MICROZONATION_TYPENAME:-}"
+      GEOLIBRE_MICROZONATION_DOCUMENTS_LAYER: "${GEOLIBRE_MICROZONATION_DOCUMENTS_LAYER:-}"
+      GEOLIBRE_MICROZONATION_PLANS_URL: "${GEOLIBRE_MICROZONATION_PLANS_URL:-}"
       # Keep projects on this instance only; no sidecar unless processing is wanted.
       GEOLIBRE_SHARE_URL: "off"
       GEOLIBRE_DISABLE_SIDECAR: "${GEOLIBRE_DISABLE_SIDECAR:-1}"

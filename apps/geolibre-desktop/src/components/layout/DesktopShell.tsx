@@ -194,6 +194,7 @@ import { GlobeClippingPanel } from "../panels/GlobeClippingPanel";
 import { ElevationBandsPanel } from "../panels/ElevationBandsPanel";
 import { CoordsConverterPanel } from "../panels/CoordsConverterPanel";
 import { QueryPanel } from "../panels/QueryPanel";
+import { MicrozonationPanel } from "../panels/MicrozonationPanel";
 import {
   PluginRightPanel,
   PLUGIN_PANEL_DEFAULT_WIDTH,
@@ -2858,6 +2859,12 @@ export function DesktopShell({
             displayName={t("shell.section.queryPanel")}
           >
             <QueryPanel mapControllerRef={mapControllerRef} />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Microzonation panel"
+            displayName={t("shell.section.microzonationPanel")}
+          >
+            <MicrozonationPanel mapControllerRef={mapControllerRef} />
           </SectionErrorBoundary>
           <KnowledgeCardConsentDialog
             open={knowledgeNoticeOpen}

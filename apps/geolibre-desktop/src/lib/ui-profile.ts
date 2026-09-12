@@ -700,6 +700,12 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     tier: "advanced",
   },
   {
+    id: "controls.microzonation",
+    menuId: "controls",
+    labelKey: "toolbar.item.microzonation",
+    tier: "advanced",
+  },
+  {
     id: "controls.spinGlobe",
     menuId: "controls",
     labelKey: "toolbar.item.spinGlobe",
