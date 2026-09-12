@@ -1,0 +1,48 @@
+{
+  "version": "0.2.0",
+  "name": "Geoportale Emilia-Romagna",
+  "mapView": {
+    "center": [11.05, 44.55],
+    "zoom": 7.6,
+    "bearing": 0,
+    "pitch": 0
+  },
+  "basemapStyleUrl": "geolibre://regional-basemap/rer-dbtr-web",
+  "basemapVisible": true,
+  "basemapOpacity": 1,
+  "blankBackgroundColor": null,
+  "layers": [],
+  "layerGroups": [],
+  "styles": {},
+  "preferences": {
+    "map": {
+      "restrictBounds": false,
+      "bounds": [-180, -85, 180, 85],
+      "minZoom": 0,
+      "maxZoom": 24,
+      "maxPitch": 85,
+      "renderWorldCopies": true,
+      "projection": "mercator",
+      "ellipsoidId": "earth",
+      "scaleUnit": "metric",
+      "showPointerElevation": true,
+      "terrainEnabled": false,
+      "coordinateFormat": "dd"
+    },
+    "environmentVariables": [],
+    "geocoding": {
+      "providerId": "nominatim",
+      "apiKeys": {}
+    }
+  },
+  "legend": {
+    "title": "Legend",
+    "groupByLayer": true,
+    "order": [],
+    "overrides": {}
+  },
+  "comments": [],
+  "metadata": {
+    "description": "Progetto di avvio del Geoportale: vista sull'Emilia-Romagna, DBTR come mappa di base. Il catalogo e gli altri servizi arrivano dalle variabili d'ambiente del deployment (vedi README)."
+  }
+}

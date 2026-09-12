@@ -1,0 +1,59 @@
+# Geoportale Emilia-Romagna on the GeoLibre web image.
+#
+# Everything the geoportal is made of arrives as environment or as files
+# mounted into the nginx docroot: no fork, no rebuild for a change of
+# catalog, branding or service endpoint. Credentials come from `.env`
+# (copy `.env.example`); nothing secret is written here.
+#
+# Until the branch carrying the geoportal features is released, build the
+# image from this checkout (`docker compose build`); afterwards the published
+# `ghcr.io/opengeos/geolibre` image can replace the `build` block.
+name: geoportale-emilia-romagna
+
+services:
+  geoportale:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: geolibre-web:emilia-romagna
+    ports:
+      - "${GEOPORTALE_PORT:-8080}:80"
+    environment:
+      # Branding
+      GEOLIBRE_BRAND_NAME: "Geoportale Emilia-Romagna"
+      GEOLIBRE_BRAND_LOGO_URL: "/branding/logo.svg"
+      GEOLIBRE_BRAND_LOGO_LINK: "https://geoportale.regione.emilia-romagna.it/"
+      GEOLIBRE_BRAND_FAVICON_URL: "/branding/favicon.png"
+      GEOLIBRE_BRAND_ACCENT_COLOR: "#519ac2"
+      # Start project and catalog
+      GEOLIBRE_START_PROJECT_URL: "/projects/geoportale.geolibre.json"
+      GEOLIBRE_CATALOG_URLS: "/init/catalogo-rapido.json"
+      # 3D globe: the region's own terrain on Cesium Ion, and heights above
+      # mean sea level (EGM96) in every 3D tool and readout.
+      GEOLIBRE_CESIUM_TOKEN: "${GEOLIBRE_CESIUM_TOKEN:?set the Cesium Ion token in .env}"
+      GEOLIBRE_CESIUM_TERRAIN_ASSET_ID: "2473055"
+      GEOLIBRE_ELEVATION_MEAN_SEA_LEVEL: "1"
+      # Address search through the region's normaliser (eGeoCoding). The key
+      # is `username:password`; leave it empty when a same-origin proxy injects
+      # the credentials and point GEOLIBRE_GEOCODER_ENDPOINT at the proxy.
+      GEOLIBRE_GEOCODER_PROVIDER: "rer"
+      GEOLIBRE_GEOCODER_API_KEY: "${GEOLIBRE_GEOCODER_API_KEY:-}"
+      # Place name under the pointer
+      GEOLIBRE_WHERE_AM_I_URL: "https://servizigis.regione.emilia-romagna.it/geoags/rest/services/portale/where/MapServer/0/query?geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIndexIntersects&outFields=OBJECTID,LOCALIZZAZ,DETTAGLIO&returnGeometry=false&f=pjson"
+      GEOLIBRE_WHERE_AM_I_ACCURATE_URL: "https://servizigis.regione.emilia-romagna.it/geoags/rest/services/portale/where/MapServer/0/query?geometryType=esriGeometryPoint&spatialRel=esriSpatialRelIntersects&outFields=OBJECTID,LOCALIZZAZ,DETTAGLIO&returnGeometry=false&f=pjson"
+      GEOLIBRE_WHERE_AM_I_ID_FIELD: "OBJECTID"
+      GEOLIBRE_WHERE_AM_I_FIELD: "LOCALIZZAZ"
+      GEOLIBRE_WHERE_AM_I_DETAIL_FIELD: "DETTAGLIO"
+      # Coordinate converter on the region's GeometryServer (NTv2 grids live there)
+      GEOLIBRE_COORDS_CONVERTER_URL: "https://servizigis.regione.emilia-romagna.it/arcgis/rest/services/Utilities/Geometry/GeometryServer/project"
+      # Feedback by e-mail
+      GEOLIBRE_FEEDBACK_URL: "mailto:mappe@regione.emilia-romagna.it"
+      GEOLIBRE_FEEDBACK_SUBJECT: "Geoportale 3D — segnalazione"
+      # Keep projects on this instance only; no sidecar unless processing is wanted.
+      GEOLIBRE_SHARE_URL: "off"
+      GEOLIBRE_DISABLE_SIDECAR: "${GEOLIBRE_DISABLE_SIDECAR:-1}"
+    volumes:
+      - ./projects:/usr/share/nginx/html/projects:ro
+      - ./init:/usr/share/nginx/html/init:ro
+      - ./branding:/usr/share/nginx/html/branding:ro
+    restart: unless-stopped
