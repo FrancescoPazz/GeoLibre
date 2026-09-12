@@ -2690,6 +2690,7 @@
       "switchToLight": "Passa alla modalità chiara",
       "switchToDark": "Passa alla modalità scura",
       "keyboardShortcuts": "Scorciatoie da tastiera",
+      "guides": "Guide",
       "website": "Sito web",
       "githubRepository": "Repository GitHub",
       "diagnostics": "Diagnostica",
@@ -3821,6 +3822,121 @@
     "signInRequired": "Accedi per aprire questa voce.",
     "accessDenied": "Il tuo account non può aprire questa voce.",
     "locked": "Voce riservata"
+  },
+  "guides": {
+    "title": "Guide",
+    "description": "Guide passo passo agli strumenti del geoportale.",
+    "measureTools": {
+      "title": "Strumenti di misura",
+      "intro": "Misura quote, distanze, aree e angoli sul globo 3D con Controlli → Misure 3D, leggi il profilo del terreno e conserva la misura come layer.",
+      "gettingStarted": {
+        "title": "Impara gli strumenti di misura",
+        "step1": {
+          "title": "Apri il globo 3D",
+          "text": "Gli strumenti di misura lavorano sul globo 3D. Aprine uno accanto alla mappa con Vista → Vista divisa e il suo interruttore Globo 3D, oppure rendilo la mappa con Vista → Motore di rendering → Cesium 3D."
+        },
+        "step2": {
+          "title": "Apri Misure 3D e scegli una modalità",
+          "text": "Scegli Controlli → Misure 3D. Il pannello offre Punti, Linea, Poligono, Angolo e Cerchio: scegli quella adatta a ciò che ti serve."
+        },
+        "step3": {
+          "title": "Clicca sul globo per misurare",
+          "text": "- Punti legge la quota di ogni punto cliccato\n- Linea misura la distanza tra due o più punti\n- Poligono misura l'area della figura disegnata (clicca di nuovo il primo vertice per chiuderla)\n- Angolo misura l'angolo tra tre punti\n- Cerchio misura raggio e area da un centro e un punto sul bordo"
+        },
+        "step4": {
+          "title": "Leggi la misura nel pannello",
+          "text": "Il pannello elenca i vertici e lunghezza, perimetro, area, angolo o raggio. Le etichette compaiono anche sul globo: spegnile con \"Etichette sulla mappa\"."
+        },
+        "step5": {
+          "title": "Modifica la figura sul globo",
+          "text": "Trascina un vertice per spostarlo, clicca un segmento per inserirvi un vertice, usa Cancella per ricominciare. \"Adagia sul terreno\" posa la linea al suolo; disattivato, unisce i punti in linea d'aria."
+        },
+        "step6": {
+          "title": "Leggi il profilo del terreno",
+          "text": "Per una linea o un poligono il pannello campiona il terreno e traccia il profilo: distanza al suolo, in aria e geodetica per ogni segmento. Cambia il passo di campionamento, o tieni solo i vertici, per bilanciare dettaglio e velocità."
+        },
+        "step7": {
+          "title": "Passa il puntatore sul profilo per orientarti",
+          "text": "Muovi il puntatore sul grafico: il punto corrispondente viene evidenziato sul globo con la sua quota."
+        },
+        "step8": {
+          "title": "Salva la misura come layer",
+          "text": "\"Salva come layer\" aggiunge la figura al progetto come layer GeoJSON con i vertici, le distanze per segmento e il profilo del terreno. Dal pannello Layer puoi esportarla in qualsiasi formato o usarla in Play Path."
+        },
+        "step9": {
+          "title": "Scarica un riepilogo",
+          "text": "\"Riepilogo\" scarica un file di testo con tutti i valori della misura; il layer salvato si esporta in CSV, GeoJSON, KML, GPX e altro dal pannello Layer."
+        }
+      }
+    },
+    "playPath": {
+      "title": "Play Path",
+      "intro": "Fai volare la camera lungo un percorso sul globo 3D con Controlli → Play Path.",
+      "gettingStarted": {
+        "title": "Iniziare con Play Path",
+        "step1": {
+          "title": "Dove funziona Play Path",
+          "text": "Play Path vola sul globo 3D. Aprine uno accanto alla mappa con Vista → Vista divisa e il suo interruttore Globo 3D, oppure rendilo la mappa con Vista → Motore di rendering → Cesium 3D, poi scegli Controlli → Play Path."
+        },
+        "step2": {
+          "title": "Disegna o carica un percorso",
+          "text": "Disegna una linea o un poligono con Controlli → Misure 3D, oppure aggiungi un file di percorso (GPX, KML, GeoJSON) da Aggiungi dati. Il volo segue la figura misurata."
+        },
+        "step3": {
+          "title": "Scegli partenza e direzione",
+          "text": "Il volo parte dall'estremo del percorso più vicino alla camera: avvicina la camera all'estremo da cui vuoi partire. \"Percorso in senso inverso\" indica la direzione scelta."
+        },
+        "step4": {
+          "title": "Imposta velocità e passo",
+          "text": "Regola la velocità e, se vuoi, il passo di campionamento del volo (passo automatico, un passo in metri, o solo i vertici)."
+        },
+        "step5": {
+          "title": "Play, pausa e stop",
+          "text": "Premi Play: un breve conto alla rovescia avvia il volo dalla distanza e inclinazione attuali. Pausa lo ferma a metà; Stop riporta la camera alla partenza."
+        }
+      },
+      "playback": {
+        "title": "Controlli di riproduzione",
+        "step1": {
+          "title": "Play / Pausa",
+          "text": "Avvia il volo o mettilo in pausa dov'è; Play riprende dallo stesso punto."
+        },
+        "step2": {
+          "title": "Stop",
+          "text": "Ferma il volo e riporta la camera al punto di partenza scelto."
+        },
+        "step3": {
+          "title": "Velocità",
+          "text": "Trascina il cursore della velocità per rallentare o accelerare il volo; il pannello mostra il punto corrente del percorso."
+        }
+      },
+      "camera": {
+        "title": "Camera e vista",
+        "step1": {
+          "title": "Posiziona la camera vicino alla partenza",
+          "text": "Avvicina la camera all'estremo da cui vuoi partire: il volo mantiene la distanza e l'inclinazione impostate."
+        },
+        "step2": {
+          "title": "Regola l'inclinazione",
+          "text": "Inclina la camera in base al terreno. Una vista troppo piatta viene rifiutata (\"La vista è troppo piatta per il volo\"): inclina un po' di più la camera prima di avviare."
+        }
+      },
+      "tips": {
+        "title": "Consigli e risoluzione dei problemi",
+        "step1": {
+          "title": "Migliora le prestazioni",
+          "text": "Se il volo va a scatti, riduci la velocità, usa un passo più ampio o solo i vertici, spegni i layer pesanti o dividi il tragitto in percorsi più brevi."
+        },
+        "step2": {
+          "title": "Correggi l'inquadratura",
+          "text": "Se il volo non parte dove ti aspetti, premi Stop, porta la camera all'estremo giusto del percorso e riavvia."
+        },
+        "step3": {
+          "title": "Evita inclinazioni basse in montagna",
+          "text": "In montagna un angolo di camera molto basso taglia il terreno: alza l'inclinazione o allontana la camera per mantenere il contesto."
+        }
+      }
+    }
   },
   "geoportalSignIn": {
     "signIn": "Accedi",

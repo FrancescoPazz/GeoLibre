@@ -121,6 +121,7 @@ import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
 import { MENU_MANAGED_PLUGIN_IDS, isMenuVisible, isPluginVisible } from "../../lib/ui-profile";
 import { CommandPalette } from "../command/CommandPalette";
 import { KeyboardShortcutsDialog } from "../command/KeyboardShortcutsDialog";
+import { GuidesDialog } from "./GuidesDialog";
 import { useGlobalShortcuts } from "../../hooks/useGlobalShortcuts";
 import { useViewportHistory } from "../../hooks/useViewportHistory";
 import type { Command } from "../../lib/commands";
@@ -1388,6 +1389,7 @@ export function TopToolbar({
   const [setViewOpen, setSetViewOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [guidesOpen, setGuidesOpen] = useState(false);
   const [checkForUpdatesRequest, setCheckForUpdatesRequest] = useState(0);
 
   const resetRuntimeControlsForNewProject = () => {
@@ -2482,6 +2484,7 @@ export function TopToolbar({
           diagnosticsErrorCount={diagnosticsErrorCount}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           onOpenShortcuts={() => setShortcutsOpen(true)}
+          onOpenGuides={() => setGuidesOpen(true)}
           onOpenDiagnostics={onOpenDiagnostics}
           onCheckForUpdates={() => {
             setAboutOpen(true);
@@ -2547,6 +2550,7 @@ export function TopToolbar({
           onOpenChange={setCommandPaletteOpen}
         />
       )}
+      <GuidesDialog open={guidesOpen} onOpenChange={setGuidesOpen} />
       {!viewer && (
         <KeyboardShortcutsDialog
           open={shortcutsOpen}

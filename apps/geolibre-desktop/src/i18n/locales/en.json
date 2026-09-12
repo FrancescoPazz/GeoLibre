@@ -2708,6 +2708,7 @@
       "switchToLight": "Switch to Light Mode",
       "switchToDark": "Switch to Dark Mode",
       "keyboardShortcuts": "Keyboard Shortcuts",
+      "guides": "Guides",
       "website": "Website",
       "githubRepository": "GitHub repository",
       "diagnostics": "Diagnostics",
@@ -3904,6 +3905,121 @@
     "signInRequired": "Sign in to open this entry.",
     "accessDenied": "Your account may not open this entry.",
     "locked": "Restricted entry"
+  },
+  "guides": {
+    "title": "Guides",
+    "description": "Step-by-step guides to the geoportal's tools.",
+    "measureTools": {
+      "title": "Measurement tools",
+      "intro": "Measure heights, distances, areas and angles on the 3D globe with Controls → 3D Measure, read the terrain profile, and keep the measurement as a layer.",
+      "gettingStarted": {
+        "title": "Learn the measurement tools",
+        "step1": {
+          "title": "Open the 3D globe",
+          "text": "The measurement tools work on the 3D globe. Open one beside the map with View → Split View and its 3D globe toggle, or make it the map with View → Rendering engine → Cesium 3D."
+        },
+        "step2": {
+          "title": "Open 3D Measure and pick a mode",
+          "text": "Choose Controls → 3D Measure. The panel offers Points, Line, Polygon, Angle and Circle: pick the one that suits what you need."
+        },
+        "step3": {
+          "title": "Click the globe to measure",
+          "text": "- Points reads the height of each point you click\n- Line measures the distance between two or more points\n- Polygon measures the area of the figure you draw (click the first vertex again to close it)\n- Angle measures the angle between three points\n- Circle measures the radius and area from a centre and a point on the rim"
+        },
+        "step4": {
+          "title": "Read the measurement in the panel",
+          "text": "The panel lists the vertices and the length, perimeter, area, angle or radius. The labels are shown on the globe too: switch them off with \"Labels on the map\"."
+        },
+        "step5": {
+          "title": "Edit the figure on the globe",
+          "text": "Drag a vertex to move it, click a segment to insert a vertex there, and use Clear to start again. \"Drape on terrain\" lays the line on the ground; off, it joins the points through the air."
+        },
+        "step6": {
+          "title": "Read the terrain profile",
+          "text": "For a line or a polygon the panel samples the terrain and draws the profile: ground distance, air distance and geodesic distance per segment. Change the sampling step, or keep only the vertices, to trade detail for speed."
+        },
+        "step7": {
+          "title": "Hover the profile to see where you are",
+          "text": "Move the pointer over the chart: the matching point is highlighted on the globe with its height."
+        },
+        "step8": {
+          "title": "Save the measurement as a layer",
+          "text": "\"Save as layer\" adds the figure to the project as a GeoJSON layer with its vertices, the per-segment distances and the terrain profile. From the Layers panel you can export it in any format or use it in Play Path."
+        },
+        "step9": {
+          "title": "Download a summary",
+          "text": "\"Summary\" downloads a plain-text file with every value of the measurement; the saved layer can be exported as CSV, GeoJSON, KML, GPX and more from the Layers panel."
+        }
+      }
+    },
+    "playPath": {
+      "title": "Play Path",
+      "intro": "Fly the camera along a path on the 3D globe with Controls → Play Path.",
+      "gettingStarted": {
+        "title": "Getting started with Play Path",
+        "step1": {
+          "title": "Where Play Path works",
+          "text": "Play Path flies the 3D globe. Open one beside the map with View → Split View and its 3D globe toggle, or make it the map with View → Rendering engine → Cesium 3D, then choose Controls → Play Path."
+        },
+        "step2": {
+          "title": "Draw or load a path",
+          "text": "Draw a line or polygon with Controls → 3D Measure, or add a path file (GPX, KML, GeoJSON) from Add Data. The flight follows the measured figure."
+        },
+        "step3": {
+          "title": "Choose the start and the direction",
+          "text": "The flight starts from whichever end of the path is nearer the camera: move the camera close to the end you want to start from. \"Flying the path backwards\" tells you the direction picked."
+        },
+        "step4": {
+          "title": "Set the speed and the step",
+          "text": "Adjust the speed and, if you like, the sampling step of the flight (Auto step, a step in metres, or the vertices only)."
+        },
+        "step5": {
+          "title": "Play, pause and stop",
+          "text": "Press Play: a short countdown starts the flight from the current distance and tilt. Pause halts it mid-route; Stop returns the camera to the start."
+        }
+      },
+      "playback": {
+        "title": "Playback controls",
+        "step1": {
+          "title": "Play / Pause",
+          "text": "Start the flight, or pause it where it is; Play resumes from the same point."
+        },
+        "step2": {
+          "title": "Stop",
+          "text": "Stop the flight and return the camera to the chosen start point."
+        },
+        "step3": {
+          "title": "Speed",
+          "text": "Drag the speed slider to slow the flight down or speed it up; the panel shows the current point of the path."
+        }
+      },
+      "camera": {
+        "title": "Camera and view settings",
+        "step1": {
+          "title": "Position the camera near the start",
+          "text": "Place the camera close to the end you want to start from: the flight keeps the distance and tilt you set."
+        },
+        "step2": {
+          "title": "Adjust the tilt",
+          "text": "Tilt the camera according to the terrain. A view that is too flat is refused (\"The view is too flat for a path flight\"): tilt the camera down a little more before playing."
+        }
+      },
+      "tips": {
+        "title": "Tips and troubleshooting",
+        "step1": {
+          "title": "Improve performance",
+          "text": "If the flight stutters, lower the speed, use a larger step or the vertices only, switch off heavy layers, or split the route into shorter paths."
+        },
+        "step2": {
+          "title": "Fix the framing",
+          "text": "If the flight does not start where expected, press Stop, move the camera to the right end of the path and play again."
+        },
+        "step3": {
+          "title": "Avoid a low tilt in steep terrain",
+          "text": "In the mountains a very low camera angle clips the terrain: raise the tilt or move the camera further away to keep the context."
+        }
+      }
+    }
   },
   "geoportalSignIn": {
     "signIn": "Sign in",

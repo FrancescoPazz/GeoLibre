@@ -852,6 +852,7 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     labelKey: "toolbar.command.keyboardShortcuts",
     tier: "intermediate",
   },
+  { id: "help.guides", menuId: "help", labelKey: "toolbar.command.guides", tier: "basic" },
   { id: "help.website", menuId: "help", labelKey: "toolbar.command.website", tier: "basic" },
   {
     id: "help.github",

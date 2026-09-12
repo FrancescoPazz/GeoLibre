@@ -8,6 +8,7 @@ import {
   DropdownMenuTrigger,
 } from "@geolibre/ui";
 import {
+  BookOpen,
   Bug,
   CircleHelp,
   FolderGit2,
@@ -42,6 +43,7 @@ interface HelpMenuProps {
   diagnosticsErrorCount: number;
   onOpenCommandPalette: () => void;
   onOpenShortcuts: () => void;
+  onOpenGuides: () => void;
   onOpenDiagnostics: () => void;
   onCheckForUpdates: () => void;
   onAbout: () => void;
@@ -54,6 +56,7 @@ export function HelpMenu({
   diagnosticsErrorCount,
   onOpenCommandPalette,
   onOpenShortcuts,
+  onOpenGuides,
   onOpenDiagnostics,
   onCheckForUpdates,
   onAbout,
@@ -96,7 +99,13 @@ export function HelpMenu({
             {t("toolbar.command.keyboardShortcuts")}
           </DropdownMenuItem>
         )}
-        {(show("help.commandPalette") || show("help.keyboardShortcuts")) && (
+        {show("help.guides") && (
+          <DropdownMenuItem onSelect={onOpenGuides}>
+            <BookOpen className="me-2 h-3.5 w-3.5" />
+            {t("toolbar.command.guides")}
+          </DropdownMenuItem>
+        )}
+        {(show("help.commandPalette") || show("help.keyboardShortcuts") || show("help.guides")) && (
           <DropdownMenuSeparator />
         )}
         {show("help.website") && (
