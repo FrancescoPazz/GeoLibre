@@ -99,3 +99,102 @@ test("a catalog that cannot be loaded says so and stays listed", async ({ page }
   await openCatalogPanel(page);
   await expect(page.getByText("Could not load the catalog at").first()).toBeVisible();
 });
+
+// A geojson entry with queryableProperties: adding it puts Query data in
+// the Controls menu, and the panel seeds one filter per property, counts
+// the matching features and narrows them when a filter is answered.
+const QUERY_CATALOG = {
+  catalog: [
+    {
+      type: "geojson",
+      id: "interventi",
+      name: "Interventi",
+      url: "https://catalog.test/interventi.json",
+      queryableProperties: [
+        { propertyName: "tipo", propertyLabel: "Tipo", propertyType: "enum", canAggregate: true },
+        {
+          propertyName: "comune",
+          propertyLabel: "Comune",
+          propertyType: "enum",
+          canAggregate: true,
+        },
+        {
+          propertyName: "costo",
+          propertyLabel: "Costo",
+          propertyType: "number",
+          propertyMeasureUnit: "€",
+          sumOnAggregation: true,
+        },
+      ],
+    },
+  ],
+};
+
+const INTERVENTI = {
+  type: "FeatureCollection",
+  features: [
+    {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [11.3, 44.5] },
+      properties: { tipo: "strada", comune: "Bologna", costo: 100 },
+    },
+    {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [11.4, 44.6] },
+      properties: { tipo: "ponte", comune: "Imola", costo: 300 },
+    },
+    {
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [11.5, 44.7] },
+      properties: { tipo: "strada", comune: "Imola", costo: 50 },
+    },
+  ],
+};
+
+test("a queryable catalog layer opens the Query data panel with its filters and counts", async ({
+  page,
+}) => {
+  await page.route("https://catalog.test/**", async (route) => {
+    const url = route.request().url();
+    const body =
+      url === CATALOG_URL ? QUERY_CATALOG : url.endsWith("interventi.json") ? INTERVENTI : null;
+    if (body) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(body),
+      });
+      return;
+    }
+    await route.fulfill({ status: 204 });
+  });
+  await waitForMap(page);
+  await openCatalogPanel(page);
+  const item = page.locator('[data-catalog-item="interventi"]');
+  await expect(item).toBeVisible();
+  await item.click();
+  await expect(item).toHaveAttribute("aria-pressed", "true");
+
+  await page.getByRole("button", { name: "Controls", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Query data", exact: true }).click();
+  const panel = page.getByTestId("query-panel");
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId("query-matching")).toHaveText("3 of 3 features match");
+  // One quick filter per property was seeded: the enums as pick-lists.
+  const filters = panel.getByTestId("quick-filter");
+  await expect(filters).toHaveCount(3);
+  await panel.getByTestId("query-chart-model").selectOption("pivot");
+  await expect(page.getByTestId("query-pivot")).toContainText("strada");
+  await expect(page.getByTestId("query-pivot")).toContainText("ponte");
+  await filters
+    .first()
+    .getByRole("checkbox", { name: /strada/ })
+    .check();
+  await expect(page.getByTestId("query-matching")).toHaveText("2 of 3 features match");
+  // Grouping by the filtered property is no longer offered; the next one is,
+  // and the pivot aggregates only the matching features.
+  await expect(panel.getByTestId("query-aggregate-by")).toHaveValue("comune");
+  await expect(page.getByTestId("query-pivot")).toContainText("Bologna");
+  await expect(page.getByTestId("query-pivot")).toContainText("Imola");
+  await expect(page.getByTestId("query-pivot")).not.toContainText("ponte");
+});

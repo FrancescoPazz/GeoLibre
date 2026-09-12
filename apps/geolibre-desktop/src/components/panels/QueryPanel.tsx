@@ -371,6 +371,7 @@ function ChartsTab({
             className={selectClass}
             value={model}
             onChange={(e) => setModel(e.target.value as ChartModel)}
+            data-testid="query-chart-model"
           >
             <option value="pie">{t("toolbar.queryData.pie")}</option>
             <option value="bars">{t("toolbar.queryData.bars")}</option>
