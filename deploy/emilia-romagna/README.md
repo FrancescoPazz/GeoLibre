@@ -42,6 +42,7 @@ http(s) URL), naming the variable.
 | `GEOLIBRE_WHERE_AM_I_*`                                     | The place name under the pointer in the status bar                                                                                                                                                                                                     |
 | `GEOLIBRE_COORDS_CONVERTER_URL`                             | Controls → Coordinate converter, on the region's GeometryServer (Monte Mario, ED50, ETRS89, RDN2008, UTM, with its NTv2 grids)                                                                                                                         |
 | `GEOLIBRE_FEEDBACK_*`                                       | Help → Give feedback opens a pre-addressed e-mail                                                                                                                                                                                                      |
+| `GEOLIBRE_LOGIN_SERVICE_URL`, `GEOLIBRE_USER_PROFILES`      | **Sign in** in the toolbar (HTTP Basic against GeoServer, session in memory only), which unlocks catalog entries with `allowedGroups`, carries the header to services with `useAuthentication`, and gates the query tools by profile                   |
 
 The Emilia-Romagna basemaps (DBTR webmap, DBTR CTR, the AGEA/CGR orthophotos)
 are built into the basemap picker's Regional section; the start project selects
@@ -54,7 +55,9 @@ the Controls menu.
 - A same-origin proxy that injects the geocoder credentials (so the browser
   never sees them). The region's own map services send CORS headers, so no
   proxy is needed for the catalog.
-- A sign-in gate or per-group catalog visibility: see the migration analysis
-  for what the old geoportal actually enforced.
-- The full catalog tree, the query window and the in-app guides: they need
-  the production init files and guide text, which are not in any repository.
+- Server-side enforcement: as in the old geoportal, `allowedGroups` and the
+  per-profile popup fields are applied in the browser; a service that must
+  stay private has to check the Basic header itself.
+- The full catalog tree: `init/catalogo-rapido.json` is the quick catalog;
+  drop the production init files next to it and list them in
+  `GEOLIBRE_CATALOG_URLS`.

@@ -33,6 +33,7 @@ import {
   reattachRouteAnimation,
   reattachFlightSimulator,
   reattachRer3dTools,
+  restoreRerPoiLayers,
   setElevationBandsGeoid,
   setMeasure3dGeoid,
   restoreArcGISViewportLayers,
@@ -1319,6 +1320,10 @@ export function DesktopShell({
     // destroys or brings into existence; rebinding here is also what makes an
     // already-open panel come alive when the globe mounts.
     reattachRer3dTools(appAPI);
+    // The regional POI layer loads what the viewport shows; a restored one is
+    // an empty GeoJSON layer until its loader is running again. Engine-neutral:
+    // it follows the store's view, not a map instance.
+    restoreRerPoiLayers(appAPI);
     if (!engine.capabilities.nativeMapInstance) {
       void restoreLocalFileLayers();
       return;

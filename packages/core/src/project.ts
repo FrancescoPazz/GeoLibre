@@ -1677,7 +1677,19 @@ function hasRestorableSourceUrl(layer: GeoLibreLayer): boolean {
   );
 }
 
+/** Layer metadata flag: the layer's service is asked with the geoportal session's Authorization. */
+export const USE_AUTHENTICATION_METADATA_KEY = "useAuthentication";
+
 function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
+  // A layer whose service is protected by the geoportal sign-in carries the
+  // session's Authorization header in `source.requestHeaders` while the user
+  // is signed in. That header is the user's own credentials and the session
+  // is memory-only by design, so it never goes into a project file: the host
+  // puts it back on load when the user signs in again.
+  if (layer.metadata[USE_AUTHENTICATION_METADATA_KEY] === true && layer.source.requestHeaders) {
+    const { requestHeaders: _requestHeaders, ...source } = layer.source;
+    layer = { ...layer, source };
+  }
   // The live time filter is derived from the Time Slider's current date, so it
   // is transient: strip it before saving so a reopened project never starts
   // with a stale time-window filter hiding most of a layer's features. The

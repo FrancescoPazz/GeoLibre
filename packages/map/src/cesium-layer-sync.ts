@@ -58,6 +58,7 @@ import { renderFillPatternCanvas } from "./fill-patterns";
 import { getLayerBounds } from "./geojson-loader";
 import { getPMTilesArchive } from "./layer-sync";
 import { renderMarkerCanvas } from "./markers";
+import { allowsCredentials } from "./request-credentials";
 import { normalizePMTilesUrl } from "./pmtiles-layer";
 import type { Header as PMTilesHeader } from "pmtiles";
 import type {
@@ -327,29 +328,6 @@ export function extractTimeFilterDate(filter: unknown): Date | null {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
-}
-
-/**
- * Whether credential-bearing request headers may be sent to this URL.
- *
- * The scheme is read off a parsed URL rather than matched as a prefix, so an
- * unusually-cased `HTTPS://` from a hand-authored or MCP-generated project is
- * normalized instead of being misread as plaintext. A relative or unparseable
- * URL throws and is refused, matching `isAllowedPluginManifestUrl` in
- * `@geolibre/core`.
- */
-function allowsCredentials(url: string): boolean {
-  try {
-    const { protocol, hostname } = new URL(url);
-    if (protocol === "https:") return true;
-    // Loopback over http so a local dev tile server still works.
-    return (
-      protocol === "http:" &&
-      (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]")
-    );
-  } catch {
-    return false;
-  }
 }
 
 function firstTile(layer: GeoLibreLayer): string | undefined {

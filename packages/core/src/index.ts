@@ -177,6 +177,26 @@ export {
 } from "./crs-conversion";
 export { getBranding, isBrandAssetUrl, type Branding } from "./branding";
 export {
+  GeoportalLoginError,
+  basicAuthorization,
+  canAccessGroups,
+  getGeoportalLoginConfig,
+  getGeoportalProfile,
+  getGeoportalProfiles,
+  getGeoportalSession,
+  isFeatureAllowedByProfile,
+  isGeoportalAuthenticated,
+  parseFirstGroup,
+  setGeoportalSession,
+  signInGeoportal,
+  signOutGeoportal,
+  subscribeGeoportalSession,
+  type GeoportalLoginConfig,
+  type GeoportalLoginFailure,
+  type GeoportalProfileDefinition,
+  type GeoportalSession,
+} from "./geoportal-session";
+export {
   getBuildEnvironment,
   getCesiumIonToken,
   getCesiumTerrainAssetId,

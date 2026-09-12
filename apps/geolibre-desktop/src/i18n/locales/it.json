@@ -3732,7 +3732,25 @@
     "expand": "Espandi",
     "collapse": "Comprimi",
     "removeSource": "Rimuovi questo catalogo",
-    "home": "Vai alla vista iniziale del catalogo"
+    "home": "Vai alla vista iniziale del catalogo",
+    "signInRequired": "Accedi per aprire questa voce.",
+    "accessDenied": "Il tuo account non può aprire questa voce.",
+    "locked": "Voce riservata"
+  },
+  "geoportalSignIn": {
+    "signIn": "Accedi",
+    "signOut": "Esci",
+    "signingIn": "Accesso in corso…",
+    "title": "Accedi al geoportale",
+    "description": "Le credenziali vengono verificate sul map server del geoportale e conservate solo per questa sessione: i layer protetti vengono richiesti con esse e un ricaricamento della pagina ti disconnette.",
+    "username": "Nome utente",
+    "password": "Password",
+    "missingCredentials": "Inserisci nome utente e password.",
+    "invalidCredentials": "Nome utente o password non corretti.",
+    "connectionError": "Impossibile raggiungere il servizio di accesso.",
+    "genericError": "Accesso non riuscito. Riprova più tardi.",
+    "signedInAs": "Connesso come {{name}}",
+    "profile": "Profilo: {{profile}}"
   },
   "arcgisHub": {
     "hint": "Cerca dataset pubblici da ArcGIS Hub. Aggiungi alla mappa i layer supportati o scarica i dati.",

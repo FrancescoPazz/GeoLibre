@@ -1,11 +1,26 @@
-import { getRuntimeEnvironment, useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import {
+  USE_AUTHENTICATION_METADATA_KEY,
+  canAccessGroups,
+  createCesiumIonLayer,
+  getGeoportalSession,
+  getRuntimeEnvironment,
+  isGeoportalAuthenticated,
+  subscribeGeoportalSession,
+  useAppStore,
+  type GeoLibreLayer,
+  type LayerPopupConfig,
+  type LayerStyle,
+  type PopupFieldConfig,
+} from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import type { GeoLibreAppAPI, GeoLibrePlugin } from "../../types";
 import { addArcGISLayer, fetchArcGISMapServiceSublayers } from "../arcgis-layer";
+import { addRerPoiLayer, rerPoiOptionsFromCatalogItem } from "../rer-poi";
 import {
   filterCatalog,
   findCatalogNode,
   parseTerriaCatalogText,
+  type CatalogFeatureInfo,
   type CatalogGroup,
   type CatalogItem,
   type CatalogNode,
@@ -31,6 +46,14 @@ export const TERRIA_CATALOG_PLUGIN_ID = "terria-catalog";
 const PANEL_ID = TERRIA_CATALOG_PLUGIN_ID;
 /** Layer metadata key holding `{ source, item }` for a layer this plugin added. */
 export const CATALOG_LAYER_METADATA_KEY = "terriaCatalog";
+/** Layer metadata key holding the item's `queryableProperties`, for the query tools. */
+export const QUERYABLE_PROPERTIES_METADATA_KEY = "queryableProperties";
+/** Layer metadata key holding the item's per-profile popup fields. */
+export const PER_PROFILE_FIELDS_METADATA_KEY = "perProfileInfoFields";
+/** Layer metadata: the item's full popup field list, before any profile narrowing. */
+export const POPUP_FIELDS_METADATA_KEY = "popupFields";
+/** Layer metadata key holding the property the search box looks in. */
+export const SEARCH_FIELD_METADATA_KEY = "searchField";
 
 export interface TerriaCatalogLabels {
   title: string;
@@ -43,6 +66,12 @@ export interface TerriaCatalogLabels {
   searchPlaceholder: string;
   noMatches: string;
   unsupported: (type: string) => string;
+  /** The entry is restricted and the user is not signed in. */
+  signInRequired: string;
+  /** The entry is restricted to groups the signed-in user is not in. */
+  accessDenied: string;
+  /** Badge on a restricted entry the user may not open. */
+  locked: string;
   add: string;
   remove: string;
   adding: (name: string) => string;
@@ -66,6 +95,9 @@ export const DEFAULT_TERRIA_CATALOG_LABELS: TerriaCatalogLabels = {
   searchPlaceholder: "Filter the catalog",
   noMatches: "Nothing matches.",
   unsupported: (type) => `Not supported here (${type})`,
+  signInRequired: "Sign in to open this entry.",
+  accessDenied: "Your account may not open this entry.",
+  locked: "Restricted entry",
   add: "Add to map",
   remove: "Remove from map",
   adding: (name) => `Adding ${name}…`,
@@ -127,6 +159,7 @@ let unregisterPanel: (() => void) | null = null;
 let disposePanel: (() => void) | null = null;
 let rerender: (() => void) | null = null;
 let unsubscribeStore: (() => void) | null = null;
+let unsubscribeSession: (() => void) | null = null;
 let loadGeneration = 0;
 const listeners = new Set<() => void>();
 
@@ -291,6 +324,12 @@ export async function expandMapServerGroup(
       attribution: node.attribution,
       opacity: node.opacity,
       inWorkbench: false,
+      allowedGroups: node.allowedGroups,
+      hideWhenUnauthorized: node.hideWhenUnauthorized,
+      useAuthentication: node.useAuthentication,
+      disableExport: node.disableExport,
+      clustering: false,
+      extra: {},
     }));
     source.resolvedGroups.set(groupId, children);
     return children;
@@ -383,6 +422,21 @@ async function addLayerFor(app: GeoLibreAppAPI, item: CatalogItem): Promise<stri
       if (data?.type !== "FeatureCollection") throw new Error("Not a FeatureCollection");
       return app.addGeoJsonLayer(item.name, data, item.url);
     }
+    case "3d-tiles": {
+      if (item.ionAssetId === undefined) throw new Error("3D Tiles item without an Ion asset id");
+      const layer = createCesiumIonLayer({
+        name: item.name,
+        assetId: item.ionAssetId,
+        kind: "3d-tiles",
+      });
+      useAppStore.getState().addLayer(layer);
+      return layer.id;
+    }
+    case "rer-poi": {
+      const options = rerPoiOptionsFromCatalogItem(item);
+      if (!options) throw new Error("POI item without url");
+      return addRerPoiLayer(app, options);
+    }
     case "open-street-map": {
       if (!item.url) throw new Error("Tile item without url");
       const template = /\{z\}/.test(item.url)
@@ -397,6 +451,196 @@ async function addLayerFor(app: GeoLibreAppAPI, item: CatalogItem): Promise<stri
   }
 }
 
+/** The popup configuration a TerriaJS `featureInfoTemplate` amounts to. */
+export function popupConfigFromFeatureInfo(info: CatalogFeatureInfo): LayerPopupConfig {
+  const popup: LayerPopupConfig = {};
+  const title = info.name?.trim();
+  if (title) {
+    const single = /^\{\{\s*([\w.-]+)\s*\}\}$/.exec(title);
+    if (single) popup.titleField = single[1];
+    else if (!title.includes("{{")) popup.titleExpression = JSON.stringify(title);
+  }
+  if (info.partials) {
+    popup.fields = Object.entries(info.partials).map(([field, label]): PopupFieldConfig => {
+      const format = info.formats?.[field];
+      const config: PopupFieldConfig = { field, label };
+      if (format?.type === "number") {
+        config.kind = "number";
+        config.format = { thousands: format.useGrouping === true };
+      } else if (format?.type === "dateTime" || format?.type === "date") {
+        config.kind = "date";
+        config.format = { dateFormat: format.type === "date" ? "date" : "datetime" };
+      }
+      return config;
+    });
+  }
+  return popup;
+}
+
+/**
+ * The popup fields a profile may see: the item's field list narrowed to the
+ * profile's allowance (`"undefined"` names the anonymous user), or all of
+ * them when the profile is not listed there.
+ */
+export function popupFieldsForProfile(
+  fields: readonly PopupFieldConfig[] | undefined,
+  perProfile: Record<string, string[]> | undefined,
+  profile: string | null,
+): PopupFieldConfig[] | undefined {
+  if (!perProfile) return fields ? [...fields] : undefined;
+  const allowed = perProfile[profile ?? "undefined"];
+  if (!allowed) return fields ? [...fields] : undefined;
+  const allowedSet = new Set(allowed);
+  const base = fields ?? allowed.map((field): PopupFieldConfig => ({ field }));
+  return base.filter((f) => allowedSet.has(f.field));
+}
+
+/** What a catalog item asks of the layer beyond its data: style, popup, capabilities, metadata. */
+function configureLayerFromItem(layerId: string, item: CatalogItem, sourceUrl: string): void {
+  const store = useAppStore.getState();
+  const layer = store.layers.find((l) => l.id === layerId);
+  if (!layer) return;
+  const patch: Partial<GeoLibreLayer> = {};
+  const metadata: Record<string, unknown> = {
+    ...layer.metadata,
+    [CATALOG_LAYER_METADATA_KEY]: { source: sourceUrl, item: item.id },
+  };
+  if (item.useAuthentication) metadata[USE_AUTHENTICATION_METADATA_KEY] = true;
+  if (item.queryableProperties)
+    metadata[QUERYABLE_PROPERTIES_METADATA_KEY] = item.queryableProperties;
+  if (item.featureInfo?.perProfileInfoFields) {
+    metadata[PER_PROFILE_FIELDS_METADATA_KEY] = item.featureInfo.perProfileInfoFields;
+  }
+  if (item.searchField) metadata[SEARCH_FIELD_METADATA_KEY] = item.searchField;
+  patch.metadata = metadata;
+  if (item.disableExport) patch.capabilities = { ...(layer.capabilities ?? {}), export: false };
+  if (item.featureInfo) {
+    const popup = popupConfigFromFeatureInfo(item.featureInfo);
+    if (!popup.titleField && !popup.titleExpression && item.searchField)
+      popup.titleField = item.searchField;
+    if (item.featureInfo.perProfileInfoFields) {
+      // Keep the whole list: the profile can change after the layer is added.
+      metadata[POPUP_FIELDS_METADATA_KEY] = popup.fields ?? [];
+      popup.fields = popupFieldsForProfile(
+        popup.fields,
+        item.featureInfo.perProfileInfoFields,
+        getGeoportalSession().profile,
+      );
+    }
+    patch.popup = popup;
+  } else if (item.searchField) {
+    patch.popup = { ...(layer.popup ?? {}), titleField: item.searchField };
+  }
+  if (item.type === "geojson") {
+    const style: LayerStyle = { ...layer.style };
+    let changed = false;
+    if (item.clustering && style.pointRenderer === "single") {
+      style.pointRenderer = "cluster";
+      changed = true;
+    }
+    // TerriaJS perPropertyStyles: one colour per matched property value, as a
+    // categorized style on the first property the entries agree on.
+    const entries = item.perPropertyStyles ?? [];
+    const property = entries.length ? Object.keys(entries[0].properties)[0] : undefined;
+    if (
+      property &&
+      entries.every((e) => Object.keys(e.properties).length === 1 && property in e.properties)
+    ) {
+      const stops = entries
+        .map((e) => {
+          const color = e.style["marker-color"] ?? e.style.fill ?? e.style.stroke;
+          const value = e.properties[property];
+          return typeof color === "string" &&
+            (typeof value === "string" || typeof value === "number")
+            ? { value, color }
+            : null;
+        })
+        .filter((stop): stop is { value: string | number; color: string } => stop !== null);
+      if (stops.length) {
+        style.vectorStyleMode = "categorized";
+        style.vectorStyleProperty = property;
+        style.vectorStyleStops = stops;
+        changed = true;
+      }
+    }
+    const fill = item.style?.fill ?? item.style?.["marker-color"];
+    if (typeof fill === "string") {
+      style.fillColor = fill;
+      style.markerColor = fill;
+      changed = true;
+    }
+    const stroke = item.style?.stroke;
+    if (typeof stroke === "string") {
+      style.strokeColor = stroke;
+      changed = true;
+    }
+    if (changed) patch.style = style;
+  }
+  if (item.useAuthentication) {
+    const authorization = getGeoportalSession().authorization;
+    if (authorization) {
+      patch.source = {
+        ...layer.source,
+        requestHeaders: {
+          ...((layer.source.requestHeaders as object) ?? {}),
+          Authorization: authorization,
+        },
+      };
+    }
+  }
+  store.updateLayer(layerId, patch);
+}
+
+/**
+ * Bring every layer the catalog tagged in line with the session: the
+ * Authorization header on layers whose service is asked with it (added on
+ * sign-in, removed on sign-out — also for layers a project file restored),
+ * and the popup fields the current profile may see. Layers already in line
+ * are left untouched, so calling this after any change converges.
+ */
+export function applyGeoportalSessionToLayers(): void {
+  const store = useAppStore.getState();
+  const { authorization, profile } = getGeoportalSession();
+  for (const layer of store.layers) {
+    const patch: Partial<GeoLibreLayer> = {};
+    if (layer.metadata[USE_AUTHENTICATION_METADATA_KEY] === true) {
+      const headers = (layer.source.requestHeaders ?? {}) as Record<string, string>;
+      if (authorization && headers.Authorization !== authorization) {
+        patch.source = {
+          ...layer.source,
+          requestHeaders: { ...headers, Authorization: authorization },
+        };
+      } else if (!authorization && headers.Authorization !== undefined) {
+        const { Authorization: _dropped, ...rest } = headers;
+        patch.source = {
+          ...layer.source,
+          requestHeaders: Object.keys(rest).length ? rest : undefined,
+        };
+      }
+    }
+    const perProfile = layer.metadata[PER_PROFILE_FIELDS_METADATA_KEY] as
+      | Record<string, string[]>
+      | undefined;
+    const fields = layer.metadata[POPUP_FIELDS_METADATA_KEY] as PopupFieldConfig[] | undefined;
+    if (perProfile && fields) {
+      const next = popupFieldsForProfile(fields, perProfile, profile) ?? [];
+      const current = layer.popup?.fields ?? [];
+      const same =
+        next.length === current.length && next.every((f, i) => f.field === current[i]?.field);
+      if (!same) patch.popup = { ...(layer.popup ?? {}), fields: next };
+    }
+    if (Object.keys(patch).length) store.updateLayer(layer.id, patch);
+  }
+}
+
+/** Whether the user may open the item now; sets the status line when not. */
+function checkAccess(item: CatalogItem): boolean {
+  if (canAccessGroups(item.allowedGroups)) return true;
+  status = isGeoportalAuthenticated() ? labels.accessDenied : labels.signInRequired;
+  notify();
+  return false;
+}
+
 /** Add the catalog item to the map as a layer tagged with its catalog id. */
 export async function addCatalogItem(sourceUrl: string, itemId: string): Promise<string | null> {
   const app = appRef;
@@ -405,19 +649,14 @@ export async function addCatalogItem(sourceUrl: string, itemId: string): Promise
   if (!app || !item || !item.supported) return null;
   const key = `${sourceUrl}|${itemId}`;
   if (addedLayers().has(key) || busy.has(itemId)) return null;
+  if (!checkAccess(item)) return null;
   busy.add(itemId);
   status = labels.adding(item.name);
   notify();
   try {
     const layerId = await addLayerFor(app, item);
     if (!appRef) return null;
-    const layer = useAppStore.getState().layers.find((l) => l.id === layerId);
-    useAppStore.getState().updateLayer(layerId, {
-      metadata: {
-        ...(layer?.metadata ?? {}),
-        [CATALOG_LAYER_METADATA_KEY]: { source: sourceUrl, item: itemId },
-      },
-    });
+    configureLayerFromItem(layerId, item, sourceUrl);
     status = labels.added(item.name);
     return layerId;
   } catch (error) {
@@ -472,6 +711,7 @@ export function searchCatalogItems(query: string, limit = 6): CatalogSearchMatch
       if (
         node.supported &&
         node.type !== "esri-mapServer-group" &&
+        !hiddenFromUser(node) &&
         node.name.toLowerCase().includes(q)
       ) {
         out.push({ sourceUrl, item: node, path });
@@ -554,6 +794,7 @@ function renderItem(
   added: Map<string, GeoLibreLayer>,
 ): void {
   const isAdded = added.has(`${source.url}|${item.id}`);
+  const accessible = canAccessGroups(item.allowedGroups);
   const row = element(
     "div",
     undefined,
@@ -561,6 +802,7 @@ function renderItem(
       (isAdded ? styles.itemAdded : "") +
       (item.supported ? "" : styles.itemUnsupported),
   );
+  if (item.allowedGroups && !accessible) row.dataset.catalogLocked = "true";
   row.style.paddingInlineStart = `${8 + depth * 14}px`;
   row.setAttribute("role", "button");
   row.setAttribute("aria-pressed", String(isAdded));
@@ -571,6 +813,12 @@ function renderItem(
   row.appendChild(element("span", item.name));
   if (!item.supported)
     row.appendChild(element("span", labels.unsupported(item.type), styles.badge));
+  if (item.allowedGroups && !accessible) {
+    const badge = element("span", "🔒", styles.badge);
+    badge.title = labels.locked;
+    badge.setAttribute("aria-label", labels.locked);
+    row.appendChild(badge);
+  }
   if (item.supported) {
     row.addEventListener("click", () => {
       void toggleCatalogItem(source.url, item.id);
@@ -602,6 +850,13 @@ function renderGroupRow(
   return open;
 }
 
+/** A restricted node the user may not open, when its file asks for it to be hidden. */
+function hiddenFromUser(node: CatalogNode): boolean {
+  return (
+    Boolean(node.allowedGroups) && node.hideWhenUnauthorized && !canAccessGroups(node.allowedGroups)
+  );
+}
+
 function renderNodes(
   list: HTMLElement,
   source: CatalogSource,
@@ -610,6 +865,7 @@ function renderNodes(
   added: Map<string, GeoLibreLayer>,
 ): void {
   for (const node of nodes) {
+    if (hiddenFromUser(node)) continue;
     if (node.kind === "group") {
       const open = renderGroupRow(
         list,
@@ -750,8 +1006,20 @@ export const terriaCatalogPlugin: GeoLibrePlugin = {
   activate: (app) => {
     appRef = app;
     unsubscribeStore ??= useAppStore.subscribe((state, previous) => {
-      if (state.layers !== previous.layers) rerender?.();
+      if (state.layers === previous.layers) return;
+      rerender?.();
+      // A project file may restore layers that ask for the session header;
+      // after the store settles, hand it to them (a no-op when nothing differs).
+      if (state.layers.length !== previous.layers.length)
+        queueMicrotask(applyGeoportalSessionToLayers);
     });
+    // Signing in or out changes which entries are open and which are locked,
+    // which layers carry the session header, and what a popup may show.
+    unsubscribeSession ??= subscribeGeoportalSession(() => {
+      applyGeoportalSessionToLayers();
+      notify();
+    });
+    applyGeoportalSessionToLayers();
     unregisterPanel =
       app.registerRightPanel?.({
         id: PANEL_ID,
@@ -779,6 +1047,8 @@ export const terriaCatalogPlugin: GeoLibrePlugin = {
     unregisterPanel = null;
     unsubscribeStore?.();
     unsubscribeStore = null;
+    unsubscribeSession?.();
+    unsubscribeSession = null;
     appRef = null;
     loadGeneration += 1;
   },
@@ -814,9 +1084,12 @@ export {
   parseTerriaCatalog,
   parseTerriaCatalogText,
   stripJsonComments,
+  type CatalogAccess,
+  type CatalogFeatureInfo,
   type CatalogGroup,
   type CatalogItem,
   type CatalogNode,
+  type QueryableProperty,
   type SupportedCatalogItemType,
   type TerriaCatalog,
 } from "./catalog-model";

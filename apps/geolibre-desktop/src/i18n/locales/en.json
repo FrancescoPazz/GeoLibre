@@ -3815,7 +3815,25 @@
     "expand": "Expand",
     "collapse": "Collapse",
     "removeSource": "Remove this catalog",
-    "home": "Go to the catalog's home view"
+    "home": "Go to the catalog's home view",
+    "signInRequired": "Sign in to open this entry.",
+    "accessDenied": "Your account may not open this entry.",
+    "locked": "Restricted entry"
+  },
+  "geoportalSignIn": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "signingIn": "Signing in…",
+    "title": "Sign in to the geoportal",
+    "description": "Your credentials are checked against the geoportal's map server and kept only for this session: the protected layers are asked with them, and a reload signs you out.",
+    "username": "Username",
+    "password": "Password",
+    "missingCredentials": "Enter a username and a password.",
+    "invalidCredentials": "The username or password is not right.",
+    "connectionError": "The sign-in service could not be reached.",
+    "genericError": "Sign-in failed. Try again later.",
+    "signedInAs": "Signed in as {{name}}",
+    "profile": "Profile: {{profile}}"
   },
   "arcgisHub": {
     "hint": "Search public datasets from ArcGIS Hub. Add supported layers to the map or download data.",

@@ -18,11 +18,59 @@ export const SUPPORTED_CATALOG_ITEM_TYPES = [
   "esri-mapServer-group",
   "geojson",
   "open-street-map",
+  "3d-tiles",
+  "rer-poi",
 ] as const;
 
 export type SupportedCatalogItemType = (typeof SUPPORTED_CATALOG_ITEM_TYPES)[number];
 
-export interface CatalogGroup {
+/**
+ * Who may open a node, and how a node the user may not open is shown.
+ * Set on a group or an item; a node without its own value takes its
+ * parent's, so a whole branch is restricted by one line on the group.
+ */
+export interface CatalogAccess {
+  /** The user groups that may open the node; absent means public. */
+  allowedGroups?: string[];
+  /** Hide the node from users who may not open it, instead of listing it locked. */
+  hideWhenUnauthorized: boolean;
+  /** Ask the node's service with the session's Authorization header. */
+  useAuthentication: boolean;
+}
+
+/** A property a query tool can filter or aggregate on (`queryableProperties`). */
+export interface QueryableProperty {
+  propertyName: string;
+  propertyLabel: string;
+  propertyType: "enum" | "number" | "date" | "string" | "dictionary";
+  canAggregate?: boolean;
+  enumMultiValue?: boolean;
+  propertyMeasureUnit?: string;
+  sumOnAggregation?: boolean;
+  distributionOnAggregation?: boolean;
+  dictionaryKeyProperties?: Array<{
+    key: string;
+    alias: string;
+    queryProperty: string;
+    valueProperty: string;
+  }>;
+}
+
+/** The feature popup as a TerriaJS `featureInfoTemplate` describes it. */
+export interface CatalogFeatureInfo {
+  /** The title: a `{{field}}` mustache, or literal text. */
+  name?: string;
+  /** Field → label, in display order. */
+  partials?: Record<string, string>;
+  /** Field → value format. */
+  formats?: Record<string, { type?: string; useGrouping?: boolean; format?: string }>;
+  /** Profile name → the fields that profile may see (`"undefined"` is the anonymous user). */
+  perProfileInfoFields?: Record<string, string[]>;
+  /** A per-feature entitlement check the old geoportal asked before showing every field. */
+  webServiceUrlProfileCheck?: string;
+}
+
+export interface CatalogGroup extends CatalogAccess {
   kind: "group";
   id: string;
   name: string;
@@ -32,7 +80,7 @@ export interface CatalogGroup {
   members: CatalogNode[];
 }
 
-export interface CatalogItem {
+export interface CatalogItem extends CatalogAccess {
   kind: "item";
   id: string;
   name: string;
@@ -51,6 +99,25 @@ export interface CatalogItem {
   tileSize?: number;
   /** The file listed this item in its initial workbench. */
   inWorkbench: boolean;
+  /** A Cesium Ion asset (`3d-tiles` items). */
+  ionAssetId?: number;
+  /** The item's features are not to be exported (`disableExport`). */
+  disableExport: boolean;
+  /** Cluster the points (`clustering`, boolean or `{ enabled }`). */
+  clustering: boolean;
+  /** The property the search box looks in for this item's features. */
+  searchField?: string;
+  queryableProperties?: QueryableProperty[];
+  featureInfo?: CatalogFeatureInfo;
+  /** TerriaJS `perPropertyStyles`: property match → simplestyle keys. */
+  perPropertyStyles?: Array<{
+    properties: Record<string, unknown>;
+    style: Record<string, unknown>;
+  }>;
+  /** TerriaJS simplestyle defaults for a vector item. */
+  style?: Record<string, unknown>;
+  /** Everything else the item carried, for type-specific handlers (`rer-poi`). */
+  extra: Record<string, unknown>;
 }
 
 export type CatalogNode = CatalogGroup | CatalogItem;
@@ -105,11 +172,138 @@ function parametersOf(raw: unknown): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
+const PUBLIC_ACCESS: CatalogAccess = { hideWhenUnauthorized: false, useAuthentication: false };
+
+/** The node's access rules: its own where set, its parent's otherwise. */
+function accessOf(r: Record<string, unknown>, inherited: CatalogAccess): CatalogAccess {
+  const groups = Array.isArray(r.allowedGroups)
+    ? r.allowedGroups.filter((g): g is string => typeof g === "string")
+    : undefined;
+  return {
+    allowedGroups: groups ?? inherited.allowedGroups,
+    hideWhenUnauthorized:
+      typeof r.hideWhenUnauthorized === "boolean"
+        ? r.hideWhenUnauthorized
+        : inherited.hideWhenUnauthorized,
+    useAuthentication:
+      typeof r.useAuthentication === "boolean" ? r.useAuthentication : inherited.useAuthentication,
+  };
+}
+
+function queryablePropertiesOf(raw: unknown): QueryableProperty[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: QueryableProperty[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const propertyName = str(e.propertyName);
+    if (!propertyName) continue;
+    const type = str(e.propertyType);
+    out.push({
+      propertyName,
+      propertyLabel: str(e.propertyLabel) ?? propertyName,
+      propertyType:
+        type === "enum" || type === "number" || type === "date" || type === "dictionary"
+          ? type
+          : "string",
+      canAggregate: e.canAggregate === true,
+      enumMultiValue: e.enumMultiValue === true,
+      propertyMeasureUnit: str(e.propertyMeasureUnit),
+      sumOnAggregation: e.sumOnAggregation === true,
+      distributionOnAggregation: e.distributionOnAggregation === true,
+      dictionaryKeyProperties: Array.isArray(e.dictionaryKeyProperties)
+        ? e.dictionaryKeyProperties
+            .filter((d): d is Record<string, unknown> => Boolean(d) && typeof d === "object")
+            .map((d) => ({
+              key: str(d.key) ?? "",
+              alias: str(d.alias) ?? "",
+              queryProperty: str(d.queryProperty) ?? "",
+              valueProperty: str(d.valueProperty) ?? "",
+            }))
+        : undefined,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+function featureInfoOf(raw: unknown): CatalogFeatureInfo | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const t = raw as Record<string, unknown>;
+  const record = (value: unknown): Record<string, string> | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+  const formats = (value: unknown) => {
+    if (!value || typeof value !== "object") return undefined;
+    const out: NonNullable<CatalogFeatureInfo["formats"]> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v && typeof v === "object") {
+        const f = v as Record<string, unknown>;
+        out[k] = { type: str(f.type), useGrouping: f.useGrouping === true, format: str(f.format) };
+      }
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+  const perProfile = (value: unknown) => {
+    if (!value || typeof value !== "object") return undefined;
+    const out: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (Array.isArray(v)) out[k] = v.filter((f): f is string => typeof f === "string");
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+  const info: CatalogFeatureInfo = {
+    name: str(t.name),
+    partials: record(t.partials),
+    formats: formats(t.formats),
+    perProfileInfoFields: perProfile(t.perProfileInfoFields),
+    webServiceUrlProfileCheck: str(t.webServiceUrlProfileCheck),
+  };
+  return Object.values(info).some((v) => v !== undefined) ? info : undefined;
+}
+
+const KNOWN_ITEM_KEYS = new Set([
+  "type",
+  "id",
+  "name",
+  "url",
+  "layers",
+  "layer",
+  "description",
+  "info",
+  "shortReport",
+  "attribution",
+  "opacity",
+  "parameters",
+  "styles",
+  "tileWidth",
+  "tileHeight",
+  "isOpen",
+  "members",
+  "items",
+  "allowedGroups",
+  "hideWhenUnauthorized",
+  "useAuthentication",
+  "ionAssetId",
+  "disableExport",
+  "clustering",
+  "nameOfCatalogItemSearchField",
+  "queryableProperties",
+  "featureInfoTemplate",
+  "perPropertyStyles",
+  "style",
+]);
+
 function parseNode(
   raw: unknown,
   path: string,
   index: number,
   workbench: Set<string>,
+  inherited: CatalogAccess = PUBLIC_ACCESS,
 ): CatalogNode | null {
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
@@ -117,6 +311,7 @@ function parseNode(
   if (!type) return null;
   const id = str(r.id) ?? fallbackId(path, index);
   const name = str(r.name) ?? id;
+  const access = accessOf(r, inherited);
   if (type === "group") {
     // v8 files nest under `members`; the older v7 files this format grew out
     // of used `items`, and geoportals still carry some of those.
@@ -127,8 +322,9 @@ function parseNode(
       name,
       description: descriptionOf(r),
       isOpen: r.isOpen === true,
+      ...access,
       members: members
-        .map((member, i) => parseNode(member, id, i, workbench))
+        .map((member, i) => parseNode(member, id, i, workbench, access))
         .filter((node): node is CatalogNode => node !== null),
     };
   }
@@ -152,6 +348,32 @@ function parseNode(
     styles: str(r.styles),
     tileSize: tileWidth,
     inWorkbench: workbench.has(id),
+    ...access,
+    ionAssetId: num(r.ionAssetId),
+    disableExport: r.disableExport === true,
+    clustering:
+      r.clustering === true ||
+      (typeof r.clustering === "object" &&
+        r.clustering !== null &&
+        (r.clustering as { enabled?: unknown }).enabled === true),
+    searchField: str(r.nameOfCatalogItemSearchField),
+    queryableProperties: queryablePropertiesOf(r.queryableProperties),
+    featureInfo: featureInfoOf(r.featureInfoTemplate),
+    perPropertyStyles: Array.isArray(r.perPropertyStyles)
+      ? r.perPropertyStyles
+          .filter((e): e is Record<string, unknown> => Boolean(e) && typeof e === "object")
+          .map((e) => ({
+            properties:
+              e.properties && typeof e.properties === "object"
+                ? (e.properties as Record<string, unknown>)
+                : {},
+            style:
+              e.style && typeof e.style === "object" ? (e.style as Record<string, unknown>) : {},
+          }))
+      : undefined,
+    style:
+      r.style && typeof r.style === "object" ? (r.style as Record<string, unknown>) : undefined,
+    extra: Object.fromEntries(Object.entries(r).filter(([k]) => !KNOWN_ITEM_KEYS.has(k))),
   };
 }
 

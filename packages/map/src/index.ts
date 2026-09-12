@@ -19,6 +19,13 @@ export { SecondaryMapCanvas, type SecondaryMapCanvasProps } from "./SecondaryMap
 export { CesiumCanvas, type CesiumCanvasProps } from "./CesiumCanvas";
 export { getPrimaryCesiumControlHost } from "./cesium-control-host";
 export {
+  allowsCredentials,
+  layerRequestHeaders,
+  layerRequestHosts,
+  requestHeadersByHost,
+  transformRequestWithHeaders,
+} from "./request-credentials";
+export {
   getPaneCesiumEngines,
   registerPaneCesiumEngine,
   subscribePaneCesiumEngines,

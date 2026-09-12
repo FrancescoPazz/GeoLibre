@@ -11,6 +11,7 @@ import {
   type MapEngine,
 } from "@geolibre/map";
 import { useBranding } from "../../hooks/useBranding";
+import { GeoportalSignIn } from "../auth/GeoportalSignIn";
 import { useMapCapabilities } from "../../hooks/useMapCapabilities";
 import {
   closeDuckDBLayerPanel,
@@ -386,6 +387,9 @@ export function TopToolbar({
       searchPlaceholder: t("terriaCatalog.searchPlaceholder"),
       noMatches: t("terriaCatalog.noMatches"),
       unsupported: (type) => t("terriaCatalog.unsupported", { type }),
+      signInRequired: t("terriaCatalog.signInRequired"),
+      accessDenied: t("terriaCatalog.accessDenied"),
+      locked: t("terriaCatalog.locked"),
       add: t("terriaCatalog.add"),
       remove: t("terriaCatalog.remove"),
       adding: (name) => t("terriaCatalog.adding", { name }),
@@ -2551,6 +2555,7 @@ export function TopToolbar({
         />
       )}
       <div className="ms-auto flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        <GeoportalSignIn />
         <Button
           aria-label={
             themeMode === "dark"

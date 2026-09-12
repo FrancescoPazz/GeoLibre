@@ -824,6 +824,24 @@ START_PROJECT_URL=/projects/geoportale.geolibre.json
 
 An http(s) URL or a path served next to the app. A project named on the page URL (`?project=`, `?url=`) still wins, and the file is opened without being added to the recent projects. `START_PROJECT_URL` (or `VITE_START_PROJECT_URL`) follows the same build/deployment/runtime rules as the other variables above.
 
+### Sign-in and restricted catalog entries
+
+A geoportal whose map server protects some services can let users sign in. The deployment names the resource the credentials are checked against — a GeoServer REST resource, typically; `<username>` in the URL is replaced by the name typed in — and the toolbar gains a **Sign in** entry:
+
+```env
+LOGIN_SERVICE_URL=https://gis.example.org/geoserver/rest/security/usergroup/user/<username>/groups
+```
+
+The credentials go to that resource as an HTTP Basic header (so use https) and are kept in memory for the session only: a reload signs the user out. The first `<group>` in the answer becomes the user's _profile_. Catalog entries with `allowedGroups` open only to the profiles listed there (a group's setting applies to its members unless they set their own; an empty list admits nobody); with `hideWhenUnauthorized` they are hidden rather than shown locked. Entries with `useAuthentication` are asked with the session's header — on both the 2D map and the globe — and the header is never written to a project file. A `featureInfoTemplate` with `perProfileInfoFields` narrows the popup fields to what the profile may see (`"undefined"` names the anonymous user).
+
+`USER_PROFILES` maps profile names to what they may do, as JSON — the `userProfilesDefinition` of the old geoportal — and gates the query and download tools:
+
+```env
+USER_PROFILES={"Cittadino":{"allowed":["QueryData"]},"Tecnico":{"allowed":["QueryData","DownloadQueryData"]},"Admin":{"isAdmin":true}}
+```
+
+Without it every tool is open to everyone. Both variables (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above. The visibility rules are applied in the browser, as they were in the old geoportal: a service that must stay private has to check the header itself.
+
 ### Deployment defaults in the Docker image
 
 Every variable in the sections above can also be given to the prebuilt Docker image at container start as `GEOLIBRE_<NAME>` (`GEOLIBRE_CESIUM_TOKEN`, `GEOLIBRE_BRAND_NAME`, …): the entrypoint validates it and publishes it to the app as `VITE_<NAME>`, so no rebuild is needed. The deployment layer sits between the build and whatever a user or project sets. For the geocoder, the deployment's provider (with its key and endpoints) becomes the default of every project that has not chosen one; a project that carries its own choice keeps it. See [Self-hosting](self-hosting.md#2-host-the-geolibre-web-build-next-to-it).

@@ -49,6 +49,11 @@ services:
       # Feedback by e-mail
       GEOLIBRE_FEEDBACK_URL: "mailto:mappe@regione.emilia-romagna.it"
       GEOLIBRE_FEEDBACK_SUBJECT: "Geoportale 3D — segnalazione"
+      # Sign-in (optional): the GeoServer resource the credentials are checked
+      # against, and what each profile may do. Leave both empty for a portal
+      # without protected entries.
+      GEOLIBRE_LOGIN_SERVICE_URL: "${GEOLIBRE_LOGIN_SERVICE_URL:-}"
+      GEOLIBRE_USER_PROFILES: "${GEOLIBRE_USER_PROFILES:-}"
       # Keep projects on this instance only; no sidecar unless processing is wanted.
       GEOLIBRE_SHARE_URL: "off"
       GEOLIBRE_DISABLE_SIDECAR: "${GEOLIBRE_DISABLE_SIDECAR:-1}"

@@ -77,6 +77,7 @@ import { TerrainControl, DEFAULT_TERRAIN_EXAGGERATION } from "./terrain-control"
 import { getDynamicPaintProperty, setDynamicPaintProperty } from "./dynamic-style-property";
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import { installMapTransformCompat } from "./map-transform-compat";
+import { requestHeadersByHost, transformRequestWithHeaders } from "./request-credentials";
 import {
   MAPLIBRE_CAPABILITIES,
   type BuiltInMapControl,
@@ -627,6 +628,11 @@ export class MapController implements MapEngine {
       canvasContextAttributes: { preserveDrawingBuffer: true },
     });
     ensureGeneratedImageHandler(this.map);
+    // Layers that carry `source.requestHeaders` (a session token for a
+    // protected WMS, say) get them on every tile request to their host — the
+    // 2D counterpart of the `Cesium.Resource` headers the globe already sends.
+    // The host table is rebuilt by syncLayers; the hook is a lookup.
+    this.map.setTransformRequest((url) => transformRequestWithHeaders(this.requestHeaders, url));
     installGlobePopupOcclusion(maplibregl);
     // Per-layer blend modes wrap MapLibre's render loop, so they have to be in
     // place before the first frame. Feature-detected: an unsupported build
@@ -1360,6 +1366,7 @@ export class MapController implements MapEngine {
     }
     this.layerIds = nextIds;
     this.syncedLayers = layers;
+    this.requestHeaders = requestHeadersByHost(layers);
     // Blend modes are read inside the render loop rather than from a paint
     // property, so a mode that changed without any other paint change still
     // needs a frame asking for it. The repaint is gated on THIS controller's
@@ -1382,6 +1389,8 @@ export class MapController implements MapEngine {
 
   private styleLoadHandler: (() => void) | null = null;
   private styleReloadHandler: (() => void) | null = null;
+  /** Request headers by host, from the synced layers; read by the request transform. */
+  private requestHeaders: ReadonlyMap<string, Record<string, string>> = new Map();
 
   waitAndSyncLayers(layers: GeoLibreLayer[]): void {
     if (!this.map) return;
