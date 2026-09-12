@@ -99,7 +99,12 @@ import {
   closeFloatingPanel,
   getOpenFloatingPanels,
 } from "@geolibre/plugins";
-import { CesiumEngine, getPrimaryCesiumControlHost, type MapEngine } from "@geolibre/map";
+import {
+  CesiumEngine,
+  getPaneCesiumEngines,
+  getPrimaryCesiumControlHost,
+  type MapEngine,
+} from "@geolibre/map";
 import type {
   GeoLibreCogLayerOptions,
   GeoLibreCogRenderEngine,
@@ -1074,6 +1079,14 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
     getCesiumScene: () => {
       const engine = mapControllerRef?.current;
       return engine instanceof CesiumEngine ? engine.getCesiumScene() : null;
+    },
+    getCesiumScenes: () => {
+      const engine = mapControllerRef?.current;
+      const primary = engine instanceof CesiumEngine ? engine.getCesiumScene() : null;
+      const panes = getPaneCesiumEngines()
+        .map((pane) => pane.getCesiumScene())
+        .filter((scene): scene is NonNullable<typeof scene> => scene !== null);
+      return primary ? [primary, ...panes] : panes;
     },
     getProjectSnapshot: () => buildProjectEgressSnapshot(mapControllerRef ?? { current: null }),
     openExternalUrl: (url: string) => void openExternalLink(url),

@@ -92,6 +92,8 @@ interface Binding {
   entities: Entity[];
   previousCursor: string;
   releaseTiles: () => void;
+  /** A point being dragged, with the camera inputs suspended until it is let go. */
+  dragging: { which: "observer" | "target"; restoreInputs: () => void } | null;
 }
 let binding: Binding | null = null;
 
@@ -155,13 +157,15 @@ function settingsEqual(a: LineOfSightSettings, b: LineOfSightSettings): boolean 
 }
 
 /**
- * The globe the tool binds to: the primary one only. A grid pane's globe is a
- * comparison view that plugins are not handed, and `getCesiumScene()` is
- * absent on hosts that predate the globe.
+ * The globe the tool binds to: the primary one when the primary map is a
+ * globe, else the first globe in a grid pane — the arrangement a geoportal
+ * runs in, the 2D map primary and the globe beside it for the 3D tools.
+ * Hosts that predate `getCesiumScenes` offer the primary globe only.
  */
 function primaryGlobe(app: GeoLibreAppAPI): CesiumSceneHandle | null {
-  const globe = app.getCesiumScene?.() ?? null;
-  return globe?.primary ? globe : null;
+  const scenes = app.getCesiumScenes?.();
+  if (scenes) return scenes[0] ?? null;
+  return app.getCesiumScene?.() ?? null;
 }
 
 function live(): Binding | null {
@@ -268,8 +272,54 @@ function applyCursor(b: Binding): void {
   canvas.style.cursor = placing ? "crosshair" : b.previousCursor;
 }
 
+/** Which of the two points is under the pointer, if either. */
+function pointAt(b: Binding, position: Cartesian2): "observer" | "target" | null {
+  const picked = b.handle.scene.pick(position) as { id?: { id?: unknown } } | undefined;
+  const id = picked?.id?.id;
+  if (id === ENTITY_ID.observer) return "observer";
+  if (id === ENTITY_ID.target) return "target";
+  return null;
+}
+
+function onLeftDown(b: Binding, position: Cartesian2): void {
+  if (b.dragging) return;
+  const which = pointAt(b, position);
+  if (!which) return;
+  // Take the drag away from the camera: without this the globe pans under
+  // the point. Restored when the button comes up, even mid-detach.
+  const controller = b.handle.scene.screenSpaceCameraController;
+  const previous = controller.enableInputs;
+  controller.enableInputs = false;
+  b.dragging = {
+    which,
+    restoreInputs: () => {
+      if (!b.handle.viewer.isDestroyed()) controller.enableInputs = previous;
+    },
+  };
+}
+
+function onMouseMove(b: Binding, position: Cartesian2): void {
+  if (!b.dragging) return;
+  const { Cesium: C, viewer } = b.handle;
+  const picked = pickGroundPosition(C, viewer, position);
+  if (!picked) return;
+  const ground = toLngLatAlt(C, picked);
+  if (b.dragging.which === "observer") observer = ground;
+  else target = ground;
+  refresh(b);
+}
+
+function endDrag(b: Binding): void {
+  const drag = b.dragging;
+  b.dragging = null;
+  drag?.restoreInputs();
+}
+
 function onClick(b: Binding, position: Cartesian2): void {
   const { Cesium: C, viewer } = b.handle;
+  // A click on a placed point is the end of a drag or a missed grab, not a
+  // new measurement.
+  if (pointAt(b, position)) return;
   const picked = pickGroundPosition(C, viewer, position);
   if (!picked) return;
   const ground = toLngLatAlt(C, picked);
@@ -310,12 +360,27 @@ function attach(app: GeoLibreAppAPI): void {
     entities: [],
     previousCursor: viewer.canvas.style.cursor,
     releaseTiles: () => {},
+    dragging: null,
   };
   binding = b;
   handler.setInputAction((movement: { position: Cartesian2 }) => {
     if (!open || live() !== b) return;
     onClick(b, movement.position);
   }, C.ScreenSpaceEventType.LEFT_CLICK);
+  // Placed points can be dragged to a new spot, the way the old geoportal
+  // let its measurement handles be moved.
+  handler.setInputAction((movement: { position: Cartesian2 }) => {
+    if (!open || live() !== b) return;
+    onLeftDown(b, movement.position);
+  }, C.ScreenSpaceEventType.LEFT_DOWN);
+  handler.setInputAction((movement: { endPosition: Cartesian2 }) => {
+    if (live() !== b) return;
+    onMouseMove(b, movement.endPosition);
+  }, C.ScreenSpaceEventType.MOUSE_MOVE);
+  handler.setInputAction(() => {
+    if (live() !== b) return;
+    endDrag(b);
+  }, C.ScreenSpaceEventType.LEFT_UP);
   // Terrain refines as tiles load, and `globe.pick` only sees loaded tiles,
   // so the answer is re-asked once loading settles rather than every frame.
   b.releaseTiles = watchTiles(handle, () => {
@@ -334,6 +399,7 @@ function detach(): void {
   binding = null;
   if (!b) return;
   b.releaseTiles();
+  endDrag(b);
   if (!b.handle.viewer.isDestroyed()) {
     b.handle.canvas.style.cursor = b.previousCursor;
     removeEntities(b);
@@ -342,7 +408,7 @@ function detach(): void {
   if (!b.handler.isDestroyed()) b.handler.destroy();
 }
 
-/** Open the panel and, when a primary globe is mounted, start listening for clicks. */
+/** Open the panel and, when a globe is mounted, start listening for clicks. */
 export function openLineOfSightPanel(app: GeoLibreAppAPI): void {
   open = true;
   attach(app);

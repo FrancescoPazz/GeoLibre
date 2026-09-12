@@ -142,9 +142,16 @@ export function isMeasure3dPanelVisible(): boolean {
   return open;
 }
 
+/**
+ * The globe the tool binds to: the primary one when the primary map is a
+ * globe, else the first globe in a grid pane — the arrangement a geoportal
+ * runs in, the 2D map primary and the globe beside it for the 3D tools.
+ * Hosts that predate `getCesiumScenes` offer the primary globe only.
+ */
 function primaryGlobe(app: GeoLibreAppAPI): CesiumSceneHandle | null {
-  const globe = app.getCesiumScene?.() ?? null;
-  return globe?.primary ? globe : null;
+  const scenes = app.getCesiumScenes?.();
+  if (scenes) return scenes[0] ?? null;
+  return app.getCesiumScene?.() ?? null;
 }
 
 function liveDrawing(): CesiumDrawing | null {

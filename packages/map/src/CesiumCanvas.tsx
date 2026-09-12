@@ -16,6 +16,7 @@ import { installCesiumInteractions } from "./cesium-interactions";
 import { CesiumEngine } from "./cesium-engine";
 import type { BuiltInMapControl, MapEngine } from "./map-engine";
 import { CesiumControlHost, setPrimaryCesiumControlHost } from "./cesium-control-host";
+import { registerPaneCesiumEngine, unregisterPaneCesiumEngine } from "./cesium-pane-registry";
 import type {
   CesiumWidgetControlHandle,
   CesiumWidgetControls,
@@ -489,10 +490,14 @@ export const CesiumCanvas = memo(function CesiumCanvas({
             () => popupCloseLabelRef.current ?? "Close",
           );
 
-        // Publish the engine only for the primary globe — see `engineRef`.
+        // Publish the engine only for the primary globe — see `engineRef`. A
+        // pane's globe goes to the pane registry instead, so plugins that draw
+        // on a globe can find one while the 2D map is primary.
         if (isPrimaryRef.current && engineRefProp.current) {
           engineRefProp.current.current = engine;
           onEngineReadyRef.current?.();
+        } else if (viewIdRef.current !== undefined) {
+          registerPaneCesiumEngine(viewIdRef.current, engine);
         }
 
         if (!cancelled) setReady(true);
@@ -508,6 +513,11 @@ export const CesiumCanvas = memo(function CesiumCanvas({
       // destroyed below.
       interactionCleanup.current?.();
       interactionCleanup.current = null;
+      // Withdraw a pane globe before it is destroyed, so a plugin bound to it
+      // is told to let go rather than find a dead viewer.
+      if (viewIdRef.current !== undefined && engineInstanceRef.current) {
+        unregisterPaneCesiumEngine(viewIdRef.current, engineInstanceRef.current);
+      }
       engineInstanceRef.current?.destroy();
       // Clear the published ref before the engine is torn down, so nothing can
       // reach a destroyed engine through it. Only ours is cleared: a pane never

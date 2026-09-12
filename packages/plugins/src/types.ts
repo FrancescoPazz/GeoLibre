@@ -602,6 +602,15 @@ export interface GeoLibreAppAPI {
    */
   getCesiumScene?: () => CesiumSceneHandle | null;
   /**
+   * Every live Cesium globe, the primary one first when the primary map is a
+   * globe, then the globes in grid panes in mount order. For a tool that
+   * works on *a* globe rather than the primary map — measuring on terrain,
+   * a line of sight — so it can run in a pane while the 2D map stays primary.
+   * The handles' `primary` flag says which is which. Empty when no globe is
+   * mounted.
+   */
+  getCesiumScenes?: () => CesiumSceneHandle[];
+  /**
    * Open an http(s) URL in the system browser. Needed because the Tauri
    * desktop webview ignores `window.open`/`target="_blank"` and would open the
    * link inside the app instead; the host routes through the opener plugin

@@ -2,7 +2,12 @@
 import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import type { MapDiagnosticEvent, MapEngine } from "@geolibre/map";
-import { getLayerBounds, MapCanvas, setExternalDeckLayerOrderHandler } from "@geolibre/map";
+import {
+  getLayerBounds,
+  MapCanvas,
+  setExternalDeckLayerOrderHandler,
+  subscribePaneCesiumEngines,
+} from "@geolibre/map";
 import { useTranslation } from "react-i18next";
 import {
   addRasterToMap,
@@ -1385,6 +1390,16 @@ export function DesktopShell({
    */
   const primaryRenderer = useAppStore((s) => s.primaryRenderer);
   const cesiumPrimary = primaryRenderer === "cesium";
+  // A globe in a grid pane is what the 3D tools bind to while the 2D map is
+  // primary; the pane registry says when one mounts or goes away, and the
+  // tools re-bind exactly as they do when the primary engine is rebuilt.
+  useEffect(
+    () =>
+      subscribePaneCesiumEngines(() => {
+        reattachRer3dTools(createAppAPI(mapControllerRef));
+      }),
+    [],
+  );
   // The EGM96 grid the 3D tools refer heights to mean sea level with. It is
   // a static asset fetched on first use, so wiring it is a one-time hand-over
   // rather than something the renderer swap has to redo.

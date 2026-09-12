@@ -210,10 +210,21 @@ function makeGlobe(
     isDestroyed: () => destroyed,
   };
   const handlers: ClickListener[] = [];
+  const actions = new Map<string, (movement: Record<string, Cesium.Cartesian2>) => void>();
+  /** The entity id `scene.pick` answers with for the next pointer event. */
+  let entityUnderPointer: string | null = null;
+  (scene as unknown as { pick: (p: Cesium.Cartesian2) => unknown }).pick = () =>
+    entityUnderPointer ? { id: { id: entityUnderPointer } } : undefined;
+  (
+    scene as unknown as { screenSpaceCameraController: { enableInputs: boolean } }
+  ).screenSpaceCameraController = {
+    enableInputs: true,
+  };
   let handlerDestroyed = false;
   class FakeHandler {
     setInputAction(fn: ClickListener, type: unknown) {
       if (type === "LEFT_CLICK") handlers.push(fn);
+      actions.set(String(type), fn as (movement: Record<string, Cesium.Cartesian2>) => void);
     }
     destroy() {
       handlerDestroyed = true;
@@ -227,7 +238,12 @@ function makeGlobe(
     Cesium: {
       ...Cesium,
       ScreenSpaceEventHandler: FakeHandler,
-      ScreenSpaceEventType: { LEFT_CLICK: "LEFT_CLICK", MOUSE_MOVE: "MOUSE_MOVE" },
+      ScreenSpaceEventType: {
+        LEFT_CLICK: "LEFT_CLICK",
+        LEFT_DOWN: "LEFT_DOWN",
+        LEFT_UP: "LEFT_UP",
+        MOUSE_MOVE: "MOUSE_MOVE",
+      },
     },
     viewer,
     scene,
@@ -256,6 +272,29 @@ function makeGlobe(
       nextPick = null;
     },
     settleTiles: () => scene.globe.tileLoadProgressEvent.raiseEvent(0),
+    /** Press on the named point, move it to `to`, release. */
+    drag: (which: "observer" | "target", to: Cesium.Cartesian3) => {
+      const px = new Cesium.Cartesian2(1, 1);
+      entityUnderPointer = `geolibre-line-of-sight-${which}`;
+      actions.get("LEFT_DOWN")?.({ position: px });
+      entityUnderPointer = null;
+      nextPick = to;
+      actions.get("MOUSE_MOVE")?.({ startPosition: px, endPosition: px });
+      nextPick = null;
+      actions.get("LEFT_UP")?.({ position: px });
+    },
+    pressOnPoint: (which: "observer" | "target") => {
+      entityUnderPointer = `geolibre-line-of-sight-${which}`;
+      actions.get("LEFT_DOWN")?.({ position: new Cesium.Cartesian2(1, 1) });
+    },
+    cameraInputs: () =>
+      (scene as unknown as { screenSpaceCameraController: { enableInputs: boolean } })
+        .screenSpaceCameraController.enableInputs,
+    clickOnPoint: (which: "observer" | "target") => {
+      entityUnderPointer = `geolibre-line-of-sight-${which}`;
+      for (const fn of handlers) fn({ position: new Cesium.Cartesian2(1, 1) });
+      entityUnderPointer = null;
+    },
     handlerCount: () => handlers.length,
     handlerDestroyed: () => handlerDestroyed,
     renders: () => renders,
@@ -297,11 +336,38 @@ describe("line-of-sight tool", () => {
     assert.equal(globe.canvas.style.cursor, "crosshair");
   });
 
-  it("does not bind to a grid pane's globe", () => {
+  it("binds to a grid pane's globe when that is the only one", () => {
+    // The geoportal arrangement: the 2D map primary, the globe in a pane.
     const pane = makeGlobe({ primary: false });
     openLineOfSightPanel(globeApp(pane));
-    assert.equal(getLineOfSightSnapshot().phase, "unavailable");
-    assert.equal(pane.handlerCount(), 0);
+    assert.equal(getLineOfSightSnapshot().phase, "observer");
+    assert.equal(pane.handlerCount(), 1);
+  });
+
+  it("lets a placed point be dragged, with the camera held still meanwhile", () => {
+    const globe = makeGlobe();
+    openLineOfSightPanel(globeApp(globe));
+    globe.click(at(ORIGIN.lng, ORIGIN.lat, 500));
+    globe.click(at(ORIGIN.lng + 0.05, ORIGIN.lat, 500));
+    assert.equal(getLineOfSightSnapshot().phase, "done");
+    const before = getLineOfSightSnapshot().result?.totalMeters ?? 0;
+
+    globe.pressOnPoint("target");
+    assert.equal(globe.cameraInputs(), false, "the globe does not pan under the drag");
+    globe.drag("target", at(ORIGIN.lng + 0.1, ORIGIN.lat, 500));
+    assert.equal(globe.cameraInputs(), true, "inputs restored on release");
+    const after = getLineOfSightSnapshot();
+    assert.equal(after.phase, "done");
+    assert.ok(Math.abs((after.target?.lng ?? 0) - (ORIGIN.lng + 0.1)) < 1e-9);
+    assert.ok((after.result?.totalMeters ?? 0) > before * 1.5, "the line followed the point");
+
+    globe.drag("observer", at(ORIGIN.lng + 0.02, ORIGIN.lat, 500));
+    assert.ok(Math.abs((getLineOfSightSnapshot().observer?.lng ?? 0) - (ORIGIN.lng + 0.02)) < 1e-9);
+
+    // A click that lands on a point is not a new measurement.
+    globe.clickOnPoint("observer");
+    assert.equal(getLineOfSightSnapshot().phase, "done");
+    assert.ok(Math.abs((getLineOfSightSnapshot().observer?.lng ?? 0) - (ORIGIN.lng + 0.02)) < 1e-9);
   });
 
   it("walks observer → target → result, drawing the sight line", () => {
