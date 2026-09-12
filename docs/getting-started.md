@@ -840,7 +840,7 @@ The credentials go to that resource as an HTTP Basic header (so use https) and a
 USER_PROFILES={"Cittadino":{"allowed":["QueryData"]},"Tecnico":{"allowed":["QueryData","DownloadQueryData"]},"Admin":{"isAdmin":true}}
 ```
 
-Without it every tool is open to everyone. Both variables (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above. The visibility rules are applied in the browser, as they were in the old geoportal: a service that must stay private has to check the header itself.
+Without it every tool is open to everyone. The names the query panel checks are `QueryData` (opening it) and `DownloadQueryData` (its downloads). Both variables (or their `VITE_` spellings) follow the same build/deployment/runtime rules as the other variables above. The visibility rules are applied in the browser, as they were in the old geoportal: a service that must stay private has to check the header itself.
 
 ### Deployment defaults in the Docker image
 

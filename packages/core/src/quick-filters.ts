@@ -1,3 +1,5 @@
+import { featureFilter } from "@maplibre/maplibre-gl-style-spec";
+import type { Feature, Geometry } from "geojson";
 import type { GeoLibreLayer, LayerQuickFilter } from "./types";
 
 /**
@@ -241,4 +243,47 @@ export function clearQuickFilterValues(
     end: filter.kind === "date" ? null : filter.end,
     text: filter.kind === "text" ? "" : filter.text,
   }));
+}
+
+const GEOMETRY_TYPE_CODES: Record<string, 1 | 2 | 3> = {
+  Point: 1,
+  MultiPoint: 1,
+  LineString: 2,
+  MultiLineString: 2,
+  Polygon: 3,
+  MultiPolygon: 3,
+};
+
+/**
+ * A predicate that says whether a feature passes the quick filters, evaluated
+ * in plain JavaScript with the same expression engine the map uses — so a
+ * tool that counts, tabulates or aggregates "what the map shows" agrees with
+ * the map. Every feature passes when nothing constrains.
+ *
+ * @param filters - The layer's persisted quick filters.
+ * @param zoom - The zoom the expression sees; only matters for zoom-dependent filters.
+ */
+export function createQuickFilterMatcher(
+  filters: readonly LayerQuickFilter[] | undefined,
+  zoom = 0,
+): (feature: Feature<Geometry | null>) => boolean {
+  const expression = compileQuickFilters(filters);
+  if (!expression) return () => true;
+  let compiled: ReturnType<typeof featureFilter>;
+  try {
+    compiled = featureFilter(expression as never, "layers[0].filter");
+  } catch {
+    return () => true;
+  }
+  return (feature) => {
+    try {
+      return compiled.filter({ zoom }, {
+        type: (feature.geometry?.type && GEOMETRY_TYPE_CODES[feature.geometry.type]) ?? 1,
+        properties: (feature.properties as Record<string, unknown> | null) ?? {},
+        id: feature.id,
+      } as never);
+    } catch {
+      return true;
+    }
+  };
 }

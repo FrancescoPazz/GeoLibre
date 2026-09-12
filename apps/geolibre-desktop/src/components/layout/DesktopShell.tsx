@@ -193,6 +193,7 @@ import { getSharedGeoid } from "../../lib/geoid";
 import { GlobeClippingPanel } from "../panels/GlobeClippingPanel";
 import { ElevationBandsPanel } from "../panels/ElevationBandsPanel";
 import { CoordsConverterPanel } from "../panels/CoordsConverterPanel";
+import { QueryPanel } from "../panels/QueryPanel";
 import {
   PluginRightPanel,
   PLUGIN_PANEL_DEFAULT_WIDTH,
@@ -2851,6 +2852,12 @@ export function DesktopShell({
             displayName={t("shell.section.coordsConverterPanel")}
           >
             <CoordsConverterPanel mapControllerRef={mapControllerRef} />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Query data panel"
+            displayName={t("shell.section.queryPanel")}
+          >
+            <QueryPanel mapControllerRef={mapControllerRef} />
           </SectionErrorBoundary>
           <KnowledgeCardConsentDialog
             open={knowledgeNoticeOpen}

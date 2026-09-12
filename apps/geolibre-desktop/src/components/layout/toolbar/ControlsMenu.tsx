@@ -45,6 +45,7 @@ import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
 import { isMaptoolkitBasemapActive } from "../../../lib/maptoolkit-basemap";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import { useCoordsConverterUrl } from "../../panels/CoordsConverterPanel";
+import { useHasQueryableLayer } from "../../panels/QueryPanel";
 import {
   LOGO_CONTROL_IDS,
   MAP_CONTROL_ITEMS,
@@ -122,6 +123,7 @@ export function ControlsMenu({
   const capabilities = useMapCapabilities();
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
   const coordsConverterConfigured = Boolean(useCoordsConverterUrl());
+  const queryableLayerPresent = useHasQueryableLayer();
   const show = (id: string) =>
     viewer && AUTHORING_CONTROL_ITEMS.includes(id) ? false : isMenuItemVisible(uiProfile, id);
   // Atmospheric effects only render on the globe (the engine idles in Mercator),
@@ -179,6 +181,7 @@ export function ControlsMenu({
     show("controls.globeClipping") ||
     show("controls.elevationBands") ||
     (show("controls.coordsConverter") && coordsConverterConfigured) ||
+    (show("controls.queryData") && queryableLayerPresent) ||
     show("controls.directions") ||
     show("controls.reverseGeocode");
   // Whether the middle group (panels) has any visible item. The separator that
@@ -329,6 +332,15 @@ export function ControlsMenu({
             >
               {t("toolbar.item.coordsConverter")}
               {panels.coordsConverter.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.queryData") && queryableLayerPresent && (
+            <DropdownMenuItem
+              title={t("toolbar.item.queryDataTooltip")}
+              onSelect={panels.queryData.toggle}
+            >
+              {t("toolbar.item.queryData")}
+              {panels.queryData.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.spinGlobe") && (

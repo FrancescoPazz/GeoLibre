@@ -694,6 +694,12 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     tier: "advanced",
   },
   {
+    id: "controls.queryData",
+    menuId: "controls",
+    labelKey: "toolbar.item.queryData",
+    tier: "advanced",
+  },
+  {
     id: "controls.spinGlobe",
     menuId: "controls",
     labelKey: "toolbar.item.spinGlobe",

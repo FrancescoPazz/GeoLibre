@@ -46,6 +46,8 @@ export interface QueryableProperty {
   canAggregate?: boolean;
   enumMultiValue?: boolean;
   propertyMeasureUnit?: string;
+  /** Decimals shown for a `number` property (`propertyDecimalPlaces`). */
+  decimalPlaces?: number;
   sumOnAggregation?: boolean;
   distributionOnAggregation?: boolean;
   dictionaryKeyProperties?: Array<{
@@ -209,6 +211,10 @@ function queryablePropertiesOf(raw: unknown): QueryableProperty[] | undefined {
       canAggregate: e.canAggregate === true,
       enumMultiValue: e.enumMultiValue === true,
       propertyMeasureUnit: str(e.propertyMeasureUnit),
+      decimalPlaces:
+        typeof e.propertyDecimalPlaces === "number" && Number.isFinite(e.propertyDecimalPlaces)
+          ? Math.max(0, Math.floor(e.propertyDecimalPlaces))
+          : undefined,
       sumOnAggregation: e.sumOnAggregation === true,
       distributionOnAggregation: e.distributionOnAggregation === true,
       dictionaryKeyProperties: Array.isArray(e.dictionaryKeyProperties)

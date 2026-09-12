@@ -79,6 +79,12 @@ import {
   openCoordsConverterPanel,
   subscribeCoordsConverterPanel,
 } from "../lib/coords-converter-panel";
+import {
+  closeQueryPanel,
+  isQueryPanelVisible,
+  openQueryPanel,
+  subscribeQueryPanel,
+} from "../lib/query-panel";
 import type { AppApi } from "../components/layout/toolbar/constants";
 
 /** Visibility flag plus a toggle handler for a single toolbar panel. */
@@ -100,6 +106,7 @@ export interface ToolbarPanels {
   globeClipping: ToolbarPanel;
   elevationBands: ToolbarPanel;
   coordsConverter: ToolbarPanel;
+  queryData: ToolbarPanel;
   print: ToolbarPanel;
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
@@ -170,6 +177,11 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeCoordsConverterPanel,
     isCoordsConverterPanelVisible,
     isCoordsConverterPanelVisible,
+  );
+  const queryDataVisible = useSyncExternalStore(
+    subscribeQueryPanel,
+    isQueryPanelVisible,
+    isQueryPanelVisible,
   );
   const printVisible = useSyncExternalStore(
     subscribePrintPanel,
@@ -326,6 +338,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openCoordsConverterPanel();
+      },
+    },
+    queryData: {
+      visible: queryDataVisible,
+      toggle: () => {
+        if (queryDataVisible) {
+          closeQueryPanel();
+          return;
+        }
+        openQueryPanel();
       },
     },
     print: {
