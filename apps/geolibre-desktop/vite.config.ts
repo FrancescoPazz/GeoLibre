@@ -477,6 +477,53 @@ const IS_STORE_BUILD = process.env.GEOLIBRE_STORE_BUILD === "1";
 // ONLY by the dedicated MAS build path; every other build leaves it unset.
 const IS_MAS_BUILD = process.env.GEOLIBRE_MAS_BUILD === "1";
 
+/**
+ * Dev-server dependency optimizer: let every package keep its own `lerc`.
+ *
+ * Three majors of `lerc` live in this tree. The raster tiler's mask-aware
+ * LERC decoder needs `lerc@4` (ESM, named exports only), hoisted to the
+ * monorepo root and listed in `optimizeDeps.exclude` because it locates its
+ * .wasm via `import.meta.url`. `@cesium/engine` depends on `lerc@^2` and
+ * `geotiff` on `lerc@^3` — both CommonJS UMDs whose default export is the
+ * decoder — installed nested under each package and imported as
+ * `import Lerc from "lerc"`. Excluding a bare specifier makes esbuild leave
+ * *every* `import "lerc"` external, including those inside the pre-bundled
+ * Cesium and geotiff chunks, and the browser then resolves them from the root:
+ * `lerc@4`, no default export, and switching the 3D globe on (or decoding the
+ * first LERC COG tile) fails with "does not provide an export named
+ * 'default'". Rollup resolves the nested copies correctly, so production
+ * builds were never affected.
+ *
+ * This resolver runs before Vite's own exclusion: an import of `lerc` is
+ * resolved from the importer's directory, exactly as Node would, and when
+ * that lands on a nested copy rather than the root `lerc@4` the copy is
+ * bundled into the chunk, with esbuild's CJS→ESM interop supplying the
+ * default export. Imports that resolve to the root copy are left alone, so
+ * `lerc@4` stays excluded for the tiler.
+ */
+const lercResolver = createRequire(import.meta.url);
+const ROOT_LERC_DIR = path.resolve(CONFIG_DIR, "../../node_modules/lerc") + path.sep;
+const nestedLercPlugin = {
+  name: "geolibre:nested-lerc",
+  setup(build: {
+    onResolve: (
+      options: { filter: RegExp },
+      callback: (args: { importer: string; resolveDir: string }) => { path: string } | undefined,
+    ) => void;
+  }) {
+    build.onResolve({ filter: /^lerc$/ }, (args) => {
+      if (!args.importer || !args.resolveDir) return undefined;
+      let resolved: string;
+      try {
+        resolved = lercResolver.resolve("lerc", { paths: [args.resolveDir] });
+      } catch {
+        return undefined;
+      }
+      return path.resolve(resolved).startsWith(ROOT_LERC_DIR) ? undefined : { path: resolved };
+    });
+  },
+};
+
 const pgliteCdnRequire = createRequire(import.meta.url);
 // The ESM entry of a package's manifest. Prefer the `module` field and the
 // `import` condition of `exports` (both point at the ESM build); never fall back
@@ -1270,6 +1317,9 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_"],
   optimizeDeps: {
+    esbuildOptions: {
+      plugins: [nestedLercPlugin],
+    },
     // Pre-bundle the AI Assistant's heavy deps at dev-server startup. They are
     // only reached through the lazily-imported assistant panel (and, for the
     // provider models, through dynamic import() inside it), so Vite would
