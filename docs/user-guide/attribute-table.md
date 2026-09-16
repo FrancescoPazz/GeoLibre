@@ -6,17 +6,17 @@ The **Attribute table** shows the records of the selected vector or DuckDB layer
 
 ## The toolbar
 
-| Button | What it does |
-| --- | --- |
-| **Edit** / **Save** | Turn on inline editing, then write the changes back to the layer. See [Editing values](#editing-values). |
-| **Explore** | Open the [Column explorer](#column-explorer). |
-| **Statistics** | Summary statistics for one field. See [Field statistics](#field-statistics). |
-| **Charts** | Chart one or two fields without leaving the table. See [Charts](#charts). |
-| **Dashboard** | Open the [Dashboard](processing.md#dashboard) with this layer preselected, to build a persistent panel of widgets. |
-| **Export** | Write the records you are viewing to a file. See [Exporting](#exporting). |
-| **Search attributes…** | Filter rows to those matching the text you type, across every field. |
-| **Zoom to selection** | Keep the map framed on the selected features as the selection changes. |
-| **Show All Features / Show Selected** | Show every record, or only the selected ones. The count updates with the selection. |
+| Button                                | What it does                                                                                                       |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Edit** / **Save**                   | Turn on inline editing, then write the changes back to the layer. See [Editing values](#editing-values).           |
+| **Explore**                           | Open the [Column explorer](#column-explorer).                                                                      |
+| **Statistics**                        | Summary statistics for one field. See [Field statistics](#field-statistics).                                       |
+| **Charts**                            | Chart one or two fields without leaving the table. See [Charts](#charts).                                          |
+| **Dashboard**                         | Open the [Dashboard](processing.md#dashboard) with this layer preselected, to build a persistent panel of widgets. |
+| **Export**                            | Write the records you are viewing to a file. See [Exporting](#exporting).                                          |
+| **Search attributes…**                | Filter rows to those matching the text you type, across every field.                                               |
+| **Zoom to selection**                 | Keep the map framed on the selected features as the selection changes.                                             |
+| **Show All Features / Show Selected** | Show every record, or only the selected ones. The count updates with the selection.                                |
 
 The bar along the bottom reports the record count and how many are selected.
 

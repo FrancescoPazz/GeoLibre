@@ -49,11 +49,11 @@ the target of every outbound message and the filter on inbound ones.
 
 `connect(iframe, options)` → `Promise<GeoLibreEmbedClient>`
 
-| Option              | Default | Description                             |
-| ------------------- | ------- | --------------------------------------- |
-| `origin`            | —       | Required. Exact origin hosting the app. |
-| `timeoutMs`         | 15000   | How long to wait for `ready`.           |
-| `requestTimeoutMs`  | 15000   | How long to wait for each command.      |
+| Option             | Default | Description                             |
+| ------------------ | ------- | --------------------------------------- |
+| `origin`           | —       | Required. Exact origin hosting the app. |
+| `timeoutMs`        | 15000   | How long to wait for `ready`.           |
+| `requestTimeoutMs` | 15000   | How long to wait for each command.      |
 
 | Method                                 | Resolves with           |
 | -------------------------------------- | ----------------------- |

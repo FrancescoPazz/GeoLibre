@@ -24,25 +24,25 @@ file contents do not change.
 
 ## Schema
 
-| Field             | Type    | Description                                                                                                  |
-| ----------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
-| `version`         | string  | Format version (`0.1.0`)                                                                                     |
-| `name`            | string  | Project display name                                                                                         |
-| `mapView`         | object  | `center`, `zoom`, `bearing`, `pitch`, optional `bbox`                                                        |
-| `basemapStyleUrl` | string  | MapLibre style JSON URL, or an empty string for a blank background                                           |
-| `basemapVisible`  | boolean | Whether the Background layer is visible                                                                      |
-| `basemapOpacity`  | number  | Background layer opacity from `0` to `1`                                                                     |
-| `layers`          | array   | Layer definitions (see below)                                                                                |
-| `styles`          | object  | Map of layer id → `LayerStyle`                                                                               |
-| `plugins`         | object  | Optional external plugin manifest URLs, active plugin IDs, plugin map-control positions, and plugin settings |
-| `legend`          | object  | Optional Print Layout legend customizations (title, grouping, ordering, per-item rename/hide)                |
-| `printLayout`     | object  | Optional Print Layout composer settings (title, page size, orientation, blocks, atlas); omitted when default  |
-| `storymap`        | object  | Optional scroll-driven story map (chapters and presentation settings); omitted when there are no chapters    |
-| `widgets`         | array   | Optional Dashboard panel chart widgets (see below); omitted when there are none                              |
-| `dashboardColumns`| number  | Optional Dashboard widget-grid column count (1-6, default 2); omitted when default                          |
-| `styleLibrary`    | array   | Optional project-scoped Style Manager entries (name, tags, kind, `LayerStyle` subset); omitted when empty    |
-| `primaryRenderer` | string  | Optional engine for the primary map area: `"maplibre"` (2D, the default) or `"cesium"` (3D globe); omitted when default |
-| `metadata`        | object  | Free-form project metadata                                                                                   |
+| Field              | Type    | Description                                                                                                             |
+| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `version`          | string  | Format version (`0.1.0`)                                                                                                |
+| `name`             | string  | Project display name                                                                                                    |
+| `mapView`          | object  | `center`, `zoom`, `bearing`, `pitch`, optional `bbox`                                                                   |
+| `basemapStyleUrl`  | string  | MapLibre style JSON URL, or an empty string for a blank background                                                      |
+| `basemapVisible`   | boolean | Whether the Background layer is visible                                                                                 |
+| `basemapOpacity`   | number  | Background layer opacity from `0` to `1`                                                                                |
+| `layers`           | array   | Layer definitions (see below)                                                                                           |
+| `styles`           | object  | Map of layer id → `LayerStyle`                                                                                          |
+| `plugins`          | object  | Optional external plugin manifest URLs, active plugin IDs, plugin map-control positions, and plugin settings            |
+| `legend`           | object  | Optional Print Layout legend customizations (title, grouping, ordering, per-item rename/hide)                           |
+| `printLayout`      | object  | Optional Print Layout composer settings (title, page size, orientation, blocks, atlas); omitted when default            |
+| `storymap`         | object  | Optional scroll-driven story map (chapters and presentation settings); omitted when there are no chapters               |
+| `widgets`          | array   | Optional Dashboard panel chart widgets (see below); omitted when there are none                                         |
+| `dashboardColumns` | number  | Optional Dashboard widget-grid column count (1-6, default 2); omitted when default                                      |
+| `styleLibrary`     | array   | Optional project-scoped Style Manager entries (name, tags, kind, `LayerStyle` subset); omitted when empty               |
+| `primaryRenderer`  | string  | Optional engine for the primary map area: `"maplibre"` (2D, the default) or `"cesium"` (3D globe); omitted when default |
+| `metadata`         | object  | Free-form project metadata                                                                                              |
 
 ## Plugin state
 
@@ -188,7 +188,15 @@ self-contained HTML page for static hosting.
 {
   "widgets": [
     { "id": "w1", "layerId": "layer-a", "type": "histogram", "field": "pop", "bins": 12 },
-    { "id": "w2", "layerId": "layer-a", "type": "bar", "category": "kind", "aggregation": "sum", "valueField": "pop", "title": "Population by kind" }
+    {
+      "id": "w2",
+      "layerId": "layer-a",
+      "type": "bar",
+      "category": "kind",
+      "aggregation": "sum",
+      "valueField": "pop",
+      "title": "Population by kind"
+    }
   ]
 }
 ```
@@ -366,7 +374,7 @@ output self-heals if the join table changed.
 
 A vector layer may carry **quick filters** (Layer properties → Quick filters):
 data-driven filter controls that narrow what the layer draws without anyone
-writing a MapLibre expression. What persists is the *control state*, never the
+writing a MapLibre expression. What persists is the _control state_, never the
 compiled output, so a saved filter can always be reopened and changed:
 
 ```json
@@ -402,7 +410,7 @@ comparing the leading `YYYY-MM-DD` of ISO text), `epochMs`, or `epochS` — and
 A control with nothing chosen places no constraint, so an emptied selection
 shows every feature rather than none.
 
-A quick filter narrows the *rendered* features, so a point layer using the
+A quick filter narrows the _rendered_ features, so a point layer using the
 cluster renderer is an exception worth noting: MapLibre clusters at the source,
 from the layer's whole dataset, so cluster bubbles and their counts describe the
 unfiltered data while clustering is on (as they already do for a Time Slider
@@ -478,23 +486,23 @@ pull back a hidden column or one of GeoLibre's internal ones. Raster pixel ident
 
 ## Layer types
 
-| Type             | Status                                                                                             |
-| ---------------- | -------------------------------------------------------------------------------------------------- |
-| `geojson`        | Supported for imported files and GeoJSON URLs                                                      |
-| `xyz`            | Supported for raster tile templates                                                                |
-| `wms`            | Supported as tiled WMS GetMap layers                                                               |
-| `raster`         | Supported for raster tile templates; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion imagery asset the 3D globe loads with the app's Ion token (3D only) |
-| `vector-tiles`   | Supported for MapLibre vector tile sources                                                         |
-| `mbtiles`        | Supported in the desktop app through a local MapLibre protocol                                     |
-| `arcgis`         | Supported for ArcGIS VectorTileServer layers (FeatureServer layers are saved as `geojson`, and MapServer/ImageServer layers as `raster`) |
-| `pmtiles`        | Supported through the Components plugin                                                            |
-| `cog`            | Supported for COG and GeoTIFF raster layers                                                        |
-| `flatgeobuf`     | Supported through the Components plugin and imported as GeoJSON when loaded as a local vector file |
-| `zarr`           | Supported through the Components plugin                                                            |
-| `lidar`          | Supported through the Components plugin                                                            |
-| `gaussian-splat` | Supported through the Components plugin                                                            |
-| `geoparquet`     | Imported as GeoJSON via DuckDB-WASM                                                                |
-| `duckdb-query`   | Supported for SQL query-result layers                                              |
+| Type             | Status                                                                                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `geojson`        | Supported for imported files and GeoJSON URLs                                                                                                                                                     |
+| `xyz`            | Supported for raster tile templates                                                                                                                                                               |
+| `wms`            | Supported as tiled WMS GetMap layers                                                                                                                                                              |
+| `raster`         | Supported for raster tile templates; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion imagery asset the 3D globe loads with the app's Ion token (3D only)           |
+| `vector-tiles`   | Supported for MapLibre vector tile sources                                                                                                                                                        |
+| `mbtiles`        | Supported in the desktop app through a local MapLibre protocol                                                                                                                                    |
+| `arcgis`         | Supported for ArcGIS VectorTileServer layers (FeatureServer layers are saved as `geojson`, and MapServer/ImageServer layers as `raster`)                                                          |
+| `pmtiles`        | Supported through the Components plugin                                                                                                                                                           |
+| `cog`            | Supported for COG and GeoTIFF raster layers                                                                                                                                                       |
+| `flatgeobuf`     | Supported through the Components plugin and imported as GeoJSON when loaded as a local vector file                                                                                                |
+| `zarr`           | Supported through the Components plugin                                                                                                                                                           |
+| `lidar`          | Supported through the Components plugin                                                                                                                                                           |
+| `gaussian-splat` | Supported through the Components plugin                                                                                                                                                           |
+| `geoparquet`     | Imported as GeoJSON via DuckDB-WASM                                                                                                                                                               |
+| `duckdb-query`   | Supported for SQL query-result layers                                                                                                                                                             |
 | `3d-tiles`       | Supported through the `maplibre-gl-3d-tiles` plugin; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion tileset the 3D globe loads with the app's Ion token (3D only) |
 
 ## API

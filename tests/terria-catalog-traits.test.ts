@@ -294,18 +294,16 @@ function host() {
   ) => {
     const id = `layer-${next++}`;
     added.push({ kind, name, options });
-    useAppStore
-      .getState()
-      .addLayer({
-        id,
-        name,
-        type,
-        source,
-        visible: true,
-        opacity: 1,
-        style: { ...DEFAULT_LAYER_STYLE },
-        metadata: {},
-      });
+    useAppStore.getState().addLayer({
+      id,
+      name,
+      type,
+      source,
+      visible: true,
+      opacity: 1,
+      style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
+    });
     return id;
   };
   const app = {

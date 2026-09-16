@@ -13,10 +13,10 @@ or your team time, sponsorship is the most direct way to keep it moving.
 
 ## Ways to sponsor
 
-| Option | What it is | Best for |
-| --- | --- | --- |
+| Option                                                    | What it is                                                                    | Best for                                                                                                                   |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | **[GitHub Sponsors](https://github.com/sponsors/giswqs)** | Monthly or one-time sponsorship, billed through your existing GitHub account. | Individuals and organizations that want recurring support, and companies that can expense it alongside other GitHub spend. |
-| **[Buy Me a Coffee](https://buymeacoffee.com/giswqs)** | A quick one-off contribution, no account required. | A small thank-you for a feature or bug fix that helped you. |
+| **[Buy Me a Coffee](https://buymeacoffee.com/giswqs)**    | A quick one-off contribution, no account required.                            | A small thank-you for a feature or bug fix that helped you.                                                                |
 
 Both go to [Qiusheng Wu](https://github.com/giswqs), the maintainer of GeoLibre
 and the wider [opengeos](https://github.com/opengeos) ecosystem.

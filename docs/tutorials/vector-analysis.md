@@ -5,7 +5,7 @@ This tutorial runs a small vector workflow: buffer a layer, overlay it with anot
 ![The Processing menu with GeoLibre Toolbox → Vector open on its Geometry, Overlay, Join, and Select groups](https://assets.geolibre.app/images/geolibre-toolbox-vector-menu.webp)
 
 !!! note "Two toolboxes share this menu"
-    **Processing → Vector** (above the separator) is the Whitebox catalog's vector category; **Processing → GeoLibre Toolbox → Vector** is the dialog this tutorial uses. See [Two toolboxes in one menu](../user-guide/processing.md#two-toolboxes-in-one-menu).
+**Processing → Vector** (above the separator) is the Whitebox catalog's vector category; **Processing → GeoLibre Toolbox → Vector** is the dialog this tutorial uses. See [Two toolboxes in one menu](../user-guide/processing.md#two-toolboxes-in-one-menu).
 
 ## 1. Load input data
 
@@ -23,7 +23,7 @@ Add at least one vector layer (see [Adding Data](../user-guide/adding-data.md)).
 5. Click **Run**. A buffered layer is added to the map.
 
 !!! tip "Projection-aware distances"
-    The client engine buffers in geographic coordinates. For accurate metric distances over large areas, use one of the two GeoPandas engines, which reproject before buffering: **Sidecar (GeoPandas)** on the desktop app, or **Python (Pyodide)** anywhere, including the web build.
+The client engine buffers in geographic coordinates. For accurate metric distances over large areas, use one of the two GeoPandas engines, which reproject before buffering: **Sidecar (GeoPandas)** on the desktop app, or **Python (Pyodide)** anywhere, including the web build.
 
 ## 3. Overlay two layers
 

@@ -269,9 +269,10 @@ export function LayerPanelPlaceSearch({
       if (settledQuery.current !== null) return;
       const groups = searchLayerFeatures(layers, trimmed, { groups: layerGroups });
       setFeatureGroups(groups);
-      const catalogMatches = searchCatalogItems(trimmed).map(
-        (match): SearchRow => ({ kind: "catalog", match }),
-      );
+      const catalogMatches = searchCatalogItems(trimmed).map((match): SearchRow => ({
+        kind: "catalog",
+        match,
+      }));
       setCatalogRows(catalogMatches);
       // A layers change re-runs this effect without touching `query`, so the
       // query-change effect below never gets to reset the highlight: rebuilding

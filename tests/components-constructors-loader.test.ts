@@ -25,8 +25,8 @@ afterEach(() => {
 
 describe("getComponentsConstructors", () => {
   it("throws a clear, actionable error (not the cryptic destructure) when the module resolves to undefined", async () => {
-    __setComponentsModuleLoaderForTests(
-      (): Promise<ComponentsModules> => Promise.resolve([undefined, null]),
+    __setComponentsModuleLoaderForTests((): Promise<ComponentsModules> =>
+      Promise.resolve([undefined, null]),
     );
 
     await assert.rejects(

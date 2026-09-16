@@ -127,12 +127,11 @@ const app = {
 } as unknown as GeoLibreAppAPI;
 
 function installStubModule(): void {
-  __setComponentsModuleLoaderForTests(
-    (): Promise<ComponentsModules> =>
-      Promise.resolve([
-        { ZarrLayerControl: ZarrLayerControlStub } as unknown as NonNullable<ComponentsModules[0]>,
-        null,
-      ]),
+  __setComponentsModuleLoaderForTests((): Promise<ComponentsModules> =>
+    Promise.resolve([
+      { ZarrLayerControl: ZarrLayerControlStub } as unknown as NonNullable<ComponentsModules[0]>,
+      null,
+    ]),
   );
 }
 

@@ -97,38 +97,38 @@ The click payload has the form `{"lngLat": {"lng": ..., "lat": ...},
 `viewData` is reserved for future camera-event support. The existing
 `Map.on_click()` API is unchanged.
 
-| Method | Description |
-| --- | --- |
-| `Map(center, zoom, basemap=, height=, layout=, theme=)` | Create a map. `layout` is `"embed"`, `"full"`, or `"maponly"`. |
-| `add_geojson(data, name=, **style)` | Add GeoJSON (dict, path, URL, JSON, or GeoDataFrame). |
-| `add_gdf(gdf, name=, column=None, **style)` | Add a GeoDataFrame, optionally as a choropleth. |
-| `add_csv` / `add_xy_data` `(data, x=, y=, name=, **style)` | Add points from CSV, a DataFrame, or row mappings. |
-| `add_heatmap(points, name=, radius=, intensity=, color_ramp=, weight_field=, **style)` | Add a point density heatmap, optionally weighted by a numeric field. |
-| `add_vector(data, name=, render_mode=, data_format=, source_layer=, **style)` | Add a vector dataset from a URL (GeoParquet, FlatGeobuf, zipped Shapefile, GeoJSON) or a local file (read via GeoPandas, inlined). |
-| `add_geoparquet` / `add_flatgeobuf` / `add_shp` / `add_kml` / `add_gpkg` | Format-specific wrappers over `add_vector`. |
-| `add_vector_tiles(url, name=, source_layers=, source_layer=, **style)` | Add vector tiles from a TileJSON endpoint. |
-| `add_pmtiles(url, name=, tile_type=, source_layers=, **style)` | Add a PMTiles archive (vector or raster). |
-| `add_tile_layer(url, name=, tile_size=, attribution=)` | Add a raster XYZ tile layer. |
-| `add_ee_layer(ee_object, vis_params=, name=, shown=, opacity=)` | Add an authenticated Google Earth Engine object as raster tiles. |
-| `add_wms(endpoint, layers, name=, styles=, image_format=, transparent=, tile_size=, **style)` | Add a WMS (GetMap) tiled raster layer. |
-| `add_wmts(url, name=, tile_size=, **style)` | Add a WMTS tile URL template. |
-| `add_wfs(endpoint, type_name, name=, version=, output_format=, srs_name=, max_features=, **style)` | Add a WFS layer (GeoJSON, fetched and inlined). |
-| `add_cog(url, name=, bands=, colormap=, rescale=)` | Add a Cloud Optimized GeoTIFF. |
-| `add_raster(source, name=, bands=, colormap=, rescale=, array_args=)` | Add a COG/GeoTIFF or an xarray DataArray/Dataset (xarray needs `geolibre[raster]`). |
-| `add_3d_tiles(url, name=, altitude_offset=, request_headers=, **style)` | Add a 3D Tiles `tileset.json`. |
-| `add_video(urls, coordinates, name=, **style)` | Add a georeferenced video (four `[lng, lat]` corners). |
-| `add_basemap(basemap)` | Set the background basemap. |
-| `set_center(lng, lat, zoom=None)` | Center (and optionally zoom) the map. |
-| `set_center_zoom(lng, lat, zoom=None)` | Alias of `set_center` (leafmap compatibility). |
-| `zoom_to_bounds(bounds)` / `zoom_to_layer(layer)` | Fit the view to bounds or a layer id/name/handle. |
-| `layer_names` / `find_layer(name)` / `set_layer_visibility` / `set_layer_opacity` | Inspect and update layers conveniently. |
-| `rename_layer` / `move_layer` / `duplicate_layer` / `show_layer` / `hide_layer` | Manage layers by id, name, or `Layer` handle. |
-| `layer_properties(layer)` / `column_values(layer, column)` / `describe()` | Inspect inlined data and summarize a project without a browser round trip. |
-| `remove_layer(layer_id)` / `clear_layers()` | Remove one layer by id, name, or handle, or remove all layers. |
-| `center` / `zoom` / `bearing` / `pitch` / `basemap` / `name` | Read persisted project and camera state; `name` is writable. |
-| `set_zoom` / `set_bearing` / `set_pitch` / `fit_project_bounds` | Persist camera changes without requiring the widget to be displayed. |
-| `list_whitebox_tools()` / `run_whitebox_tool(id, parameters)` | Discover and run bundled Whitebox tools locally via browser WASM. |
-| `to_project()` / `load_project(src)` / `save_project(path)` | Project I/O. |
+| Method                                                                                             | Description                                                                                                                        |
+| -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `Map(center, zoom, basemap=, height=, layout=, theme=)`                                            | Create a map. `layout` is `"embed"`, `"full"`, or `"maponly"`.                                                                     |
+| `add_geojson(data, name=, **style)`                                                                | Add GeoJSON (dict, path, URL, JSON, or GeoDataFrame).                                                                              |
+| `add_gdf(gdf, name=, column=None, **style)`                                                        | Add a GeoDataFrame, optionally as a choropleth.                                                                                    |
+| `add_csv` / `add_xy_data` `(data, x=, y=, name=, **style)`                                         | Add points from CSV, a DataFrame, or row mappings.                                                                                 |
+| `add_heatmap(points, name=, radius=, intensity=, color_ramp=, weight_field=, **style)`             | Add a point density heatmap, optionally weighted by a numeric field.                                                               |
+| `add_vector(data, name=, render_mode=, data_format=, source_layer=, **style)`                      | Add a vector dataset from a URL (GeoParquet, FlatGeobuf, zipped Shapefile, GeoJSON) or a local file (read via GeoPandas, inlined). |
+| `add_geoparquet` / `add_flatgeobuf` / `add_shp` / `add_kml` / `add_gpkg`                           | Format-specific wrappers over `add_vector`.                                                                                        |
+| `add_vector_tiles(url, name=, source_layers=, source_layer=, **style)`                             | Add vector tiles from a TileJSON endpoint.                                                                                         |
+| `add_pmtiles(url, name=, tile_type=, source_layers=, **style)`                                     | Add a PMTiles archive (vector or raster).                                                                                          |
+| `add_tile_layer(url, name=, tile_size=, attribution=)`                                             | Add a raster XYZ tile layer.                                                                                                       |
+| `add_ee_layer(ee_object, vis_params=, name=, shown=, opacity=)`                                    | Add an authenticated Google Earth Engine object as raster tiles.                                                                   |
+| `add_wms(endpoint, layers, name=, styles=, image_format=, transparent=, tile_size=, **style)`      | Add a WMS (GetMap) tiled raster layer.                                                                                             |
+| `add_wmts(url, name=, tile_size=, **style)`                                                        | Add a WMTS tile URL template.                                                                                                      |
+| `add_wfs(endpoint, type_name, name=, version=, output_format=, srs_name=, max_features=, **style)` | Add a WFS layer (GeoJSON, fetched and inlined).                                                                                    |
+| `add_cog(url, name=, bands=, colormap=, rescale=)`                                                 | Add a Cloud Optimized GeoTIFF.                                                                                                     |
+| `add_raster(source, name=, bands=, colormap=, rescale=, array_args=)`                              | Add a COG/GeoTIFF or an xarray DataArray/Dataset (xarray needs `geolibre[raster]`).                                                |
+| `add_3d_tiles(url, name=, altitude_offset=, request_headers=, **style)`                            | Add a 3D Tiles `tileset.json`.                                                                                                     |
+| `add_video(urls, coordinates, name=, **style)`                                                     | Add a georeferenced video (four `[lng, lat]` corners).                                                                             |
+| `add_basemap(basemap)`                                                                             | Set the background basemap.                                                                                                        |
+| `set_center(lng, lat, zoom=None)`                                                                  | Center (and optionally zoom) the map.                                                                                              |
+| `set_center_zoom(lng, lat, zoom=None)`                                                             | Alias of `set_center` (leafmap compatibility).                                                                                     |
+| `zoom_to_bounds(bounds)` / `zoom_to_layer(layer)`                                                  | Fit the view to bounds or a layer id/name/handle.                                                                                  |
+| `layer_names` / `find_layer(name)` / `set_layer_visibility` / `set_layer_opacity`                  | Inspect and update layers conveniently.                                                                                            |
+| `rename_layer` / `move_layer` / `duplicate_layer` / `show_layer` / `hide_layer`                    | Manage layers by id, name, or `Layer` handle.                                                                                      |
+| `layer_properties(layer)` / `column_values(layer, column)` / `describe()`                          | Inspect inlined data and summarize a project without a browser round trip.                                                         |
+| `remove_layer(layer_id)` / `clear_layers()`                                                        | Remove one layer by id, name, or handle, or remove all layers.                                                                     |
+| `center` / `zoom` / `bearing` / `pitch` / `basemap` / `name`                                       | Read persisted project and camera state; `name` is writable.                                                                       |
+| `set_zoom` / `set_bearing` / `set_pitch` / `fit_project_bounds`                                    | Persist camera changes without requiring the widget to be displayed.                                                               |
+| `list_whitebox_tools()` / `run_whitebox_tool(id, parameters)`                                      | Discover and run bundled Whitebox tools locally via browser WASM.                                                                  |
+| `to_project()` / `load_project(src)` / `save_project(path)`                                        | Project I/O.                                                                                                                       |
 
 Layer handles provide the same operations in an object-oriented form:
 
@@ -208,6 +208,7 @@ anywhere untrusted, or use `Map.save_project`, which redacts by default.
   local data, to the origin in `_app_url` through `window.postMessage`. Use only
   a trusted app URL, or host the GeoLibre app yourself, when working with
   sensitive data.
+
 - The bundled app is served from a localhost HTTP server, so the interactive
   widget works in local Jupyter and VS Code directly. **Google Colab** routes
   through its built-in port proxy automatically. On **JupyterHub** (including

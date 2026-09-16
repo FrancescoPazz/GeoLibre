@@ -7,10 +7,10 @@ time. Profile preferences are stored locally in the browser/app and never travel
 inside a saved `.geolibre.json` project.
 
 !!! tip "Looking to lock a deployment down?"
-    Profiles declutter; the user can undo them. To pin what a deployment is
-    *permitted* to do — a kiosk, a classroom instance — see
-    [Deployment Capabilities](deployment-capabilities.md), which is never
-    surfaced in the UI. The two are independent and can be combined.
+Profiles declutter; the user can undo them. To pin what a deployment is
+_permitted_ to do — a kiosk, a classroom instance — see
+[Deployment Capabilities](deployment-capabilities.md), which is never
+surfaced in the UI. The two are independent and can be combined.
 
 ## For users
 
@@ -75,15 +75,15 @@ wizard is skipped, and — if `lock` is set — the Interface settings are read-
 }
 ```
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `enabled` | boolean | Whether filtering is active. Defaults to `true` for an admin file. |
-| `level` | `"beginner" \| "intermediate" \| "advanced"` | Seeds the hidden lists from each item's tier. Optional. |
-| `lock` | boolean | When `true`, users cannot change the profile from Settings. Removing the file (or serving one without `lock`) releases the lock on the next launch. |
-| `hiddenDataSources` | string[] | Explicit data-source ids to hide. Overrides the preset when present. |
-| `hiddenPlugins` | string[] | Explicit plugin ids to hide. Overrides the preset when present. |
-| `hiddenMenus` | string[] | Top-level menu ids to hide (`project`, `edit`, `addData`, `processing`, `controls`, `plugins`, `help`). |
-| `hiddenMenuItems` | string[] | Menu-item ids to hide (e.g. `processing.raster`, `help.diagnostics`, `controls.minimap`). |
+| Field               | Type                                         | Meaning                                                                                                                                             |
+| ------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`           | boolean                                      | Whether filtering is active. Defaults to `true` for an admin file.                                                                                  |
+| `level`             | `"beginner" \| "intermediate" \| "advanced"` | Seeds the hidden lists from each item's tier. Optional.                                                                                             |
+| `lock`              | boolean                                      | When `true`, users cannot change the profile from Settings. Removing the file (or serving one without `lock`) releases the lock on the next launch. |
+| `hiddenDataSources` | string[]                                     | Explicit data-source ids to hide. Overrides the preset when present.                                                                                |
+| `hiddenPlugins`     | string[]                                     | Explicit plugin ids to hide. Overrides the preset when present.                                                                                     |
+| `hiddenMenus`       | string[]                                     | Top-level menu ids to hide (`project`, `edit`, `addData`, `processing`, `controls`, `plugins`, `help`).                                             |
+| `hiddenMenuItems`   | string[]                                     | Menu-item ids to hide (e.g. `processing.raster`, `help.diagnostics`, `controls.minimap`).                                                           |
 
 Data-source ids are the catalog ids in
 `apps/geolibre-desktop/src/lib/ui-profile.ts` (e.g. `vector`, `xyz`, `mbtiles`,

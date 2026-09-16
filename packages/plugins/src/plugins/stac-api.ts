@@ -328,13 +328,11 @@ function folderName(href: string): string {
 function catalogChildren(document: Record<string, unknown>, base: string): StacCatalogNode[] {
   return linksOf(document.links, base)
     .filter((link) => link.rel === "child")
-    .map(
-      (link): StacCatalogNode => ({
-        href: link.href,
-        title: link.title || folderName(link.href),
-        kind: /\/collection\.json($|[?#])/i.test(link.href) ? "collection" : "container",
-      }),
-    );
+    .map((link): StacCatalogNode => ({
+      href: link.href,
+      title: link.title || folderName(link.href),
+      kind: /\/collection\.json($|[?#])/i.test(link.href) ? "collection" : "container",
+    }));
 }
 
 /**

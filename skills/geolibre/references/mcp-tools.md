@@ -12,17 +12,17 @@ surface, so you can pick the right tool before calling anything.
 
 Pick by what the data **is**:
 
-| You have | Tool | Notes |
-| --- | --- | --- |
-| A GeoJSON URL, file, or literal | `add_geojson_layer` | Inlined into the project. Self-contained. **The only kind `classify_layer` can style.** Cap: 50 MB. |
-| A big remote FlatGeobuf / GeoParquet / GeoJSON | `add_vector_layer` | Read in place, not copied. No attribute table in the file. |
-| A Cloud Optimized GeoTIFF / COG | `add_raster_layer` | `bands`, `colormap`, `rescale`. |
-| An XYZ raster tile template (`{z}/{x}/{y}.png`) | `add_tile_layer` | Basemaps like OSM go here, not `set_basemap`. |
-| A PMTiles archive, or a vector tile service | `add_tiles_layer` | `kind="pmtiles"` (with `tile_type`) or `kind="vector-tiles"`. |
-| A WMS or WMTS endpoint | `add_ogc_layer` | `service="wms"` or `"wmts"`. |
-| An OGC 3D Tiles tileset | `add_3d_tiles_layer` | `altitude_offset` to sit it on the ground; `ion_asset_id` instead of `url` for a Cesium Ion tileset. |
-| A Cesium Ion asset (tileset or imagery) | `add_cesium_ion_layer` | 3D globe only: pair it with `set_renderer` / `primaryRenderer: "cesium"`. `kind="imagery"` for imagery. |
-| A Shapefile, GeoPackage, KML, CSV | Convert first | Read it with GeoPandas and pass GeoJSON to `add_geojson_layer`, or use the Python API's `Map.add_shp` / `Map.add_gpkg` / `Map.add_kml` / `Map.add_csv`. |
+| You have                                        | Tool                   | Notes                                                                                                                                                   |
+| ----------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A GeoJSON URL, file, or literal                 | `add_geojson_layer`    | Inlined into the project. Self-contained. **The only kind `classify_layer` can style.** Cap: 50 MB.                                                     |
+| A big remote FlatGeobuf / GeoParquet / GeoJSON  | `add_vector_layer`     | Read in place, not copied. No attribute table in the file.                                                                                              |
+| A Cloud Optimized GeoTIFF / COG                 | `add_raster_layer`     | `bands`, `colormap`, `rescale`.                                                                                                                         |
+| An XYZ raster tile template (`{z}/{x}/{y}.png`) | `add_tile_layer`       | Basemaps like OSM go here, not `set_basemap`.                                                                                                           |
+| A PMTiles archive, or a vector tile service     | `add_tiles_layer`      | `kind="pmtiles"` (with `tile_type`) or `kind="vector-tiles"`.                                                                                           |
+| A WMS or WMTS endpoint                          | `add_ogc_layer`        | `service="wms"` or `"wmts"`.                                                                                                                            |
+| An OGC 3D Tiles tileset                         | `add_3d_tiles_layer`   | `altitude_offset` to sit it on the ground; `ion_asset_id` instead of `url` for a Cesium Ion tileset.                                                    |
+| A Cesium Ion asset (tileset or imagery)         | `add_cesium_ion_layer` | 3D globe only: pair it with `set_renderer` / `primaryRenderer: "cesium"`. `kind="imagery"` for imagery.                                                 |
+| A Shapefile, GeoPackage, KML, CSV               | Convert first          | Read it with GeoPandas and pass GeoJSON to `add_geojson_layer`, or use the Python API's `Map.add_shp` / `Map.add_gpkg` / `Map.add_kml` / `Map.add_csv`. |
 
 Layers draw bottom-first. Every `add_*` takes an optional `index` (draw-order
 position); omitted, the layer goes on top.
@@ -178,11 +178,11 @@ boundary — see the SKILL.
 
 ## When a call fails
 
-| Error | What to do |
-| --- | --- |
-| Path outside the workspace roots | Write inside a root, or ask the user to add one with `--root`. |
-| File already exists | Pass `overwrite=True` — but only if replacing it is what the user wants. |
-| Unknown basemap / colormap / legend preset | Call `list_catalog` and use a real name. |
-| Layer not found | `describe_project` for the current names and ids. |
-| "not a GeoLibre project" | The target is some other JSON. Pick a different path. |
+| Error                                      | What to do                                                                   |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| Path outside the workspace roots           | Write inside a root, or ask the user to add one with `--root`.               |
+| File already exists                        | Pass `overwrite=True` — but only if replacing it is what the user wants.     |
+| Unknown basemap / colormap / legend preset | Call `list_catalog` and use a real name.                                     |
+| Layer not found                            | `describe_project` for the current names and ids.                            |
+| "not a GeoLibre project"                   | The target is some other JSON. Pick a different path.                        |
 | `classify_layer` reports no attribute data | The layer is not an inlined GeoJSON one. Re-add it with `add_geojson_layer`. |

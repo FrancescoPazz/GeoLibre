@@ -20,29 +20,29 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 
 ## URL parameters
 
-| Parameter    | Example                                                    | Description                                                                                                                           |
-| ------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `url`        | `url=https://share.geolibre.app/you/project.geolibre.json` | Loads a `.geolibre.json` project from a public URL.                                                                                   |
-| `loading`    | `loading=true` | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below. |
-| `data`       | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                           |
-| `style`      | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                            |
-| `layout`     | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
-| `toolbar`    | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`. |
-| `panels`     | `panels=collapsed`                                         | Starts Layers and Style collapsed to their icon rails. Use `none` to hide all panels; `hidden`, `hide`, and `off` are aliases.         |
-| `hidePanels` | `hidePanels=true`                                          | Alternative way to hide those panels.                                                                                                 |
-| `maponly`    | `maponly`                                                  | Hides all chrome (toolbar, panels, and status bar), leaving only the map. The bare flag or `true`, `1`, `yes`, `on` enable it.        |
-| `welcome`    | `welcome=0`                                                | Hides the first-launch welcome wizard. Accepts `0`, `false`, `off`, or `no`. A `url=` or `data=` deep link already suppresses it automatically. |
-| `theme`      | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.       |
-| `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`   | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. `settingUrl` is accepted as an alias. |
-| `tool`       | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool. |
+| Parameter     | Example                                                    | Description                                                                                                                                                                                                                                            |
+| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `url`         | `url=https://share.geolibre.app/you/project.geolibre.json` | Loads a `.geolibre.json` project from a public URL.                                                                                                                                                                                                    |
+| `loading`     | `loading=true`                                             | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below.                                                                                                                |
+| `data`        | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                                                                                                                                            |
+| `style`       | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                                                                                                                                            |
+| `layout`      | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
+| `toolbar`     | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`.                                                              |
+| `panels`      | `panels=collapsed`                                         | Starts Layers and Style collapsed to their icon rails. Use `none` to hide all panels; `hidden`, `hide`, and `off` are aliases.                                                                                                                         |
+| `hidePanels`  | `hidePanels=true`                                          | Alternative way to hide those panels.                                                                                                                                                                                                                  |
+| `maponly`     | `maponly`                                                  | Hides all chrome (toolbar, panels, and status bar), leaving only the map. The bare flag or `true`, `1`, `yes`, `on` enable it.                                                                                                                         |
+| `welcome`     | `welcome=0`                                                | Hides the first-launch welcome wizard. Accepts `0`, `false`, `off`, or `no`. A `url=` or `data=` deep link already suppresses it automatically.                                                                                                        |
+| `theme`       | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.                                                                                                                        |
+| `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`    | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. `settingUrl` is accepted as an alias.   |
+| `tool`        | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool.                                                                                                                  |
 
 !!! note "Private projects and data"
-    `url=` and `data=` are fetched by the browser with same-origin credentials,
-    so a project or dataset gated by a session cookie loads only when GeoLibre is
-    served from that same origin. Passing a login-protected URL to the hosted
-    viewer at `web.geolibre.app` fails, because the cookie is not sent
-    cross-origin. Serve the app from your own host, or use a signed, expiring
-    URL. See [Self-Hosting & Private Data](../self-hosting.md).
+`url=` and `data=` are fetched by the browser with same-origin credentials,
+so a project or dataset gated by a session cookie loads only when GeoLibre is
+served from that same origin. Passing a login-protected URL to the hosted
+viewer at `web.geolibre.app` fails, because the cookie is not sent
+cross-origin. Serve the app from your own host, or use a signed, expiring
+URL. See [Self-Hosting & Private Data](../self-hosting.md).
 
 Parameters combine. For a narrow, chrome-free, dark embed of a shared project:
 
@@ -96,11 +96,11 @@ https://web.geolibre.app/?url=https://share.geolibre.app/giswqs/national-land-co
 
 The `<html>` element exposes three attributes:
 
-| Attribute | Value |
-| --- | --- |
-| `data-geolibre-load-state` | `loading`, `ready`, or `error` |
+| Attribute                    | Value                                                      |
+| ---------------------------- | ---------------------------------------------------------- |
+| `data-geolibre-load-state`   | `loading`, `ready`, or `error`                             |
 | `data-geolibre-load-pending` | JSON array of pending layer names (or initialization work) |
-| `data-geolibre-load-errors` | JSON array of failure messages |
+| `data-geolibre-load-errors`  | JSON array of failure messages                             |
 
 `ready` means the project/data URL has loaded, visible layers have attached,
 their current-viewport tiles have loaded, the camera has stopped, and browser
@@ -348,7 +348,7 @@ by the [Python package](../python.md)) to the same origins. As extra hardening
 you can stop other sites from framing the app at all by adding
 `Content-Security-Policy: frame-ancestors <your origins>` at your reverse proxy.
 
-The allowlist decides *who* may send commands. To narrow *which* commands exist
+The allowlist decides _who_ may send commands. To narrow _which_ commands exist
 at all — so a trusted host page still cannot turn the embed into a
 general-purpose data-fetching proxy — build with
 [deployment capabilities](../deployment-capabilities.md). A denied command
@@ -385,20 +385,20 @@ const map = await connect(iframe, {
 
 `origin` is required and must be an `http(s)` origin: it is both the target of
 every outbound message and the filter on inbound ones, so a message from any
-other frame or origin is ignored. Pass the *app's* origin, not your own.
+other frame or origin is ignored. Pass the _app's_ origin, not your own.
 
 | Method                                 | Resolves with           | Notes                                                                   |
 | -------------------------------------- | ----------------------- | ----------------------------------------------------------------------- |
 | `loadProject(url)`                     | `void`                  | Swaps the project without reloading the iframe.                         |
-| `setView(target)`                      | `void`                  | `{ bbox }`, or any of `{ center, zoom, bearing, pitch, duration }`.      |
-| `highlightFeature({ layerId, … })`     | `void`                  | `featureId`, `featureIds`, or `filter`; `fit: true` zooms to the match.  |
+| `setView(target)`                      | `void`                  | `{ bbox }`, or any of `{ center, zoom, bearing, pitch, duration }`.     |
+| `highlightFeature({ layerId, … })`     | `void`                  | `featureId`, `featureIds`, or `filter`; `fit: true` zooms to the match. |
 | `openTool(id, params?)`                | `void`                  | Runtime twin of `?tool=`.                                               |
 | `setLayerVisibility(layerId, visible)` | `void`                  | Shows or hides a project layer.                                         |
 | `listLayers()`                         | `LayerSummary[]`        | `{ id, name, type, visible, opacity }` per layer.                       |
 | `setFilter(layerId, expression)`       | `void`                  | A MapLibre filter expression, or `null` to clear it.                    |
 | `getViewport()`                        | `Viewport`              | `{ bbox, center, zoom, bearing, pitch }`.                               |
 | `addLayer(spec)`                       | the new layer's `id`    | Takes a project-format layer specification.                             |
-| `addData(url, options?)`               | the new layer `id`s     | Loads remote data like `?data=`; options are `{ styleUrl, fit }`.        |
+| `addData(url, options?)`               | the new layer `id`s     | Loads remote data like `?data=`; options are `{ styleUrl, fit }`.       |
 | `exportImage()`                        | a PNG `data:` URL       | The map as currently rendered.                                          |
 | `on(event, listener)`                  | an unsubscribe function | Not a promise; events are the set the app posts (see below).            |
 | `disconnect()`                         | not a promise           | Removes the listener and rejects anything still in flight.              |
@@ -434,19 +434,19 @@ them out of the other `postMessage` traffic on your page.
 
 ### Host to GeoLibre
 
-| Type               | Payload                                                    | Effect                                                                             |
-| ------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `loadProject`      | `{ url }`                                                  | Loads a `.geolibre.json` project without reloading the iframe.                      |
-| `setView`          | `{ bbox }` or `{ center, zoom, bearing, pitch, duration }` | Fits a bounding box, or flies the camera to the properties you send.                |
-| `highlightFeature` | `{ layerId, featureId \| featureIds \| filter, fit }`      | Selects and highlights features; `filter` matches properties. `fit` zooms to them.  |
-| `openTool`         | `{ id, params }`                                           | Opens the Processing dialog on a tool, pre-filling `params`. Runtime twin of `?tool=`. |
-| `setLayerVisibility` | `{ layerId, visible }`                                   | Shows or hides a project layer.                                                       |
-| `listLayers`       | `{}`                                                       | Returns layer summaries in the acknowledgement's `result`.                           |
-| `setFilter`        | `{ layerId, expression }`                                  | Applies a MapLibre filter expression; send `null` to clear it.                        |
-| `getViewport`      | `{}`                                                       | Returns the current camera and bounds in `result`.                                    |
-| `addLayer`         | `{ spec }`                                                 | Adds a project-format layer specification at runtime.                                 |
-| `addData`          | `{ url, styleUrl?, fit? }`                                 | Loads GeoJSON/API, ZIP, GeoParquet, PMTiles, or COG data without reloading the iframe. |
-| `exportImage`      | `{}`                                                       | Returns the rendered map as a PNG data URL in `result`.                               |
+| Type                 | Payload                                                    | Effect                                                                                 |
+| -------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `loadProject`        | `{ url }`                                                  | Loads a `.geolibre.json` project without reloading the iframe.                         |
+| `setView`            | `{ bbox }` or `{ center, zoom, bearing, pitch, duration }` | Fits a bounding box, or flies the camera to the properties you send.                   |
+| `highlightFeature`   | `{ layerId, featureId \| featureIds \| filter, fit }`      | Selects and highlights features; `filter` matches properties. `fit` zooms to them.     |
+| `openTool`           | `{ id, params }`                                           | Opens the Processing dialog on a tool, pre-filling `params`. Runtime twin of `?tool=`. |
+| `setLayerVisibility` | `{ layerId, visible }`                                     | Shows or hides a project layer.                                                        |
+| `listLayers`         | `{}`                                                       | Returns layer summaries in the acknowledgement's `result`.                             |
+| `setFilter`          | `{ layerId, expression }`                                  | Applies a MapLibre filter expression; send `null` to clear it.                         |
+| `getViewport`        | `{}`                                                       | Returns the current camera and bounds in `result`.                                     |
+| `addLayer`           | `{ spec }`                                                 | Adds a project-format layer specification at runtime.                                  |
+| `addData`            | `{ url, styleUrl?, fit? }`                                 | Loads GeoJSON/API, ZIP, GeoParquet, PMTiles, or COG data without reloading the iframe. |
+| `exportImage`        | `{}`                                                       | Returns the rendered map as a PNG data URL in `result`.                                |
 
 Send `{ layerId }` alone to `highlightFeature` to clear the highlight. A request
 that names features (or a filter) but matches none is rejected rather than
@@ -474,15 +474,15 @@ reporting whether it worked.
 
 ### GeoLibre to host
 
-| Type                | Payload                                                        | Fires when                                                       |
-| ------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `ready`             | `{ version }`                                                  | The app has mounted and is listening.                             |
-| `ack`               | `{ requestId, ok, error, result }`                             | A message you sent with a `requestId` was applied (or rejected).  |
-| `projectLoaded`     | `{ url, name, layerIds }`                                      | A project finished loading, whoever started it.                   |
-| `selectionChanged`  | `{ layerId, featureIds }`                                      | The user (or your `highlightFeature`) changed the selection.      |
-| `viewChanged`       | `{ bbox, center, zoom, bearing, pitch }`                       | The camera moved (throttled to about four events a second).       |
-| `toolCompleted`     | `{ id, name, status, engine, durationMs, outputLayerNames }`   | A processing run finished, successfully or not.                   |
-| `serverFileWritten` | `{ path, toolId }`                                             | A file-based tool wrote an output (conversion and raster tools).  |
+| Type                | Payload                                                      | Fires when                                                       |
+| ------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `ready`             | `{ version }`                                                | The app has mounted and is listening.                            |
+| `ack`               | `{ requestId, ok, error, result }`                           | A message you sent with a `requestId` was applied (or rejected). |
+| `projectLoaded`     | `{ url, name, layerIds }`                                    | A project finished loading, whoever started it.                  |
+| `selectionChanged`  | `{ layerId, featureIds }`                                    | The user (or your `highlightFeature`) changed the selection.     |
+| `viewChanged`       | `{ bbox, center, zoom, bearing, pitch }`                     | The camera moved (throttled to about four events a second).      |
+| `toolCompleted`     | `{ id, name, status, engine, durationMs, outputLayerNames }` | A processing run finished, successfully or not.                  |
+| `serverFileWritten` | `{ path, toolId }`                                           | A file-based tool wrote an output (conversion and raster tools). |
 
 ### A host page
 

@@ -12,7 +12,10 @@ npm install @geolibre/map maplibre-gl
 import maplibregl from "maplibre-gl";
 import { createLayerSync } from "@geolibre/map";
 
-const map = new maplibregl.Map({ container: "map", style: "https://tiles.openfreemap.org/styles/liberty" });
+const map = new maplibregl.Map({
+  container: "map",
+  style: "https://tiles.openfreemap.org/styles/liberty",
+});
 const sync = createLayerSync(map);
 
 map.on("load", () => {

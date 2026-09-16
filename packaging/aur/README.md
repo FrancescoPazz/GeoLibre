@@ -1,7 +1,7 @@
 # AUR packaging (`geolibre-bin`)
 
 GeoLibre ships to the [Arch User Repository](https://aur.archlinux.org/) as
-**`geolibre-bin`**, a *binary* package that repackages the Linux `.deb` already
+**`geolibre-bin`**, a _binary_ package that repackages the Linux `.deb` already
 attached to each GitHub release. It does not build from source, so installs are
 fast and need no Rust/Node toolchain. The `.deb` carries the binary, the
 `.desktop` entry, and the icons, so extracting it gives full desktop

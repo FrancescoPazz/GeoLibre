@@ -66,14 +66,14 @@ Three consequences of reading the buffer rather than watching the network:
 - **Worker requests are invisible.** MapLibre and similar renderers fetch vector
   tiles from a web worker, which records them in the worker's own timeline, not
   the document's. Such a tileset is recovered from the metadata the main thread
-  *did* fetch: its TileJSON, or failing that the style document, which GeoLibre
+  _did_ fetch: its TileJSON, or failing that the style document, which GeoLibre
   can resolve a layer from on its own. A style is only offered in its own right
   when no tileset from its origin was found.
 
   A TileJSON is recognized by name (`tile.json`, `tiles.json`, `tilejson.json`),
   which is narrower than every way a server can name one: tileserver-gl serves
   `/data/<id>.json`, and that tileset is reached through its style rather than
-  its metadata. Nothing reads the response, so a TileJSON describing *raster*
+  its metadata. Nothing reads the response, so a TileJSON describing _raster_
   tiles is indistinguishable from a vector one and is offered as a vector
   tileset. Such a false positive cannot become a layer: Add Data resolves the
   document on submit and refuses it when no source layers come out. Reading the
@@ -86,6 +86,7 @@ Three consequences of reading the buffer rather than watching the network:
   as well, so a style matched that way is still trusted to explain a tileset
   found at its origin, but never offered on its own, where a page's theme file
   would appear as a layer.
+
 - **The buffer is finite.** It holds 250 entries per document by default and
   stops recording once full. A map's own early requests are normally well inside
   that, but a very busy page can lose a service added late. Raising the limit
@@ -95,14 +96,14 @@ Three consequences of reading the buffer rather than watching the network:
   frame origin, and Chrome deliberately does not extend that grant to a frame
   from another origin. `allFrames: true` therefore reaches the top frame and its
   same-origin frames; injection into a cross-origin frame is refused, and the
-  refusal is per-frame, so the frames that *are* reachable still return their
+  refusal is per-frame, so the frames that _are_ reachable still return their
   buffers. A map that runs entirely inside a cross-origin `iframe` is thus
   invisible to the scan, and the popup reports no services rather than an error.
   Reaching one needs host permission for that origin — the standing access this
   design exists to avoid — so the boundary is accepted.
 
 A service endpoint on its own is rarely enough to add a layer, so each result
-also carries what the page asked that service *for*: the WMS `LAYERS` value, the
+also carries what the page asked that service _for_: the WMS `LAYERS` value, the
 WFS `typeName`, the WMTS layer, and — for a vector tileset, whose source layers
 live in its style rather than its URL — the style document the page loaded from
 the same origin. These arrive in GeoLibre as `serviceLayer` and `serviceStyle`
@@ -119,15 +120,15 @@ lists the expected service. Selecting the result opens the matching GeoLibre Add
 Data dialog with the service URL filled in. Each row below is a live third-party
 map, so what it detects is what a real page actually requests.
 
-| Service | Website | Detected service | Layer carried over |
-| --- | --- | --- | --- |
-| WMS | [OpenLayers "Image WMS" example](https://openlayers.org/en/latest/examples/wms-image.html) | `https://ahocevar.com/geoserver/wms` | `topp:states` |
-| WMTS | [OpenLayers "WMTS" example](https://openlayers.org/en/latest/examples/wmts.html) | The `GetTile` request as a tile template | `sgmc2` |
-| WFS | [OpenLayers "WFS" example](https://openlayers.org/en/latest/examples/vector-wfs.html) | `https://ahocevar.com/geoserver/wfs` | `osm:water_areas` |
-| OGC API Features | [pygeoapi lakes collection](https://demo.pygeoapi.io/master/collections/lakes/items?f=html) | `https://demo.pygeoapi.io/master/collections/lakes/items` | — |
-| ArcGIS Feature Service | [OpenLayers "Vector ESRI" example](https://openlayers.org/en/latest/examples/vector-esri.html) | The `…/FeatureServer/0` layer URL | `0` |
-| XYZ raster tiles | [openstreetmap.org](https://www.openstreetmap.org/) | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | — |
-| Vector tiles, in a same-origin `iframe` | [MapLibre "Display a map" example](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-map/) | `https://demotiles.maplibre.org/tiles/tiles.json` | style `…/style.json` |
+| Service                                 | Website                                                                                              | Detected service                                          | Layer carried over   |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | -------------------- |
+| WMS                                     | [OpenLayers "Image WMS" example](https://openlayers.org/en/latest/examples/wms-image.html)           | `https://ahocevar.com/geoserver/wms`                      | `topp:states`        |
+| WMTS                                    | [OpenLayers "WMTS" example](https://openlayers.org/en/latest/examples/wmts.html)                     | The `GetTile` request as a tile template                  | `sgmc2`              |
+| WFS                                     | [OpenLayers "WFS" example](https://openlayers.org/en/latest/examples/vector-wfs.html)                | `https://ahocevar.com/geoserver/wfs`                      | `osm:water_areas`    |
+| OGC API Features                        | [pygeoapi lakes collection](https://demo.pygeoapi.io/master/collections/lakes/items?f=html)          | `https://demo.pygeoapi.io/master/collections/lakes/items` | —                    |
+| ArcGIS Feature Service                  | [OpenLayers "Vector ESRI" example](https://openlayers.org/en/latest/examples/vector-esri.html)       | The `…/FeatureServer/0` layer URL                         | `0`                  |
+| XYZ raster tiles                        | [openstreetmap.org](https://www.openstreetmap.org/)                                                  | `https://tile.openstreetmap.org/{z}/{x}/{y}.png`          | —                    |
+| Vector tiles, in a same-origin `iframe` | [MapLibre "Display a map" example](https://maplibre.org/maplibre-gl-js/docs/examples/display-a-map/) | `https://demotiles.maplibre.org/tiles/tiles.json`         | style `…/style.json` |
 
 Each row above adds a layer that draws, with no further typing: that is the bar
 for this table. A row that opens the dialog but leaves a required field empty is

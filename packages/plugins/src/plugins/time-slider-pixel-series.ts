@@ -429,14 +429,12 @@ export async function queryPixelTimeSeries(
   // pulling some tasks, so those slots keep their (gap) placeholder instead of
   // staying `undefined` and breaking the band-union loop below.
   const points = sources.map(() =>
-    steps.map(
-      (date): PixelSeriesPoint => ({
-        date: isoDate(date),
-        timestamp: date.getTime(),
-        url: "",
-        bands: [],
-      }),
-    ),
+    steps.map((date): PixelSeriesPoint => ({
+      date: isoDate(date),
+      timestamp: date.getTime(),
+      url: "",
+      bands: [],
+    })),
   );
 
   // Flatten every (source, step) into one task list so READ_CONCURRENCY bounds

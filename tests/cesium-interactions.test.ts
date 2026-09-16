@@ -40,19 +40,17 @@ function setup() {
     coordinates: [-83.9, 35.9],
     elevation: -12,
   };
-  const layers = [false, true, true].map(
-    (click, index): GeoLibreLayer => ({
-      id: String(index),
-      name: `Layer ${index}`,
-      type: "geojson",
-      source: {},
-      metadata: {},
-      visible: true,
-      opacity: 1,
-      style: {},
-      popup: { click, hover: true, titleField: "name" },
-    }),
-  );
+  const layers = [false, true, true].map((click, index): GeoLibreLayer => ({
+    id: String(index),
+    name: `Layer ${index}`,
+    type: "geojson",
+    source: {},
+    metadata: {},
+    visible: true,
+    opacity: 1,
+    style: {},
+    popup: { click, hover: true, titleField: "name" },
+  }));
   useAppStore.setState({
     layers,
     selectedLayerId: null,

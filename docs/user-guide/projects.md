@@ -3,7 +3,7 @@
 A GeoLibre project captures your whole workspace in a single `.geolibre.json` file: the map view, the basemap, every layer with its source and style, map preferences, plugin state, and environment variables. Everything in this section lives under the **Project** menu.
 
 !!! note "Some entries may be hidden"
-    The Project menu is filtered by the active [UI profile](../ui-profiles.md), and a few entries are desktop-only. If an item described below is missing, check the profile in use and whether you are running the browser build.
+The Project menu is filtered by the active [UI profile](../ui-profiles.md), and a few entries are desktop-only. If an item described below is missing, check the profile in use and whether you are running the browser build.
 
 ![The Project menu](https://assets.geolibre.app/images/geolibre-project-menu.webp)
 
@@ -26,7 +26,7 @@ The **New project** dialog names the project and picks its starting basemap: the
 **Project → Open Recent** lists the projects you have opened before, each with its name, path, and the time you last opened it. Click an entry to reopen it, use the small remove button to drop a single entry, or choose **Clear Recent Projects** to empty the list. On the desktop app the recent list persists across sessions; in the browser it tracks URL-based projects.
 
 !!! note "Loading a project at startup"
-    You can open a project directly by passing its URL with the `url` query parameter, for example `?url=https://share.geolibre.app/you/project.geolibre.json`. See [Embedding & Sharing](embedding.md).
+You can open a project directly by passing its URL with the `url` query parameter, for example `?url=https://share.geolibre.app/you/project.geolibre.json`. See [Embedding & Sharing](embedding.md).
 
     On the desktop app you can also have GeoLibre reopen the last local project — or one specific local project — every time it launches; remote share links are never replayed on launch. See [Settings → Startup](settings.md#startup). A project URL in the address bar always takes precedence over that preference.
 
@@ -48,7 +48,7 @@ GeoLibre autosaves the project as you work. Three seconds after a change settles
 The store is capped, so history stays bounded: at most 20 snapshots per project, 10 MB per snapshot, and 50 MB in total. The oldest snapshots are dropped once a cap is hit, and a project too large to fit in a single snapshot is not autosaved.
 
 !!! note "Crash recovery is a standalone-browser feature"
-    In the browser build, and outside an embedded (iframe) session, GeoLibre marks the session open while you work. If the tab or browser goes away without closing cleanly and a newer autosave exists than your last explicit save, the next launch offers **Recover unsaved work?** with the option to restore or discard it. The desktop app and embedded deployments keep the history list but do not show this prompt.
+In the browser build, and outside an embedded (iframe) session, GeoLibre marks the session open while you work. If the tab or browser goes away without closing cleanly and a newer autosave exists than your last explicit save, the next launch offers **Recover unsaved work?** with the option to restore or discard it. The desktop app and embedded deployments keep the history list but do not show this prompt.
 
 Snapshots are stored per project — keyed by file path, or by name for a project you have not saved yet — and live only on the device that made them. They are not uploaded, not shared, and not part of the `.geolibre.json` file.
 

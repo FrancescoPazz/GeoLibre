@@ -52,7 +52,7 @@ many transitive dependencies they rely on).
 The **Atmospheric Effects** plugin (deep-space backdrop, parallax starfield,
 comets, and the globe atmosphere halo) adapts the technique and visual design
 from [Leonel Dias](https://leoneljdias.github.io/)'s article
-[*Globe atmosphere, halo, and comets*](https://leoneljdias.github.io/posts/globe-atmosphere-halo-comets/) —
+[_Globe atmosphere, halo, and comets_](https://leoneljdias.github.io/posts/globe-atmosphere-halo-comets/) —
 the layered Canvas 2D approach, the halo gradient and "screen" blend, the
 limb-sampling that keeps the halo aligned under pitch, and the starfield/comet
 parameters.

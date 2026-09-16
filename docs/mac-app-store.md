@@ -49,7 +49,7 @@ Tauri commands with stubs, and `GEOLIBRE_MAS_BUILD=1` hides the matching UI:
   Store MSIX build): a Store app updates only through the Store.
 - **Earth Engine sign-in** (Processing → Earth Engine, and the GeoAgent
   plugin's Earth Engine overlay). Unlike the items above this is not a sandbox
-  limit but an *entitlement* one — see below.
+  limit but an _entitlement_ one — see below.
 
 ### Earth Engine and the `network.server` entitlement
 
@@ -164,7 +164,7 @@ universal sandboxed app, signs it, verifies the sandbox entitlement, produces th
 signed `.pkg`, and uploads it as the `geolibre-mas-pkg` artifact. On a release
 run it also attaches that `.pkg` to the release, so the exact submitted bytes for
 a tag remain available after the CI artifact's retention window. It never uploads
-to App Store Connect — that step stays manual (see *Submitting* below).
+to App Store Connect — that step stays manual (see _Submitting_ below).
 
 > A MAS-signed `.pkg` can only be installed through the App Store; downloading it
 > from the releases page gets you a package that will not install. It is attached
@@ -178,14 +178,14 @@ otherwise-good release does not go red.
 
 Required repository secrets:
 
-| Secret | Contents |
-| --- | --- |
-| `APPLE_MAS_CERTIFICATE` | base64 `.p12` containing **both** the "Apple Distribution" and "3rd Party Mac Developer Installer" certificates with private keys |
-| `APPLE_MAS_CERTIFICATE_PASSWORD` | password of that `.p12` |
-| `APPLE_MAS_SIGNING_IDENTITY` | `Apple Distribution: Name (TEAMID)` |
-| `APPLE_MAS_INSTALLER_IDENTITY` | `3rd Party Mac Developer Installer: Name (TEAMID)` |
-| `APPLE_MAS_PROVISIONING_PROFILE` | base64 Mac App Store `.provisionprofile` for `org.geolibre.desktop` |
-| `APPLE_TEAM_ID` | already configured for `release.yml` |
+| Secret                           | Contents                                                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_MAS_CERTIFICATE`          | base64 `.p12` containing **both** the "Apple Distribution" and "3rd Party Mac Developer Installer" certificates with private keys |
+| `APPLE_MAS_CERTIFICATE_PASSWORD` | password of that `.p12`                                                                                                           |
+| `APPLE_MAS_SIGNING_IDENTITY`     | `Apple Distribution: Name (TEAMID)`                                                                                               |
+| `APPLE_MAS_INSTALLER_IDENTITY`   | `3rd Party Mac Developer Installer: Name (TEAMID)`                                                                                |
+| `APPLE_MAS_PROVISIONING_PROFILE` | base64 Mac App Store `.provisionprofile` for `org.geolibre.desktop`                                                               |
+| `APPLE_TEAM_ID`                  | already configured for `release.yml`                                                                                              |
 
 Creating the inputs (Apple Developer account required):
 

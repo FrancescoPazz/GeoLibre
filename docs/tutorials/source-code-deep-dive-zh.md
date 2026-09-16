@@ -10,25 +10,24 @@
 
 本文对照 GeoLibre 仓库源码逐层拆解项目架构，梳理项目依赖选型、DuckDB-WASM 空间计算内核、前端性能优化策略、状态管理设计、离线缓存三层策略与云原生地理数据整套方案，文中标注全部对应源码文件路径，所有技术方案均可直接复用至 WebGIS 项目。
 
-
 ## 一、它的工具箱：值得单独拿出来看的开源库
 
 仓库是 npm workspaces 单体仓库，7 个包 + 桌面应用。依赖按用途归类如下，以下标注的为值得重点关注的库。
 
 ### 1.1 格式解析：轻量优先，重武器备用
 
-| 库 | 版本 | 负责 | 为什么是它 |
-|---|---|---|---|
-| **`@duckdb/duckdb-wasm`** | 1.33.1 | GeoParquet、FlatGeobuf、GML、DXF、TAB，以及空间 SQL | 一个库同时当**格式驱动**和**计算引擎** |
-| **`shpjs`** | 6.2 | Shapefile | 纯 JS 几十 KB；`.prj` 定投影、`.cpg` 定编码（**中文属性乱码可以得到正确处理**） |
-| **`fflate`** | 0.8 | zip / kmz / aprx 解压 | 极小极快 |
-| **`sql.js`** | 1.14 | GeoPackage 读**和写** | **GPKG 本质就是 SQLite**，轻量高效 |
-| **`exifr`** | 7.1 | 照片 EXIF GPS → 点图层 | 无人机场景实用 |
-| **`gdal3.js`** | 2.8 | 只用于地理配准的 GeoTIFF/COG 导出 | wasm ~28MB + data ~12MB，只从 CDN 拉，从不打包 |
-| **`geotiff`** | 3.0 | GeoTIFF 解码 | — |
-| **`h5wasm` / `netcdfjs`** | — | HDF5 / NetCDF-3 | 分工明确，各管一种 |
-| **`@osmix/pbf` `@osmix/core`** | — | OSM PBF | 跑在 Web Worker 里 |
-| **`pmtiles`** `proj4` `fast-xml-parser` | — | 瓦片包 / 投影 / XML | 基础件 |
+| 库                                      | 版本   | 负责                                                | 为什么是它                                                                      |
+| --------------------------------------- | ------ | --------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **`@duckdb/duckdb-wasm`**               | 1.33.1 | GeoParquet、FlatGeobuf、GML、DXF、TAB，以及空间 SQL | 一个库同时当**格式驱动**和**计算引擎**                                          |
+| **`shpjs`**                             | 6.2    | Shapefile                                           | 纯 JS 几十 KB；`.prj` 定投影、`.cpg` 定编码（**中文属性乱码可以得到正确处理**） |
+| **`fflate`**                            | 0.8    | zip / kmz / aprx 解压                               | 极小极快                                                                        |
+| **`sql.js`**                            | 1.14   | GeoPackage 读**和写**                               | **GPKG 本质就是 SQLite**，轻量高效                                              |
+| **`exifr`**                             | 7.1    | 照片 EXIF GPS → 点图层                              | 无人机场景实用                                                                  |
+| **`gdal3.js`**                          | 2.8    | 只用于地理配准的 GeoTIFF/COG 导出                   | wasm ~28MB + data ~12MB，只从 CDN 拉，从不打包                                  |
+| **`geotiff`**                           | 3.0    | GeoTIFF 解码                                        | —                                                                               |
+| **`h5wasm` / `netcdfjs`**               | —      | HDF5 / NetCDF-3                                     | 分工明确，各管一种                                                              |
+| **`@osmix/pbf` `@osmix/core`**          | —      | OSM PBF                                             | 跑在 Web Worker 里                                                              |
+| **`pmtiles`** `proj4` `fast-xml-parser` | —      | 瓦片包 / 投影 / XML                                 | 基础件                                                                          |
 
 **这里最值得借鉴的是「按格式选最轻的路径」。** 源码里 `packages/plugins/package.json` 有 60 多个依赖，但没有一个「大一统读取层」——每种格式各走各的最短路。
 
@@ -44,12 +43,12 @@ KML 那条尤其能说明取舍。`docs/architecture.md:61` 写得很直白：KM
 
 这块的分工很容易看混，按源码捋一遍（依据 `docs/architecture.md:75-79`）：
 
-| 引擎 | 在哪跑 | 定位 |
-|---|---|---|
-| **Turf.js**（`@turf/*` 二十来个子包） | 浏览器纯 JS | **矢量工具的默认引擎**，零依赖零后端 |
-| **GeoPandas / Shapely** | Python sidecar | 需要**投影感知**结果时的升级项 |
-| **GeoPandas / Shapely** | 浏览器 Pyodide | **同一份代码**，Web 版也能用 |
-| **DuckDB / PGlite+PostGIS / SedonaDB** | 浏览器 或 sidecar | SQL Workspace 的三个引擎 |
+| 引擎                                   | 在哪跑            | 定位                                 |
+| -------------------------------------- | ----------------- | ------------------------------------ |
+| **Turf.js**（`@turf/*` 二十来个子包）  | 浏览器纯 JS       | **矢量工具的默认引擎**，零依赖零后端 |
+| **GeoPandas / Shapely**                | Python sidecar    | 需要**投影感知**结果时的升级项       |
+| **GeoPandas / Shapely**                | 浏览器 Pyodide    | **同一份代码**，Web 版也能用         |
+| **DuckDB / PGlite+PostGIS / SedonaDB** | 浏览器 或 sidecar | SQL Workspace 的三个引擎             |
 
 注意 Turf 是**按需引入子包**的（`@turf/buffer`、`@turf/intersect`……），不是整包 import。这个习惯很重要——Turf 全量引入是很大一坨，按子包引才有意义。
 
@@ -59,18 +58,18 @@ KML 那条尤其能说明取舍。`docs/architecture.md:61` 写得很直白：KM
 
 ### 1.3 渲染与图层：MapLibre 插件生态
 
-| 库 | 负责 |
-|---|---|
-| **`maplibre-gl`** 5.24 | 主地图 |
-| **`deck.gl`** 9.3（core/layers/geo-layers/mesh-layers/aggregation-layers/mapbox） | COG、3D Tiles、I3S、可视化图层，交织进 MapLibre 画布 |
-| **`maplibre-gl-3d-tiles` / `-lidar` / `-splat` / `-raster` / `-vector`** | **不换引擎，MapLibre 上直接加 3D Tiles、点云、高斯泼溅** |
-| **`@developmentseed/deck.gl-geotiff` / `-raster`** | COG 渲染 |
-| **`@carbonplan/zarr-layer`** | Zarr 科学数据 |
-| **`@loaders.gl/i3s`** / **`@esri/maplibre-arcgis`** | Esri 生态接入 |
-| **`@geoman-io/maplibre-geoman-free`** | 绘制与编辑 |
-| **`maplibre-gl-time-slider` / `-swipe` / `-layer-control` / `-basemap-control`** | 交互控件 |
-| **`@tanstack/react-virtual`** | 属性表虚拟化 |
-| **`cesium`** 1.143 | 可选的三维球分屏，**懒加载 ~4.8MB 独立 chunk** |
+| 库                                                                                | 负责                                                     |
+| --------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| **`maplibre-gl`** 5.24                                                            | 主地图                                                   |
+| **`deck.gl`** 9.3（core/layers/geo-layers/mesh-layers/aggregation-layers/mapbox） | COG、3D Tiles、I3S、可视化图层，交织进 MapLibre 画布     |
+| **`maplibre-gl-3d-tiles` / `-lidar` / `-splat` / `-raster` / `-vector`**          | **不换引擎，MapLibre 上直接加 3D Tiles、点云、高斯泼溅** |
+| **`@developmentseed/deck.gl-geotiff` / `-raster`**                                | COG 渲染                                                 |
+| **`@carbonplan/zarr-layer`**                                                      | Zarr 科学数据                                            |
+| **`@loaders.gl/i3s`** / **`@esri/maplibre-arcgis`**                               | Esri 生态接入                                            |
+| **`@geoman-io/maplibre-geoman-free`**                                             | 绘制与编辑                                               |
+| **`maplibre-gl-time-slider` / `-swipe` / `-layer-control` / `-basemap-control`**  | 交互控件                                                 |
+| **`@tanstack/react-virtual`**                                                     | 属性表虚拟化                                             |
+| **`cesium`** 1.143                                                                | 可选的三维球分屏，**懒加载 ~4.8MB 独立 chunk**           |
 
 ![3D Tiles、矢量、glTF、高斯泼溅混排在同一个图层列表](https://assets.geolibre.app/images/3dtiles.webp)
 
@@ -99,11 +98,11 @@ KML 那条尤其能说明取舍。`docs/architecture.md:61` 写得很直白：KM
 
 这三个名字经常被混着说，其实是套娃：
 
-| 层 | 是什么 | 关系 |
-|---|---|---|
-| **WebAssembly** | 浏览器里的二进制指令格式 | 只是一种「运行原生代码的能力」，本身不做任何 GIS 的事 |
-| **DuckDB-WASM** | DuckDB（C++ 写的分析型数据库）编译成 WASM 的产物 | **它是「用 WASM 实现的 DuckDB」，不是 WASM 本身** |
-| **Spatial 扩展** | DuckDB 的空间扩展，同样是一份独立 `.wasm` | 需要**单独 `INSTALL` / `LOAD`**，不加载就没有任何空间函数 |
+| 层               | 是什么                                           | 关系                                                      |
+| ---------------- | ------------------------------------------------ | --------------------------------------------------------- |
+| **WebAssembly**  | 浏览器里的二进制指令格式                         | 只是一种「运行原生代码的能力」，本身不做任何 GIS 的事     |
+| **DuckDB-WASM**  | DuckDB（C++ 写的分析型数据库）编译成 WASM 的产物 | **它是「用 WASM 实现的 DuckDB」，不是 WASM 本身**         |
+| **Spatial 扩展** | DuckDB 的空间扩展，同样是一份独立 `.wasm`        | 需要**单独 `INSTALL` / `LOAD`**，不加载就没有任何空间函数 |
 
 > **最容易踩的认知误区：** 以为装了 duckdb-wasm 就有空间能力。没有。`ST_Read`、`ST_Transform`、`ST_AsWKB` 这些全在 spatial 扩展里，它是运行时从 CDN 拉下来再加载的第二份 WASM。
 
@@ -113,15 +112,15 @@ KML 那条尤其能说明取舍。`docs/architecture.md:61` 写得很直白：KM
 
 源码中 DuckDB 的调用点归类如下：
 
-| 用途 | 走的接口 | 备注 |
-|---|---|---|
-| GeoParquet | `read_parquet` | **本地和远程都走它**，远程按 HTTP Range 拉 |
-| FlatGeobuf / GML / DXF / TAB 等 | `ST_Read` | GDAL 后端，能读多少看扩展装载情况 |
-| Shapefile（zip） | 先 `shpjs`，读不了再交给 Spatial | 轻量优先，重武器兜底 |
-| KML | 先自研解析器（保符号化），失败再交给 Spatial | Spatial 只能拿到几何，样式会丢 |
-| CSV 里的 WKT 几何列 | DuckDB SQL | 直接把文本几何转成图层 |
-| 坐标系转换 | `ST_Transform` | 老式 `crs` 字段的 GeoJSON 靠它重投影 |
-| **SQL 工作区** | 完整 DuckDB SQL | **已加载的图层被注册成表，可以直接 JOIN** |
+| 用途                            | 走的接口                                     | 备注                                       |
+| ------------------------------- | -------------------------------------------- | ------------------------------------------ |
+| GeoParquet                      | `read_parquet`                               | **本地和远程都走它**，远程按 HTTP Range 拉 |
+| FlatGeobuf / GML / DXF / TAB 等 | `ST_Read`                                    | GDAL 后端，能读多少看扩展装载情况          |
+| Shapefile（zip）                | 先 `shpjs`，读不了再交给 Spatial             | 轻量优先，重武器兜底                       |
+| KML                             | 先自研解析器（保符号化），失败再交给 Spatial | Spatial 只能拿到几何，样式会丢             |
+| CSV 里的 WKT 几何列             | DuckDB SQL                                   | 直接把文本几何转成图层                     |
+| 坐标系转换                      | `ST_Transform`                               | 老式 `crs` 字段的 GeoJSON 靠它重投影       |
+| **SQL 工作区**                  | 完整 DuckDB SQL                              | **已加载的图层被注册成表，可以直接 JOIN**  |
 
 > **关键洞察：** 注意最后一行。这是一个很容易被低估的设计：地图上的图层同时是 SQL 里的表，用户可以对着两个图层写 `JOIN`、写 `ST_Intersects`，结果再直接变成新图层。**「地图」和「数据库」在这里是同一份东西的两个视图。**
 
@@ -160,7 +159,9 @@ const spatialExtensionByDb = new WeakMap<duckdb.AsyncDuckDB, Promise<void>>();
 export async function ensureSpatialExtension(db, connection, beforeLoad?) {
   let promise = spatialExtensionByDb.get(db);
   if (!promise) {
-    promise = (async () => { /* …INSTALL / LOAD… */ })();
+    promise = (async () => {
+      /* …INSTALL / LOAD… */
+    })();
     spatialExtensionByDb.set(db, promise);
   }
   try {
@@ -205,12 +206,12 @@ GeoLibre 的应对是两手：
 
 关于 DuckDB-WASM 的赞誉文章很多，这一节专门整理源码中揭示的实际限制。了解这些限制之后，反而更清楚其适用边界——知道约束所在，比在不知边界的情况下使用更稳妥。
 
-| 限制 | 数值 | 原因 |
-|---|---|---|
-| 远程文件大小 | **2 GiB** | DuckDB-WASM 的 HTTP 文件系统用 32 位存远程文件大小 |
-| 单标签页内存 | ~4 GiB | WASM 的地址空间上限 |
-| 要素数确认阈值 | 500,000 | 超过要用户确认才物化 |
-| 线程 | 单线程 | 超大数据该回服务端就回服务端 |
+| 限制           | 数值      | 原因                                               |
+| -------------- | --------- | -------------------------------------------------- |
+| 远程文件大小   | **2 GiB** | DuckDB-WASM 的 HTTP 文件系统用 32 位存远程文件大小 |
+| 单标签页内存   | ~4 GiB    | WASM 的地址空间上限                                |
+| 要素数确认阈值 | 500,000   | 超过要用户确认才物化                               |
+| 线程           | 单线程    | 超大数据该回服务端就回服务端                       |
 
 2 GiB 那条有个细节很有参考价值：这个门禁是**在开始摄取之前**就判掉的（`_registerSource` 跑在流式分支前面，所以「流式读取」也绕不过去）。GeoLibre 的做法是在文件浏览面板上直接把话说清楚，而不是让用户点了 Add 之后等一个必然失败的结果。**能提前判定的失败，就不要留到运行时。**
 
@@ -246,15 +247,15 @@ compile_error!("the `mas` (Mac App Store) build must not enable `native-duckdb`:
 
 源码里的阈值常量（都是可查的）：
 
-| 常量 | 值 | 位置 | 保护什么 |
-|---|---|---|---|
-| `LARGE_VECTOR_FEATURE_THRESHOLD` | **50,000** | `core/src/types.ts:670` | 主线程 GeoJSON 解析 |
-| `maxHistoryFeatureCount` | 500,000 | `core/src/history.ts:29` | 撤销栈内存 |
-| `DUCKDB_VECTOR_FEATURE_WARN_COUNT` | 100,000 | `core/src/types.ts:1838` | 结果物化内存 |
-| `MAX_CEREUS_FEATURES` | 50,000 | `lib/sedona-workspace.ts:25` | WASM 堆 |
-| `MAX_DERIVED_FEATURES` | 50,000 | `map/src/derived-geometry.ts:37` | 派生几何计算 |
-| `historyCoalesceMs` | 400 ms | `core/src/history.ts:6` | 撤销记录爆炸 |
-| 远程文件 | 2 GiB | `plugins/remote-file-formats.ts` | DuckDB-WASM 32 位 |
+| 常量                               | 值         | 位置                             | 保护什么            |
+| ---------------------------------- | ---------- | -------------------------------- | ------------------- |
+| `LARGE_VECTOR_FEATURE_THRESHOLD`   | **50,000** | `core/src/types.ts:670`          | 主线程 GeoJSON 解析 |
+| `maxHistoryFeatureCount`           | 500,000    | `core/src/history.ts:29`         | 撤销栈内存          |
+| `DUCKDB_VECTOR_FEATURE_WARN_COUNT` | 100,000    | `core/src/types.ts:1838`         | 结果物化内存        |
+| `MAX_CEREUS_FEATURES`              | 50,000     | `lib/sedona-workspace.ts:25`     | WASM 堆             |
+| `MAX_DERIVED_FEATURES`             | 50,000     | `map/src/derived-geometry.ts:37` | 派生几何计算        |
+| `historyCoalesceMs`                | 400 ms     | `core/src/history.ts:6`          | 撤销记录爆炸        |
+| 远程文件                           | 2 GiB      | `plugins/remote-file-formats.ts` | DuckDB-WASM 32 位   |
 
 **注意这些阈值全是命名常量、全带文档注释、而且 `historyCoalesceMs` 和 `maxHistoryFeatureCount` 都有 setter 可运行时改（测试里设成 0）。** 这比散落在代码里的 magic number 高一个段位。
 
@@ -292,7 +293,7 @@ if (abortController?.signal.aborted) return { data: new ArrayBuffer(0) };
 **一般化：凡是「按需生产」的异步管线，都必须支持取消。** 对应到实际项目里：快速拖动地图时还在给离屏瓦片做投影转换、属性表快速翻页时前几页查询还在跑、图层快速切换时上一个的解析结果晚到覆盖了新图层（**经典竞态**）。
 
 !!! warning "`AbortController` 不只是给 fetch 用的"
-    任何超过一帧的循环，都该在循环体里检查 `signal.aborted` 并早退。
+任何超过一帧的循环，都该在循环体里检查 `signal.aborted` 并早退。
 
 ### 3.3 撤销栈：三个精细到值得借鉴的处理
 
@@ -336,12 +337,12 @@ let total = distinctFeatureCount(pastStates[lastIndex], seen);
 
 源码注释中有一份详细的体积分析，整理如下：
 
-| 重资源 | 体积 | 处理方式 |
-|---|---|---|
-| CesiumJS | ~4.8 MB | 独立 chunk，切到球面视图才 `import()` |
-| PGlite + PostGIS | ~25 MB（打进桌面端会多 **~22 MB 几乎不可压缩的体积**） | 默认走 jsDelivr CDN，不进构建 |
-| gdal3.js | wasm ~28 MB + data ~12 MB | **从不打包**，只从 CDN 取；关掉 CDN 就是关掉这个功能 |
-| Pyodide / CereusDB | 各数十 MB | CDN 加载，PGlite 和 CereusDB 可用构建开关改成内置 |
+| 重资源             | 体积                                                   | 处理方式                                             |
+| ------------------ | ------------------------------------------------------ | ---------------------------------------------------- |
+| CesiumJS           | ~4.8 MB                                                | 独立 chunk，切到球面视图才 `import()`                |
+| PGlite + PostGIS   | ~25 MB（打进桌面端会多 **~22 MB 几乎不可压缩的体积**） | 默认走 jsDelivr CDN，不进构建                        |
+| gdal3.js           | wasm ~28 MB + data ~12 MB                              | **从不打包**，只从 CDN 取；关掉 CDN 就是关掉这个功能 |
+| Pyodide / CereusDB | 各数十 MB                                              | CDN 加载，PGlite 和 CereusDB 可用构建开关改成内置    |
 
 **所以那个「安装包只有 30MB」的数字，是用「几乎所有重引擎都不打包」换来的。**这个思路值得借鉴：重引擎的默认位置应该是「用户第一次点它的时候才下载」，不是「装在包里以防万一」。
 
@@ -388,10 +389,26 @@ let total = distinctFeatureCount(pastStates[lastIndex], seen);
 
 ```ts
 export const LAYER_TYPES = [
-  "geojson", "raster", "wms", "wmts", "xyz", "vector-tiles", "arcgis",
-  "pmtiles", "mbtiles", "zarr", "lidar", "gaussian-splat", "3d-tiles",
-  "cog", "flatgeobuf", "geoparquet", "duckdb-query", "deckgl-viz",
-  "video", "image",
+  "geojson",
+  "raster",
+  "wms",
+  "wmts",
+  "xyz",
+  "vector-tiles",
+  "arcgis",
+  "pmtiles",
+  "mbtiles",
+  "zarr",
+  "lidar",
+  "gaussian-splat",
+  "3d-tiles",
+  "cog",
+  "flatgeobuf",
+  "geoparquet",
+  "duckdb-query",
+  "deckgl-viz",
+  "video",
+  "image",
 ] as const;
 export type LayerType = (typeof LAYER_TYPES)[number];
 ```
@@ -405,7 +422,9 @@ export type LayerType = (typeof LAYER_TYPES)[number];
 ```ts
 export interface MapViewState {
   center: [number, number];
-  zoom: number; bearing: number; pitch: number;
+  zoom: number;
+  bearing: number;
+  pitch: number;
   bbox?: [number, number, number, number];
 }
 ```
@@ -430,11 +449,11 @@ export interface MapViewState {
 
 Web 构建是一个可安装的 PWA，用 `vite-plugin-pwa` + Workbox。缓存**刻意分成三层**：
 
-| 层 | 策略 | 内容 | 为什么这么分 |
-|---|---|---|---|
-| **预缓存** | Precache | HTML + 启动地图必需的 JS/CSS chunk | **首访之后无网也能开壳**；重型 chunk **排除在外**，避免首屏巨量下载 |
-| **同源运行时缓存** | CacheFirst | `/assets/` 下的内容哈希产物：MapLibre、**DuckDB-WASM 及其 spatial 扩展**、各插件 chunk | 哈希文件名让 CacheFirst 安全——重新部署会生成新 URL，旧条目不会被当成新的 |
-| **CDN 引擎缓存** | CacheFirst（独立规则 `geolibre-cdn-engines`） | jsDelivr 上的 Pyodide、PGlite/PostGIS、CereusDB、gdal3.js | URL 里嵌了精确版本号，同样不会供旧版；jsDelivr 的 CORS 头让它们是可正常校验和淘汰的 200，不是 opaque 响应 |
+| 层                 | 策略                                          | 内容                                                                                   | 为什么这么分                                                                                              |
+| ------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **预缓存**         | Precache                                      | HTML + 启动地图必需的 JS/CSS chunk                                                     | **首访之后无网也能开壳**；重型 chunk **排除在外**，避免首屏巨量下载                                       |
+| **同源运行时缓存** | CacheFirst                                    | `/assets/` 下的内容哈希产物：MapLibre、**DuckDB-WASM 及其 spatial 扩展**、各插件 chunk | 哈希文件名让 CacheFirst 安全——重新部署会生成新 URL，旧条目不会被当成新的                                  |
+| **CDN 引擎缓存**   | CacheFirst（独立规则 `geolibre-cdn-engines`） | jsDelivr 上的 Pyodide、PGlite/PostGIS、CereusDB、gdal3.js                              | URL 里嵌了精确版本号，同样不会供旧版；jsDelivr 的 CORS 头让它们是可正常校验和淘汰的 200，不是 opaque 响应 |
 
 **所以这些 CDN 引擎的准确表述是：在 Web PWA 里，首次「成功」取回需要网络——CacheFirst 只有在真的存下了一份响应之后才会走缓存——此后才离线可用。** 桌面端根本不注册 Service Worker，这条对它不成立，见下面的要点。
 
@@ -450,7 +469,7 @@ Web 构建是一个可安装的 PWA，用 `vite-plugin-pwa` + Workbox。缓存**
 - 新部署用 `registerType: "autoUpdate"` + `skipWaiting`，但**故意压掉了 Workbox 默认的「激活时强制刷新」**——因为在 `/demo/` 这种相对 base 的子路径下会误触发，把用户正在编辑的地图状态冲掉。页面恢复交给 `installStaleChunkReload`，**只在孤儿 lazy chunk 404 时才重载**，还带冷却保护
 
 !!! tip "最值钱的一条"
-    最后这条是整节最有价值的——「只有经历过实际生产问题才会写出来」的代码。自动更新导致用户丢失未保存工作，是 PWA 最容易犯又最伤人的错误。
+最后这条是整节最有价值的——「只有经历过实际生产问题才会写出来」的代码。自动更新导致用户丢失未保存工作，是 PWA 最容易犯又最伤人的错误。
 
 ### 借鉴要点
 
@@ -477,11 +496,11 @@ Web 构建是一个可安装的 PWA，用 `vite-plugin-pwa` + Workbox。缓存**
 
 这是最根本的一条。传统格式（GeoJSON、Shapefile、条带式 GeoTIFF）**没法按字节区间局部读取——即便有索引也在旁挂的独立文件里，客户端仍然只能把数据整份拿下来**。云原生格式把索引放进数据文件自身，于是有了三个维度的裁剪：
 
-| 裁剪维度 | 靠什么实现 | 效果 |
-|---|---|---|
-| **空间** | FlatGeobuf 的 R 树索引、PMTiles 的瓦片编排 | **只取视口内的要素/瓦片** |
-| **分辨率** | COG 的金字塔（overviews）、PMTiles 的缩放层级 | 看全国就取最粗那一层，不解一亿像素 |
-| **属性列** | GeoParquet 的**列式存储** | 只要 3 个字段就只读 3 列的字节，其余列一个字节都不碰 |
+| 裁剪维度   | 靠什么实现                                    | 效果                                                 |
+| ---------- | --------------------------------------------- | ---------------------------------------------------- |
+| **空间**   | FlatGeobuf 的 R 树索引、PMTiles 的瓦片编排    | **只取视口内的要素/瓦片**                            |
+| **分辨率** | COG 的金字塔（overviews）、PMTiles 的缩放层级 | 看全国就取最粗那一层，不解一亿像素                   |
+| **属性列** | GeoParquet 的**列式存储**                     | 只要 3 个字段就只读 3 列的字节，其余列一个字节都不碰 |
 
 **第三条是 GeoParquet 最容易被低估的地方。列式存储 + 行组统计信息（min/max）意味着 `WHERE` 条件能被下推**——DuckDB 先看统计信息就知道整个行组都不满足条件，直接跳过，连那段字节都不用下载。
 
@@ -518,14 +537,14 @@ Web 构建是一个可安装的 PWA，用 `vite-plugin-pwa` + Workbox。缓存**
 
 ### 6.2 GeoLibre 直读这些格式时走的路
 
-| 格式 | 读取路径 | 关键点 |
-|---|---|---|
-| **PMTiles** | MapLibre 自定义协议（`pmtiles` 包） | 一个文件顶替整个瓦片服务，前端只多注册一个 protocol |
-| **COG** | **`cog-tiler-wasm`（默认）** / deck.gl GPU / TiTiler | 三种引擎可切，前两种完全在客户端 |
-| **GeoParquet** | DuckDB-WASM `read_parquet` | 可选「原地流式查询」，不必整份拷进内存 |
-| **FlatGeobuf** | DuckDB Spatial `ST_Read` | 自带空间索引，天然适合 range 读取 |
-| **MosaicJSON / STAC 清单** | 栅格控件读清单，**读时拼接场景** | 清单本身不含数据，只有一串资产地址 |
-| **云优化 NetCDF/HDF5** | kerchunk 引用清单 → Zarr 渲染管线 | 见 6.5 |
+| 格式                       | 读取路径                                             | 关键点                                              |
+| -------------------------- | ---------------------------------------------------- | --------------------------------------------------- |
+| **PMTiles**                | MapLibre 自定义协议（`pmtiles` 包）                  | 一个文件顶替整个瓦片服务，前端只多注册一个 protocol |
+| **COG**                    | **`cog-tiler-wasm`（默认）** / deck.gl GPU / TiTiler | 三种引擎可切，前两种完全在客户端                    |
+| **GeoParquet**             | DuckDB-WASM `read_parquet`                           | 可选「原地流式查询」，不必整份拷进内存              |
+| **FlatGeobuf**             | DuckDB Spatial `ST_Read`                             | 自带空间索引，天然适合 range 读取                   |
+| **MosaicJSON / STAC 清单** | 栅格控件读清单，**读时拼接场景**                     | 清单本身不含数据，只有一串资产地址                  |
+| **云优化 NetCDF/HDF5**     | kerchunk 引用清单 → Zarr 渲染管线                    | 见 6.5                                              |
 
 ### 6.3 真正的门槛不是格式转换，是 CORS
 
@@ -538,7 +557,7 @@ Web 构建是一个可安装的 PWA，用 `vite-plugin-pwa` + Workbox。缓存**
 > MapLibre 用 `fetch()` 取栅格瓦片，会走 CORS 检查，所以地图渲染成一片黑。而 openplanetarymap.org 自己没事，是因为 Leaflet 用 `<img>` 标签加载瓦片，**而 `<img>` 不做 CORS 检查**。
 
 !!! danger "关键陷阱"
-    同一个瓦片地址，Leaflet 能显示、MapLibre 显示不出来，根因可能既不是代码也不是瓦片本身，而是两个库取图的方式不同。
+同一个瓦片地址，Leaflet 能显示、MapLibre 显示不出来，根因可能既不是代码也不是瓦片本身，而是两个库取图的方式不同。
 
 这条链路上有三个做法值得借鉴：**服务端取数据再补 CORS 头**（避免浏览器直接发起跨域请求）、**结果放边缘缓存**（重复请求不回源）、**严格白名单绝不做开放代理**（源码原话是「keyed to a tight allowlist so it is never an open proxy」）。第三条是安全底线：能转发任意 URL 的公开代理，容易被恶意利用，后果需要自行承担。
 

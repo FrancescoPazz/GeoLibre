@@ -12,13 +12,13 @@ This article systematically catalogs every geospatial data format built into Geo
 
 Before listing formats, it's important to clarify "where it runs," since many formats have platform-specific differences.
 
-| Runtime | How | Notes |
-|---|---|---|
-| Browser | Open `web.geolibre.app` | No installation needed; works offline after initial load |
+| Runtime | How                         | Notes                                                                                  |
+| ------- | --------------------------- | -------------------------------------------------------------------------------------- |
+| Browser | Open `web.geolibre.app`     | No installation needed; works offline after initial load                               |
 | Desktop | Tauri v2 native application | Windows / macOS / Linux; available via Microsoft Store, Homebrew, winget, AUR, Flatpak |
-| Android | Google Play native app | ~40 MB per ABI |
-| iOS | App Store native app | iPhone and iPad, same codebase via Tauri v2 mobile |
-| Jupyter | `pip install geolibre` | The entire application embedded in a notebook cell |
+| Android | Google Play native app      | ~40 MB per ABI                                                                         |
+| iOS     | App Store native app        | iPhone and iPad, same codebase via Tauri v2 mobile                                     |
+| Jupyter | `pip install geolibre`      | The entire application embedded in a notebook cell                                     |
 
 > **No accounts, no servers, no fees for the core application.** Local files are read in place and stay on your machine, and once the app has loaded, local workflows keep working offline. The optional remote pieces are the exception: online catalogs (STAC, Source Cooperative, Overture, Planetary Computer), basemap and tile downloads from a CDN, and services such as Earth Engine or an authenticated ArcGIS endpoint all need network access, and some need their own credentials or OAuth sign-in.
 
@@ -37,30 +37,30 @@ csv, tsv, kml, kmz, gml, gpx, dxf, tab, shp, zip
 
 What's truly interesting is **which engine reads each format behind the scenes** — this determines actual performance:
 
-| Format | Extension | Read Engine | Notable Details |
-|---|---|---|---|
-| **GeoJSON** | `.geojson` `.json` | Native `JSON.parse` | Files with legacy top-level `crs` members are automatically reprojected to WGS84 via DuckDB |
-| **GeoParquet / Parquet** | `.parquet` `.geoparquet` | DuckDB `read_parquet` | Remote files use HTTP Range streaming reads; no full download needed |
-| **FlatGeobuf** | `.fgb` `.flatgeobuf` | DuckDB `ST_Read` | — |
-| **GeoPackage** | `.gpkg` | **sql.js (SQLite WASM), not GDAL** | Multi-layer files prompt a layer selector; auto-repairs `gpkg_ogr_contents` |
-| **Shapefile (individual files)** | `.shp` | shpjs | Desktop auto-reads companion `.dbf/.shx/.prj/.cpg`; 3D MultiPatch falls back to DuckDB |
-| **Shapefile (zip archive)** | `.zip` | fflate decompress → shpjs | `.prj` determines projection, `.cpg` determines DBF encoding (**Chinese attribute encoding issues resolved**); auto-skips macOS `__MACOSX` |
-| **KML** | `.kml` | Custom parser | **Preserves embedded styling**; also extracts GroundOverlay images and `<Model>` 3D models |
-| **KMZ** | `.kmz` | fflate decompress | Custom icons and formatted descriptions are preserved |
-| **GML** | `.gml` | DuckDB `ST_Read` | — |
-| **GPX** | `.gpx` | Pure JS | **Auto-splits into three layers**: waypoints / tracks / routes |
-| **CSV / TSV** | `.csv` `.tsv` `.txt` `.dat` | Custom + DuckDB fallback | Auto-detects delimiter and lat/lon columns; WKT geometry columns go through DuckDB; dialog allows specifying source CRS |
-| **CAD (DXF/DWG)** | `.dxf` `.dwg` | DuckDB `ST_Read` | Presents a layer list for selection; **CAD files lack coordinate systems — EPSG must be selected manually** |
-| **MapInfo TAB** | `.tab` | `ST_Read` | — |
-| **Esri File Geodatabase** | `.gdb` **folder** | Python sidecar | Desktop-only, requires sidecar; hidden in Mac App Store builds |
-| **OSM PBF** | `.osm.pbf` `.pbf` | osmix, runs in Web Worker | Auto-splits into point/line/polygon layers; prompts confirmation above 50 MB; 5-minute timeout protection |
-| **GeoRSS** | `.xml` `.rss` `.atom` | Pure JS | Supports RSS 2.0 / Atom / RDF, GeoRSS Simple + GML geometries |
-| **Geotagged photos** | `.jpg` `.jpeg` `.png` `.tif` `.tiff` `.webp` `.heic` `.heif` | exifr | **Reads EXIF GPS data to directly generate a point layer** — very practical for UAV/drone photos |
+| Format                           | Extension                                                    | Read Engine                        | Notable Details                                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------ | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **GeoJSON**                      | `.geojson` `.json`                                           | Native `JSON.parse`                | Files with legacy top-level `crs` members are automatically reprojected to WGS84 via DuckDB                                                |
+| **GeoParquet / Parquet**         | `.parquet` `.geoparquet`                                     | DuckDB `read_parquet`              | Remote files use HTTP Range streaming reads; no full download needed                                                                       |
+| **FlatGeobuf**                   | `.fgb` `.flatgeobuf`                                         | DuckDB `ST_Read`                   | —                                                                                                                                          |
+| **GeoPackage**                   | `.gpkg`                                                      | **sql.js (SQLite WASM), not GDAL** | Multi-layer files prompt a layer selector; auto-repairs `gpkg_ogr_contents`                                                                |
+| **Shapefile (individual files)** | `.shp`                                                       | shpjs                              | Desktop auto-reads companion `.dbf/.shx/.prj/.cpg`; 3D MultiPatch falls back to DuckDB                                                     |
+| **Shapefile (zip archive)**      | `.zip`                                                       | fflate decompress → shpjs          | `.prj` determines projection, `.cpg` determines DBF encoding (**Chinese attribute encoding issues resolved**); auto-skips macOS `__MACOSX` |
+| **KML**                          | `.kml`                                                       | Custom parser                      | **Preserves embedded styling**; also extracts GroundOverlay images and `<Model>` 3D models                                                 |
+| **KMZ**                          | `.kmz`                                                       | fflate decompress                  | Custom icons and formatted descriptions are preserved                                                                                      |
+| **GML**                          | `.gml`                                                       | DuckDB `ST_Read`                   | —                                                                                                                                          |
+| **GPX**                          | `.gpx`                                                       | Pure JS                            | **Auto-splits into three layers**: waypoints / tracks / routes                                                                             |
+| **CSV / TSV**                    | `.csv` `.tsv` `.txt` `.dat`                                  | Custom + DuckDB fallback           | Auto-detects delimiter and lat/lon columns; WKT geometry columns go through DuckDB; dialog allows specifying source CRS                    |
+| **CAD (DXF/DWG)**                | `.dxf` `.dwg`                                                | DuckDB `ST_Read`                   | Presents a layer list for selection; **CAD files lack coordinate systems — EPSG must be selected manually**                                |
+| **MapInfo TAB**                  | `.tab`                                                       | `ST_Read`                          | —                                                                                                                                          |
+| **Esri File Geodatabase**        | `.gdb` **folder**                                            | Python sidecar                     | Desktop-only, requires sidecar; hidden in Mac App Store builds                                                                             |
+| **OSM PBF**                      | `.osm.pbf` `.pbf`                                            | osmix, runs in Web Worker          | Auto-splits into point/line/polygon layers; prompts confirmation above 50 MB; 5-minute timeout protection                                  |
+| **GeoRSS**                       | `.xml` `.rss` `.atom`                                        | Pure JS                            | Supports RSS 2.0 / Atom / RDF, GeoRSS Simple + GML geometries                                                                              |
+| **Geotagged photos**             | `.jpg` `.jpeg` `.png` `.tif` `.tiff` `.webp` `.heic` `.heif` | exifr                              | **Reads EXIF GPS data to directly generate a point layer** — very practical for UAV/drone photos                                           |
 
 _Explicitly unsupported: `.xlsx` / `.xls` (zero hits in a full-repo search), raw `.osm` XML (PBF only). If you need Excel data, save as CSV first._
 
 !!! tip "KML `<Model>` 3D Models"
-    The KML `<Model>` handling is worth noting: it loads embedded COLLADA `.dae` files with three.js, then exports them as GLB into the map. The project pulled in three.js just for this one edge case.
+The KML `<Model>` handling is worth noting: it loads embedded COLLADA `.dae` files with three.js, then exports them as GLB into the map. The project pulled in three.js just for this one edge case.
 
 After loading, it's not just "can you see it" — symbology, graduated coloring, and legends all come along:
 
@@ -74,15 +74,15 @@ After loading, it's not just "can you see it" — symbology, graduated coloring,
 
 The raster side is narrower than vector but covers the cloud-native mainline.
 
-| Format | Extension | Engine | Platform |
-|---|---|---|---|
-| **GeoTIFF / COG** | `.tif` `.tiff` | Default `cog-tiler-wasm`; switchable to GPU engine | All platforms; desktop local files use Tauri asset protocol for Range reads |
-| **MosaicJSON / STAC item** | `.json` | On-demand stitching at read time | All platforms |
-| **Georeferenced images** | Any browser-decodable image + GCP `.csv`/`.txt` | Least-squares affine; export via gdal3.js | All platforms (gdal3.js loaded from CDN) |
-| **KML GroundOverlay** | From `.kml` / `.kmz` | Four-corner coordinate image layer | Those with `<TimeSpan>` also support timeline animation |
-| **Georeferenced video** | `.mp4` + `.webm` | MapLibre video source | URL only |
-| **Conversion tool inputs (raster)** | `.tif .tiff .img .vrt .asc .nc .jp2 .hgt` | GDAL / rasterio sidecar | Desktop; browser only accepts `.tif/.tiff` |
-| **Whitebox raster I/O** | `.tif .tiff .img .bil .flt .sdat .rdc .asc` | whitebox-wasm | All platforms |
+| Format                              | Extension                                       | Engine                                             | Platform                                                                    |
+| ----------------------------------- | ----------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
+| **GeoTIFF / COG**                   | `.tif` `.tiff`                                  | Default `cog-tiler-wasm`; switchable to GPU engine | All platforms; desktop local files use Tauri asset protocol for Range reads |
+| **MosaicJSON / STAC item**          | `.json`                                         | On-demand stitching at read time                   | All platforms                                                               |
+| **Georeferenced images**            | Any browser-decodable image + GCP `.csv`/`.txt` | Least-squares affine; export via gdal3.js          | All platforms (gdal3.js loaded from CDN)                                    |
+| **KML GroundOverlay**               | From `.kml` / `.kmz`                            | Four-corner coordinate image layer                 | Those with `<TimeSpan>` also support timeline animation                     |
+| **Georeferenced video**             | `.mp4` + `.webm`                                | MapLibre video source                              | URL only                                                                    |
+| **Conversion tool inputs (raster)** | `.tif .tiff .img .vrt .asc .nc .jp2 .hgt`       | GDAL / rasterio sidecar                            | Desktop; browser only accepts `.tif/.tiff`                                  |
+| **Whitebox raster I/O**             | `.tif .tiff .img .bil .flt .sdat .rdc .asc`     | whitebox-wasm                                      | All platforms                                                               |
 
 ![Google imagery basemap with raster style panel](https://assets.geolibre.app/images/raster-style-panel.webp)
 
@@ -92,11 +92,11 @@ _Note the asymmetry: `.img`, `.vrt`, `.asc`, `.jp2`, `.hgt` are only recognized 
 
 ## 4. Point Clouds & LiDAR
 
-| Item | Support | Notes |
-|---|---|---|
-| **LiDAR layer** | COPC / LAZ (via URL) | Rendered through `maplibre-gl-lidar` + deck.gl |
-| **USGS 3DEP** | Online point cloud streaming | Standalone plugin; comes with a 3DEP elevation index WMS overlay |
-| **Whitebox LiDAR tools** | `.las .laz .zlidar .copc .e57 .ply`, output `.laz` | The only place in the entire repo where `.e57` / `.ply` appear |
+| Item                     | Support                                            | Notes                                                            |
+| ------------------------ | -------------------------------------------------- | ---------------------------------------------------------------- |
+| **LiDAR layer**          | COPC / LAZ (via URL)                               | Rendered through `maplibre-gl-lidar` + deck.gl                   |
+| **USGS 3DEP**            | Online point cloud streaming                       | Standalone plugin; comes with a 3DEP elevation index WMS overlay |
+| **Whitebox LiDAR tools** | `.las .laz .zlidar .copc .e57 .ply`, output `.laz` | The only place in the entire repo where `.e57` / `.ply` appear   |
 
 _The LiDAR layer panel's extension allowlist is **not in this repository** — it's defined in upstream npm packages. The only direct evidence in the repo is a single `.copc.laz` example URL. LAS/LAZ/COPC/EPT are very likely supported but cannot be confirmed 100% from the source._
 
@@ -106,14 +106,14 @@ _The LiDAR layer panel's extension allowlist is **not in this repository** — i
 
 The opening scenario — "received some 3D Tiles, just want to take a quick look" — this section is the answer.
 
-| Format | Input Method | Engine | Notes |
-|---|---|---|---|
-| **OGC 3D Tiles** | tileset URL | `maplibre-gl-3d-tiles` + deck.gl `Tile3DLayer` | **Supports custom request headers** — authenticated tilesets work |
-| **Google Photorealistic 3D Tiles** | Built-in URL | Same as above | Requires Google Maps API key; passed via request headers, never stored to disk |
-| **ArcGIS I3S Scene Layer** | `…/SceneServer` URL | deck.gl + loaders.gl `I3SLoader` | Both integrated mesh and 3D object layers are supported |
-| **glTF / GLB** | **URL only** | deck.gl `ScenegraphLayer` | No local file picker — this is the most visible gap currently |
-| **COLLADA `.dae`** | Only via KML `<Model>` embedding | three.js → GLB | — |
-| **Gaussian Splats** | URL | `maplibre-gl-splat` | Storage layer type is `gaussian-splat` |
+| Format                             | Input Method                     | Engine                                         | Notes                                                                          |
+| ---------------------------------- | -------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------ |
+| **OGC 3D Tiles**                   | tileset URL                      | `maplibre-gl-3d-tiles` + deck.gl `Tile3DLayer` | **Supports custom request headers** — authenticated tilesets work              |
+| **Google Photorealistic 3D Tiles** | Built-in URL                     | Same as above                                  | Requires Google Maps API key; passed via request headers, never stored to disk |
+| **ArcGIS I3S Scene Layer**         | `…/SceneServer` URL              | deck.gl + loaders.gl `I3SLoader`               | Both integrated mesh and 3D object layers are supported                        |
+| **glTF / GLB**                     | **URL only**                     | deck.gl `ScenegraphLayer`                      | No local file picker — this is the most visible gap currently                  |
+| **COLLADA `.dae`**                 | Only via KML `<Model>` embedding | three.js → GLB                                 | —                                                                              |
+| **Gaussian Splats**                | URL                              | `maplibre-gl-splat`                            | Storage layer type is `gaussian-splat`                                         |
 
 ![3D Tiles loading panel: 3D-TILES, vectors, XYZ, glTF models, and Gaussian splats intermixed in the layer list on the left](https://assets.geolibre.app/images/3dtiles.webp)
 
@@ -135,20 +135,20 @@ geoparquet, duckdb-query, deckgl-viz, video, image
 
 What you can fill in under "Add Data → Web Services":
 
-| Service | Details |
-|---|---|
-| **XYZ** | `{z}/{x}/{y}` template; raster or vector tiles both work |
-| **WMS** | **GetCapabilities auto-populates the layer dropdown**; click features for GetFeatureInfo; dev mode includes a CORS proxy |
-| **WMTS** | RESTful tile template |
-| **WFS** | GetCapabilities fetches typeName; optional auto-refresh |
-| **OGC API - Features** | Landing page / `/collections` / single collection / full `/items` URL are all recognized; auto-follows `next` links; defaults to 1,000 features |
-| **OGC API - Tiles (Vector)** | TileJSON or MVT template; can optionally provide a Mapbox style URL to resolve `source-layer` names |
-| **ArcGIS** | Only **two** in the dialog: FeatureServer (fetched as `f=geojson`) and VectorTileServer |
-| **ArcGIS MapServer / ImageServer** | Not in the Add Data dialog; only accessible indirectly via plugins like NASA Earthdata GIS or EnviroAtlas |
-| **MBTiles** | `.mbtiles` local file, custom protocol + Rust backend reads. **Desktop-only** |
-| **PMTiles** | `.pmtiles`; vector or raster both work; auto-sniffs file header |
-| **PostgreSQL / PostGIS** | Connect → select table → outputs MVT via built-in Martin service. **Desktop-only** |
-| **deck.gl visualization layers** | 14 types: scatterplot, heatmap, hexagon, grid, screen grid, contour, arc, line, great circle, GeoJSON, icon, text, trips, scenegraph |
+| Service                            | Details                                                                                                                                         |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **XYZ**                            | `{z}/{x}/{y}` template; raster or vector tiles both work                                                                                        |
+| **WMS**                            | **GetCapabilities auto-populates the layer dropdown**; click features for GetFeatureInfo; dev mode includes a CORS proxy                        |
+| **WMTS**                           | RESTful tile template                                                                                                                           |
+| **WFS**                            | GetCapabilities fetches typeName; optional auto-refresh                                                                                         |
+| **OGC API - Features**             | Landing page / `/collections` / single collection / full `/items` URL are all recognized; auto-follows `next` links; defaults to 1,000 features |
+| **OGC API - Tiles (Vector)**       | TileJSON or MVT template; can optionally provide a Mapbox style URL to resolve `source-layer` names                                             |
+| **ArcGIS**                         | Only **two** in the dialog: FeatureServer (fetched as `f=geojson`) and VectorTileServer                                                         |
+| **ArcGIS MapServer / ImageServer** | Not in the Add Data dialog; only accessible indirectly via plugins like NASA Earthdata GIS or EnviroAtlas                                       |
+| **MBTiles**                        | `.mbtiles` local file, custom protocol + Rust backend reads. **Desktop-only**                                                                   |
+| **PMTiles**                        | `.pmtiles`; vector or raster both work; auto-sniffs file header                                                                                 |
+| **PostgreSQL / PostGIS**           | Connect → select table → outputs MVT via built-in Martin service. **Desktop-only**                                                              |
+| **deck.gl visualization layers**   | 14 types: scatterplot, heatmap, hexagon, grid, screen grid, contour, arc, line, great circle, GeoJSON, icon, text, trips, scenegraph            |
 
 ![OpenFreeMap 3D basemap with drawing tools](https://assets.geolibre.app/images/drawing-tools.webp)
 
@@ -160,11 +160,11 @@ This section is where GeoLibre pulls ahead of traditional desktop GIS.
 
 **Scientific data formats:**
 
-| Format | Support Scope |
-|---|---|
-| **Zarr** | Remote store URL, or local folder. Variable and dimension selectors display real coordinate values. _Local folders in browser require File System Access API — unavailable in Firefox / Safari_ |
+| Format           | Support Scope                                                                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Zarr**         | Remote store URL, or local folder. Variable and dimension selectors display real coordinate values. _Local folders in browser require File System Access API — unavailable in Firefox / Safari_                                |
 | **NetCDF / HDF** | Two paths: remote via **kerchunk reference JSON + HTTP Range** (cloud-optimized NetCDF); local supports `.nc .nc4 .cdf .h5 .hdf5` (NetCDF-3 via netcdfjs, NetCDF-4/HDF5 via h5wasm). **HDF4 `.hdf` is explicitly unsupported** |
-| **COG** | See raster section |
+| **COG**          | See raster section                                                                                                                                                                                                             |
 
 **Online data catalogs (browsable directly):**
 
@@ -196,13 +196,13 @@ This section is where GeoLibre pulls ahead of traditional desktop GIS.
 
 This is easy to overlook but determines whether GeoLibre can fit into your existing workflow.
 
-| Format | Extension | Direction |
-|---|---|---|
-| GeoLibre project | `.geolibre` / `.geolibre.json` | Read + write |
-| **QGIS project** | `.qgz` `.qgs` | **Import only**. Parses XML with DOMParser; no QGIS code is executed; only imports the 17 recognized vector formats and GeoTIFF |
-| **Mapbox GL / MapLibre style** | `.json` | Import + export |
-| **OGC SLD** | `.sld` `.xml` | Import + export |
-| **QGIS QML** | `.qml` | Import + export |
+| Format                         | Extension                      | Direction                                                                                                                       |
+| ------------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| GeoLibre project               | `.geolibre` / `.geolibre.json` | Read + write                                                                                                                    |
+| **QGIS project**               | `.qgz` `.qgs`                  | **Import only**. Parses XML with DOMParser; no QGIS code is executed; only imports the 17 recognized vector formats and GeoTIFF |
+| **Mapbox GL / MapLibre style** | `.json`                        | Import + export                                                                                                                 |
+| **OGC SLD**                    | `.sld` `.xml`                  | Import + export                                                                                                                 |
+| **QGIS QML**                   | `.qml`                         | Import + export                                                                                                                 |
 
 > **Key insight**: Symbology configured in QGIS can be brought over, and vice versa. Style import format is **determined by content, not by extension** — a file with the wrong extension will still be recognized.
 
@@ -224,17 +224,17 @@ Right-click a layer to export — **all done in the browser, no backend needed**
 
 ### Format Conversion Tools (9)
 
-| Tool | Input | Output |
-|---|---|---|
-| Vector → Vector | `geojson geojsonl json parquet geoparquet fgb gpkg shp zip kml gml gpx` | Desktop: 14 drivers — GeoJSON, GeoJSONSeq, FlatGeobuf, GPKG, Shapefile, GML, KML, CSV, SQLite, GMT, DXF, MapInfo, JML, GPX |
-| Vector → GeoParquet | Same as above | `.parquet`; compression: `zstd / snappy / gzip / lz4 / uncompressed` |
-| Vector → FlatGeobuf | Same as above | `.fgb` |
-| Vector → Shapefile | Same as above | `.zip` |
-| Vector → GeoPackage | Same as above | `.gpkg` |
-| CSV → GeoParquet | `csv tsv txt` | `.parquet` |
-| **Vector → PMTiles** | `parquet geoparquet geojson json gpkg fgb shp` | `.pmtiles`. **Desktop up to zoom level 24**; browser uses WASM tiler with shallower levels |
-| **Raster → PMTiles** | Only accepts `.tif/.tiff` | `.pmtiles` (single-band through color ramp, not true color) |
-| **Raster → COG** | Desktop `tif tiff img vrt asc nc jp2 hgt`; browser tif only | `.tif`; compression: `deflate zstd lzw webp jpeg packbits raw` |
+| Tool                 | Input                                                                   | Output                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Vector → Vector      | `geojson geojsonl json parquet geoparquet fgb gpkg shp zip kml gml gpx` | Desktop: 14 drivers — GeoJSON, GeoJSONSeq, FlatGeobuf, GPKG, Shapefile, GML, KML, CSV, SQLite, GMT, DXF, MapInfo, JML, GPX |
+| Vector → GeoParquet  | Same as above                                                           | `.parquet`; compression: `zstd / snappy / gzip / lz4 / uncompressed`                                                       |
+| Vector → FlatGeobuf  | Same as above                                                           | `.fgb`                                                                                                                     |
+| Vector → Shapefile   | Same as above                                                           | `.zip`                                                                                                                     |
+| Vector → GeoPackage  | Same as above                                                           | `.gpkg`                                                                                                                    |
+| CSV → GeoParquet     | `csv tsv txt`                                                           | `.parquet`                                                                                                                 |
+| **Vector → PMTiles** | `parquet geoparquet geojson json gpkg fgb shp`                          | `.pmtiles`. **Desktop up to zoom level 24**; browser uses WASM tiler with shallower levels                                 |
+| **Raster → PMTiles** | Only accepts `.tif/.tiff`                                               | `.pmtiles` (single-band through color ramp, not true color)                                                                |
+| **Raster → COG**     | Desktop `tif tiff img vrt asc nc jp2 hgt`; browser tif only             | `.tif`; compression: `deflate zstd lzw webp jpeg packbits raw`                                                             |
 
 _Browser-side output format is a subset: geojson / json / csv / parquet / geoparquet / gpkg / zip / fgb. For the full 14-driver set, use the desktop version (via Python sidecar)._
 
@@ -243,7 +243,7 @@ _Browser-side output format is a subset: geojson / json / csv / parquet / geopar
 Export raster layers as GeoTIFF, clip raster subsets by bounding box, extract basemaps as PMTiles offline packages, print layout to PNG/PDF/multi-page ZIP, **export entire project as a standalone HTML file**, story maps to HTML/PDF, map screen recording to WebM, charts to SVG/PNG.
 
 !!! tip "Export Project as Standalone HTML"
-    This feature is severely underrated — sharing a single-file webpage with a collaborator to view results is far more practical than asking them to install specialized software.
+This feature is severely underrated — sharing a single-file webpage with a collaborator to view results is far more practical than asking them to install specialized software.
 
 ---
 
@@ -251,13 +251,13 @@ Export raster layers as GeoTIFF, clip raster subsets by bounding box, extract ba
 
 Mentioned piecemeal above, consolidated here. **This is where things most easily go wrong.**
 
-| Limitation | Impact |
-|---|---|
-| **Desktop (Tauri) exclusive** | Native file/folder dialogs, local MBTiles, local raster reads, Shapefile companion file auto-discovery, PostGIS/Martin, file geodatabase, local file watch reload |
-| **Requires Python sidecar** | File geodatabase, all desktop conversion tools (preferred path), raster tools (rasterio), AI segmentation, PostGIS, Sedona |
-| **Mac App Store build** | No Python sidecar: hides PostgreSQL and GDB data sources, hides AI segmentation; Whitebox, conversion, raster, and vector tools all fall back to their browser/WASM engines; Shapefile companion files must be manually multi-selected |
-| **Android / iOS (mobile)** | Hides raster tools, conversion tools, AI segmentation, PostgreSQL — all sidecar-backed. The Whitebox toolbox is WASM-backed and stays available |
-| **Browser** | No local MBTiles/GDB/PostGIS; conversion output is subset; vector conversion doesn't accept `.zip`; raster-to-COG only accepts GeoTIFF; Zarr local folders unavailable in Firefox/Safari |
+| Limitation                    | Impact                                                                                                                                                                                                                                 |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Desktop (Tauri) exclusive** | Native file/folder dialogs, local MBTiles, local raster reads, Shapefile companion file auto-discovery, PostGIS/Martin, file geodatabase, local file watch reload                                                                      |
+| **Requires Python sidecar**   | File geodatabase, all desktop conversion tools (preferred path), raster tools (rasterio), AI segmentation, PostGIS, Sedona                                                                                                             |
+| **Mac App Store build**       | No Python sidecar: hides PostgreSQL and GDB data sources, hides AI segmentation; Whitebox, conversion, raster, and vector tools all fall back to their browser/WASM engines; Shapefile companion files must be manually multi-selected |
+| **Android / iOS (mobile)**    | Hides raster tools, conversion tools, AI segmentation, PostgreSQL — all sidecar-backed. The Whitebox toolbox is WASM-backed and stays available                                                                                        |
+| **Browser**                   | No local MBTiles/GDB/PostGIS; conversion output is subset; vector conversion doesn't accept `.zip`; raster-to-COG only accepts GeoTIFF; Zarr local folders unavailable in Firefox/Safari                                               |
 
 ---
 
@@ -299,15 +299,15 @@ Two details that show engineering care: tile index objects are **deliberately ex
 
 **Other guard thresholds** (these numbers are themselves good reference points):
 
-| Threshold | Value |
-|---|---|
-| Tiling render trigger | 50,000 features |
-| DuckDB result materialization confirmation prompt | 500,000 rows |
-| Browser-side Sedona cap | 50,000 features |
-| OSM PBF warning / timeout | 50 MB / 5 minutes |
-| Remote vector file cap | 2 GiB (DuckDB-WASM uses 32-bit for remote file sizes) |
-| Local COG cap | 2 GiB |
-| Undo history soft budget | 500,000 features |
+| Threshold                                         | Value                                                 |
+| ------------------------------------------------- | ----------------------------------------------------- |
+| Tiling render trigger                             | 50,000 features                                       |
+| DuckDB result materialization confirmation prompt | 500,000 rows                                          |
+| Browser-side Sedona cap                           | 50,000 features                                       |
+| OSM PBF warning / timeout                         | 50 MB / 5 minutes                                     |
+| Remote vector file cap                            | 2 GiB (DuckDB-WASM uses 32-bit for remote file sizes) |
+| Local COG cap                                     | 2 GiB                                                 |
+| Undo history soft budget                          | 500,000 features                                      |
 
 **Attribute table is virtualized**, but sorting, filtering, and selection operate on the full data model — virtualization only governs rendering.
 
@@ -326,7 +326,7 @@ Two details that show engineering care: tile index objects are **deliberately ex
 Having covered the strengths, let's discuss the limitations.
 
 !!! warning "It Is Not a QGIS Replacement"
-    This is the consensus across multiple reviews, and the author has never claimed otherwise.
+This is the consensus across multiple reviews, and the author has never claimed otherwise.
 
 **1. The feature scope is deliberately narrow.** It focuses on browser workflows, local processing, cloud-native formats, spatial SQL, modern visualization, and portability. Complex professional workflows still belong in QGIS.
 

@@ -168,7 +168,7 @@ uploads its report as an artifact on failure.
   - **ESLint** enforces the React Hooks rules on TS/JS; a `npm run build`
     typecheck runs too.
 - **Notebook outputs are stripped repo-wide on every commit.** The
-  `strip-notebook-outputs` hook runs `nbstripout` over *every tracked*
+  `strip-notebook-outputs` hook runs `nbstripout` over _every tracked_
   `.ipynb`, not just the notebooks in your commit, so an output that was
   executed locally cannot ride along in a later, unrelated commit. Because
   `nbstripout` rewrites in place, this also erases outputs from a notebook you
@@ -178,7 +178,7 @@ uploads its report as an artifact on failure.
 - All text files are normalized to LF via `.gitattributes` (`* text=auto eol=lf`),
   so line endings are consistent across platforms; `core.autocrlf` is overridden.
 - The remaining pre-commit hooks enforce LF line endings (`mixed-line-ending
-  --fix=lf`) and basic whitespace (end-of-file and trailing-whitespace fixers).
+--fix=lf`) and basic whitespace (end-of-file and trailing-whitespace fixers).
   You rarely need to format by hand — commit once, let the hooks rewrite, then
   `git add` the fixed files and commit again. Install the hooks after cloning
   with `pre-commit install`.

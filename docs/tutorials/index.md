@@ -10,14 +10,14 @@ These tutorials walk through common GeoLibre workflows end to end. Each one is s
 
 ## The tutorials
 
-| Tutorial | You will learn to |
-| --- | --- |
-| [Your First Map](first-map.md) | Add a layer, style it, inspect attributes, and save. |
-| [Cloud-Native Data](cloud-native-data.md) | Load remote GeoParquet, FlatGeobuf, and COG, and convert local data. |
-| [Vector Analysis](vector-analysis.md) | Buffer and overlay layers, then export the result. |
-| [Terrain Analysis](terrain-analysis.md) | Derive hillshade, slope, and contours from a DEM. |
-| [Spatial SQL](spatial-sql.md) | Query data with DuckDB Spatial and map the results. |
-| [Sharing & Embedding](sharing-embedding.md) | Share a project and embed it in a web page. |
+| Tutorial                                    | You will learn to                                                    |
+| ------------------------------------------- | -------------------------------------------------------------------- |
+| [Your First Map](first-map.md)              | Add a layer, style it, inspect attributes, and save.                 |
+| [Cloud-Native Data](cloud-native-data.md)   | Load remote GeoParquet, FlatGeobuf, and COG, and convert local data. |
+| [Vector Analysis](vector-analysis.md)       | Buffer and overlay layers, then export the result.                   |
+| [Terrain Analysis](terrain-analysis.md)     | Derive hillshade, slope, and contours from a DEM.                    |
+| [Spatial SQL](spatial-sql.md)               | Query data with DuckDB Spatial and map the results.                  |
+| [Sharing & Embedding](sharing-embedding.md) | Share a project and embed it in a web page.                          |
 
 Work through them in order for a guided tour, or jump to the one that matches your task.
 

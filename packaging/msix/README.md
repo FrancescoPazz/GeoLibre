@@ -30,7 +30,7 @@ npm run msix:build
 > 10.2.5). The in-app "Check for updates" flow (Help menu, command palette, About
 > dialog, and the automated startup check) is compiled **out** of the frontend
 > only when the `GEOLIBRE_STORE_BUILD=1` environment variable is set during the
-> Tauri build. `build-msix.ps1` repackages the *already-built* binary, so this
+> Tauri build. `build-msix.ps1` repackages the _already-built_ binary, so this
 > variable must be exported before `npm run tauri:build`, not passed to this
 > script. The [`msix-store.yml`](../../.github/workflows/msix-store.yml) workflow
 > sets it automatically; when building a Store package locally, set it yourself:
@@ -59,13 +59,13 @@ The defaults are the opengeos Partner Center identity, so a bare
 `./build-msix.ps1` produces a Store-ready package. Override them for a
 self-signed sideload build or a different publisher.
 
-| Parameter | Default (Store identity) | Notes |
-| --- | --- | --- |
-| `-Name` | `OpenGeospatialSolutions.GeoLibre` | Reserved `Package/Identity/Name`; the Store rejects the Tauri identifier. Pass `""` to fall back to `org.geolibre.desktop` for a non-Store build |
-| `-Publisher` | `CN=E6AE8172-DC4F-4F79-844B-9D84204BF95A` | Seller `CN=<GUID>` from Partner Center; must match the account publisher ID |
-| `-PublisherDisplayName` | `Open Geospatial Solutions` | Must match your publisher display name exactly; the Store does not remap it |
-| `-DisplayName` | `GeoLibre` | Reserved `Properties/DisplayName`; differs from the Tauri `productName` (`GeoLibre Desktop`). Pass `""` to fall back to the productName |
-| `-Language` | `en-us` | Every MSIX must declare a language |
+| Parameter               | Default (Store identity)                  | Notes                                                                                                                                            |
+| ----------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-Name`                 | `OpenGeospatialSolutions.GeoLibre`        | Reserved `Package/Identity/Name`; the Store rejects the Tauri identifier. Pass `""` to fall back to `org.geolibre.desktop` for a non-Store build |
+| `-Publisher`            | `CN=E6AE8172-DC4F-4F79-844B-9D84204BF95A` | Seller `CN=<GUID>` from Partner Center; must match the account publisher ID                                                                      |
+| `-PublisherDisplayName` | `Open Geospatial Solutions`               | Must match your publisher display name exactly; the Store does not remap it                                                                      |
+| `-DisplayName`          | `GeoLibre`                                | Reserved `Properties/DisplayName`; differs from the Tauri `productName` (`GeoLibre Desktop`). Pass `""` to fall back to the productName          |
+| `-Language`             | `en-us`                                   | Every MSIX must declare a language                                                                                                               |
 
 The package family name is derived automatically from `-Name` + `-Publisher`, so
 it matches (`OpenGeospatialSolutions.GeoLibre_wby2ff7ejknn4`) once those are correct.

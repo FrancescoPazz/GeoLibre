@@ -8,10 +8,10 @@ Capabilities are coarse on purpose. Each one names a whole class of action
 deployment cannot be defeated by one item somebody forgot to list.
 
 !!! warning "This is a client-side gate, not an authorization boundary"
-    Withholding a capability removes the affordance: the menu is not rendered,
-    the command palette does not list or run the action, the keyboard shortcut
-    does nothing, and the embed API refuses the command. It does **not** stop
-    someone with browser devtools, and it does not restrict the server.
+Withholding a capability removes the affordance: the menu is not rendered,
+the command palette does not list or run the action, the keyboard shortcut
+does nothing, and the embed API refuses the command. It does **not** stop
+someone with browser devtools, and it does not restrict the server.
 
     The sidecar (`/sidecar`) and AI proxy (`/ai`) endpoints answer the same
     requests whatever capabilities are configured. For a deployment that must
@@ -25,26 +25,26 @@ deployment cannot be defeated by one item somebody forgot to list.
 [UI Profiles](ui-profiles.md) also hide menus and items, and the two run
 independently. The difference is who decides:
 
-| | UI Profiles | Deployment capabilities |
-| --- | --- | --- |
-| Purpose | Reduce clutter for the audience | Pin what the deployment permits |
-| Set by | The user, or an `admin-profile.json` | The build/deployment configuration |
-| Reversible in the app | Yes, from Settings → Interface (unless `lock` is set) | No — never surfaced in the UI |
-| Granularity | Individual items, data sources, plugins | Whole capabilities |
+|                       | UI Profiles                                           | Deployment capabilities            |
+| --------------------- | ----------------------------------------------------- | ---------------------------------- |
+| Purpose               | Reduce clutter for the audience                       | Pin what the deployment permits    |
+| Set by                | The user, or an `admin-profile.json`                  | The build/deployment configuration |
+| Reversible in the app | Yes, from Settings → Interface (unless `lock` is set) | No — never surfaced in the UI      |
+| Granularity           | Individual items, data sources, plugins               | Whole capabilities                 |
 
 Where both apply, the capability is checked first. An action the deployment
 withheld is never on offer, whatever the profile says.
 
 ## The capabilities
 
-| Capability | Grants |
-| --- | --- |
-| `project:edit` | Authoring the project: New, Open, Open Recent, Import, Project History, Save, Save As, Duplicate, Save as Template, Collaborate, StoryMap; Undo/Redo (the menu items **and** the Ctrl/Cmd+Z and Ctrl+Y shortcuts); Export Selection; adding a review comment; the embed API's `loadProject`. |
-| `data:add` | Bringing data in: the whole Add Data menu, dragging a file onto the map (browser and desktop), and the embed API's `addLayer` and `addData`. |
-| `processing:run` | The whole Processing menu — Whitebox, SQL, Python, the AI assistant, geocoding, Model Builder, conversion/vector/raster tools — and the embed API's `openTool`. |
-| `export:data` | Getting data or a rendering back out: Share, Export HTML, Print, Print Layout, Offline Basemap, and the embed API's `exportImage`. |
-| `plugins:install` | The Plugins menu, plugin-registered toolbar menus, activating or deactivating a plugin, and the plugin marketplace ("Manage plugins"). |
-| `settings:manage` | The Settings dialog and the Style Manager. |
+| Capability        | Grants                                                                                                                                                                                                                                                                                       |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `project:edit`    | Authoring the project: New, Open, Open Recent, Import, Project History, Save, Save As, Duplicate, Save as Template, Collaborate, StoryMap; Undo/Redo (the menu items **and** the Ctrl/Cmd+Z and Ctrl+Y shortcuts); Export Selection; adding a review comment; the embed API's `loadProject`. |
+| `data:add`        | Bringing data in: the whole Add Data menu, dragging a file onto the map (browser and desktop), and the embed API's `addLayer` and `addData`.                                                                                                                                                 |
+| `processing:run`  | The whole Processing menu — Whitebox, SQL, Python, the AI assistant, geocoding, Model Builder, conversion/vector/raster tools — and the embed API's `openTool`.                                                                                                                              |
+| `export:data`     | Getting data or a rendering back out: Share, Export HTML, Print, Print Layout, Offline Basemap, and the embed API's `exportImage`.                                                                                                                                                           |
+| `plugins:install` | The Plugins menu, plugin-registered toolbar menus, activating or deactivating a plugin, and the plugin marketplace ("Manage plugins").                                                                                                                                                       |
+| `settings:manage` | The Settings dialog and the Style Manager.                                                                                                                                                                                                                                                   |
 
 Anything not listed is unprivileged and stays available in every configuration:
 panning and zooming, the View and Controls menus, layer visibility and
@@ -68,13 +68,13 @@ docker build \
 ```
 
 !!! note "Build time only, for now"
-    Unlike `GEOLIBRE_SHARE_URL`, `GEOLIBRE_EMBED_ORIGINS`, and the other
-    deployment settings, this cannot yet be set with `-e` on a **prebuilt**
-    image — `docker/entrypoint.sh` does not publish it into the runtime
-    configuration, so it has to be baked in. Configuring a published image with
-    `-e GEOLIBRE_MODE=kiosk`, and having nginx refuse the corresponding
-    requests, is tracked in
-    [#1673](https://github.com/opengeos/GeoLibre/issues/1673).
+Unlike `GEOLIBRE_SHARE_URL`, `GEOLIBRE_EMBED_ORIGINS`, and the other
+deployment settings, this cannot yet be set with `-e` on a **prebuilt**
+image — `docker/entrypoint.sh` does not publish it into the runtime
+configuration, so it has to be baked in. Configuring a published image with
+`-e GEOLIBRE_MODE=kiosk`, and having nginx refuse the corresponding
+requests, is tracked in
+[#1673](https://github.com/opengeos/GeoLibre/issues/1673).
 
 ### Defaults and parsing
 
@@ -133,8 +133,8 @@ await map.addData({ url: "https://example.com/data.geojson" });
 
 See [Embedding & Sharing](user-guide/embedding.md) for the full command list.
 The embed origin allowlist (`GEOLIBRE_EMBED_ORIGINS`) and capabilities are
-independent: the allowlist decides *who* may send commands, capabilities decide
-*which* commands exist.
+independent: the allowlist decides _who_ may send commands, capabilities decide
+_which_ commands exist.
 
 ## Related pages
 

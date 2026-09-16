@@ -65,24 +65,24 @@ reprojected.
 
 ## Top-level fields
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `version` | string | `"0.1.0"` |
-| `name` | string | Display name |
-| `mapView` | object | `center`, `zoom`, `bearing`, `pitch`, optional `bbox` |
-| `basemapStyleUrl` | string | MapLibre style JSON URL; `""` for a blank background |
-| `basemapVisible` | boolean | |
-| `basemapOpacity` | number | 0–1 |
-| `layers` | array | Layer objects, bottom-first |
-| `styles` | object | layer id → style, for styles kept outside the layer |
-| `preferences` | object | Map limits (`restrictBounds`, `minZoom`, `maxZoom`, `maxPitch`, …) |
-| `plugins` | object | `manifestUrls`, `activePluginIds`, `mapControlPositions`, `settings` |
-| `legend` | object | Print Layout legend *edits* only; the legend itself is derived |
-| `printLayout` | object | Print composer settings; omitted when default |
-| `storymap` | object | Scroll-driven chapters; omitted when there are none |
-| `widgets` / `dashboardColumns` | array / number | Dashboard charts |
-| `styleLibrary` | array | Project-scoped Style Manager entries |
-| `metadata` | object | Free-form |
+| Field                          | Type           | Notes                                                                |
+| ------------------------------ | -------------- | -------------------------------------------------------------------- |
+| `version`                      | string         | `"0.1.0"`                                                            |
+| `name`                         | string         | Display name                                                         |
+| `mapView`                      | object         | `center`, `zoom`, `bearing`, `pitch`, optional `bbox`                |
+| `basemapStyleUrl`              | string         | MapLibre style JSON URL; `""` for a blank background                 |
+| `basemapVisible`               | boolean        |                                                                      |
+| `basemapOpacity`               | number         | 0–1                                                                  |
+| `layers`                       | array          | Layer objects, bottom-first                                          |
+| `styles`                       | object         | layer id → style, for styles kept outside the layer                  |
+| `preferences`                  | object         | Map limits (`restrictBounds`, `minZoom`, `maxZoom`, `maxPitch`, …)   |
+| `plugins`                      | object         | `manifestUrls`, `activePluginIds`, `mapControlPositions`, `settings` |
+| `legend`                       | object         | Print Layout legend _edits_ only; the legend itself is derived       |
+| `printLayout`                  | object         | Print composer settings; omitted when default                        |
+| `storymap`                     | object         | Scroll-driven chapters; omitted when there are none                  |
+| `widgets` / `dashboardColumns` | array / number | Dashboard charts                                                     |
+| `styleLibrary`                 | array          | Project-scoped Style Manager entries                                 |
+| `metadata`                     | object         | Free-form                                                            |
 
 ## The layer object
 

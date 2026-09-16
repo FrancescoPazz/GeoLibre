@@ -114,8 +114,8 @@ use a custom MapLibre protocol backed by Tauri commands.
 
 **MCP server** (`python/src/geolibre/mcp/`, the `geolibre-mcp` console script):
 a headless stdio MCP server that authors `.geolibre.json` files. It is layered so
-nothing duplicates: `project.py` *builds* pieces (a layer, a plugin-state blob),
-`authoring.py` *applies* them to a whole project (add/remove/restyle a layer,
+nothing duplicates: `project.py` _builds_ pieces (a layer, a plugin-state blob),
+`authoring.py` _applies_ them to a whole project (add/remove/restyle a layer,
 move the camera, compose the legend/colorbar/swipe controls), and both `Map` and
 the MCP tools delegate to `authoring.py`. `server.py` is the only module that
 imports the `mcp` SDK (optional extra `geolibre[mcp]`), and `workspace.py`

@@ -25,12 +25,12 @@ execute it. Output, return values, and errors appear in the scrollback above.
 
 ### Editing shortcuts
 
-| Key | Action |
-| --- | --- |
-| **Ctrl/Cmd + Enter** | Run the current code |
-| **Enter** | Newline (multi-line editing) |
-| **↑ / ↓** | Recall previous / next command (when the caret is on the first / last line) |
-| **Tab** or **Ctrl + Space** | Autocomplete the name or attribute at the caret |
+| Key                         | Action                                                                      |
+| --------------------------- | --------------------------------------------------------------------------- |
+| **Ctrl/Cmd + Enter**        | Run the current code                                                        |
+| **Enter**                   | Newline (multi-line editing)                                                |
+| **↑ / ↓**                   | Recall previous / next command (when the caret is on the first / last line) |
+| **Tab** or **Ctrl + Space** | Autocomplete the name or attribute at the caret                             |
 
 Autocomplete introspects the **live** runtime, so `geolibre.` lists its real
 methods, and your own variables and any imported modules complete too. When more
@@ -116,42 +116,42 @@ is available this way.
 
 ## `geolibre` API reference
 
-| Method | Description |
-| --- | --- |
-| `get_view()` | Live camera `{center, zoom, bearing, pitch, bbox}`. |
-| `get_center()` | Live map center `[lng, lat]`. |
-| `get_bounds()` | Live viewport bounds `[west, south, east, north]`. |
-| `fly_to(lng, lat, zoom=, bearing=, pitch=, duration=)` | Animate the camera; only the given fields change. |
-| `fit_bounds([w, s, e, n])` | Fit the camera to a bounding box. |
-| `set_basemap(url)` | Set the basemap style (an http(s) or root-relative URL). |
-| `identify(lng, lat, layer_id=None)` | Query rendered features at a point (like a click). |
-| `add_geojson(data, name=, **style)` | Add a layer from a GeoJSON dict / geometry / `__geo_interface__`, with optional inline style overrides; returns the layer id. |
-| `await load_geojson(url, name=, **style)` | Fetch a GeoJSON URL and add it, with the same optional inline style overrides; returns the layer id. |
-| `layers` | List of [`Layer`](#layer) objects, in draw order. |
-| `get_layer(layer_id)` | The `Layer` with that id (raises if absent). |
-| `remove_layer(layer_id)` | Remove a layer by id. |
-| `list_algorithms()` | Available processing algorithms (`id`, `name`, `group`, `parameters`). |
-| `await run_algorithm(id, parameters=None)` | Run an algorithm; adds result layers and returns `{logs, resultLayerIds}`. |
-| `to_image()` | Capture the current map as PNG **bytes**. |
-| `await load_package(name)` | Load a Pyodide package on demand. |
+| Method                                                 | Description                                                                                                                   |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `get_view()`                                           | Live camera `{center, zoom, bearing, pitch, bbox}`.                                                                           |
+| `get_center()`                                         | Live map center `[lng, lat]`.                                                                                                 |
+| `get_bounds()`                                         | Live viewport bounds `[west, south, east, north]`.                                                                            |
+| `fly_to(lng, lat, zoom=, bearing=, pitch=, duration=)` | Animate the camera; only the given fields change.                                                                             |
+| `fit_bounds([w, s, e, n])`                             | Fit the camera to a bounding box.                                                                                             |
+| `set_basemap(url)`                                     | Set the basemap style (an http(s) or root-relative URL).                                                                      |
+| `identify(lng, lat, layer_id=None)`                    | Query rendered features at a point (like a click).                                                                            |
+| `add_geojson(data, name=, **style)`                    | Add a layer from a GeoJSON dict / geometry / `__geo_interface__`, with optional inline style overrides; returns the layer id. |
+| `await load_geojson(url, name=, **style)`              | Fetch a GeoJSON URL and add it, with the same optional inline style overrides; returns the layer id.                          |
+| `layers`                                               | List of [`Layer`](#layer) objects, in draw order.                                                                             |
+| `get_layer(layer_id)`                                  | The `Layer` with that id (raises if absent).                                                                                  |
+| `remove_layer(layer_id)`                               | Remove a layer by id.                                                                                                         |
+| `list_algorithms()`                                    | Available processing algorithms (`id`, `name`, `group`, `parameters`).                                                        |
+| `await run_algorithm(id, parameters=None)`             | Run an algorithm; adds result layers and returns `{logs, resultLayerIds}`.                                                    |
+| `to_image()`                                           | Capture the current map as PNG **bytes**.                                                                                     |
+| `await load_package(name)`                             | Load a Pyodide package on demand.                                                                                             |
 
 ### `Layer`
 
 A handle returned by `geolibre.layers` / `geolibre.get_layer(...)`.
 
-| Member | Description |
-| --- | --- |
-| `id`, `name`, `type` | Identity (read-only). |
-| `visible` | Get/set visibility. |
-| `opacity` | Get/set opacity (0–1). |
-| `set_style(**style)` | Merge style overrides (e.g. `fillColor="#ff0000"`). |
-| `get_features()` | The layer's features as [`Feature`](#feature) objects. |
-| `zoom_to()` | Fit the camera to the layer's extent. |
-| `remove()` | Remove the layer from the map. |
+| Member               | Description                                            |
+| -------------------- | ------------------------------------------------------ |
+| `id`, `name`, `type` | Identity (read-only).                                  |
+| `visible`            | Get/set visibility.                                    |
+| `opacity`            | Get/set opacity (0–1).                                 |
+| `set_style(**style)` | Merge style overrides (e.g. `fillColor="#ff0000"`).    |
+| `get_features()`     | The layer's features as [`Feature`](#feature) objects. |
+| `zoom_to()`          | Fit the camera to the layer's extent.                  |
+| `remove()`           | Remove the layer from the map.                         |
 
 ### `Feature`
 
-A GeoJSON feature returned by `Layer.get_features()`. It *is* a plain `dict`
+A GeoJSON feature returned by `Layer.get_features()`. It _is_ a plain `dict`
 (so it serializes and feeds into `geopandas.GeoDataFrame.from_features`), with
 convenience accessors `.geometry`, `.properties`, `.id`, and `__geo_interface__`.
 
