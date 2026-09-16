@@ -564,24 +564,116 @@ export function findCatalogNode(nodes: readonly CatalogNode[], id: string): Cata
 }
 
 /**
- * The tree narrowed to nodes whose name (or a group's descendants' names)
- * matches `query`, case-insensitively; an empty query returns the tree as is.
+ * Fold separators so `uso_del` matches "Uso del Suolo" and URL path segments.
  */
-export function filterCatalog(nodes: readonly CatalogNode[], query: string): CatalogNode[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [...nodes];
+export function normalizeCatalogSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_\-./]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Whether a catalog node matches `query` on its name (and for items, url / layers),
+ * after {@link normalizeCatalogSearchText}.
+ */
+export function catalogNodeMatchesQuery(node: CatalogNode, query: string): boolean {
+  const q = normalizeCatalogSearchText(query);
+  if (!q) return true;
+  const haystacks = [node.name];
+  if (node.kind === "item") {
+    if (node.url) haystacks.push(node.url);
+    if (node.layers) haystacks.push(node.layers);
+  }
+  return haystacks.some((part) => normalizeCatalogSearchText(part).includes(q));
+}
+
+/**
+ * The tree narrowed to nodes whose name (or a group's descendants' names)
+ * matches `query`; an empty query returns the tree as is. Ancestors of a hit
+ * are returned with `isOpen: true` so a host can show the match without
+ * mutating its own expand state.
+ *
+ * @param resolvedGroups - Optional ArcGIS map-service children already fetched
+ *   for `esri-mapServer-group` items (keyed by group item id). Matching
+ *   sublayers are attached as a synthetic open group under that item.
+ */
+export function filterCatalog(
+  nodes: readonly CatalogNode[],
+  query: string,
+  resolvedGroups?: ReadonlyMap<string, readonly CatalogItem[]>,
+): CatalogNode[] {
+  const q = query.trim();
+  if (!normalizeCatalogSearchText(q)) return [...nodes];
+
   const matches = (node: CatalogNode): CatalogNode | null => {
-    const nameHit = node.name.toLowerCase().includes(q);
-    if (node.kind === "item") return nameHit ? node : null;
+    const selfHit = catalogNodeMatchesQuery(node, q);
+    if (node.kind === "item") {
+      if (node.type === "esri-mapServer-group" && resolvedGroups) {
+        const subs = resolvedGroups.get(node.id) ?? [];
+        const hitSubs = subs.filter((child) => catalogNodeMatchesQuery(child, q));
+        if (hitSubs.length > 0) {
+          return {
+            kind: "group",
+            id: node.id,
+            name: node.name,
+            description: node.description,
+            isOpen: true,
+            members: hitSubs,
+            allowedGroups: node.allowedGroups,
+            hideWhenUnauthorized: node.hideWhenUnauthorized,
+            useAuthentication: node.useAuthentication,
+          };
+        }
+      }
+      return selfHit ? node : null;
+    }
     const members = node.members
       .map(matches)
       .filter((child): child is CatalogNode => child !== null);
-    if (members.length === 0 && !nameHit) return null;
+    if (members.length === 0 && !selfHit) return null;
+    // A name-matched group with no descendant hits keeps its full subtree —
+    // mark every nested group open and expand map-server "folders" when we
+    // already have their sublayers.
+    const nextMembers =
+      selfHit && members.length === 0 ? openAllGroups(node.members, resolvedGroups) : members;
     return {
       ...node,
       isOpen: true,
-      members: nameHit && members.length === 0 ? node.members : members,
+      members: nextMembers,
     };
   };
   return nodes.map(matches).filter((node): node is CatalogNode => node !== null);
+}
+
+/** Copy a subtree with every group forced open (for filter self-hits). */
+function openAllGroups(
+  nodes: readonly CatalogNode[],
+  resolvedGroups?: ReadonlyMap<string, readonly CatalogItem[]>,
+): CatalogNode[] {
+  return nodes.map((node) => {
+    if (node.kind === "item") {
+      if (node.type === "esri-mapServer-group" && resolvedGroups?.has(node.id)) {
+        const subs = resolvedGroups.get(node.id) ?? [];
+        return {
+          kind: "group" as const,
+          id: node.id,
+          name: node.name,
+          description: node.description,
+          isOpen: true,
+          members: [...subs],
+          allowedGroups: node.allowedGroups,
+          hideWhenUnauthorized: node.hideWhenUnauthorized,
+          useAuthentication: node.useAuthentication,
+        };
+      }
+      return node;
+    }
+    return {
+      ...node,
+      isOpen: true,
+      members: openAllGroups(node.members, resolvedGroups),
+    };
+  });
 }

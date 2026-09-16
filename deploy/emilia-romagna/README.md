@@ -34,22 +34,32 @@ http(s) URL), naming the variable.
 The Vite dev server serves this kit at the same URL prefixes as the container
 (`/init`, `/projects`, `/branding`). Point the app at those paths with `VITE_*`
 vars in `apps/geolibre-desktop/.env` or `.env.local` (restart `npm run dev`
-after editing):
+after editing env or after dropping branding assets):
 
 ```bash
 # from the repo root
 printf '%s\n' \
   'VITE_CATALOG_URLS=/init/catalogo-rapido.json' \
   'VITE_START_PROJECT_URL=/projects/geoportale.geolibre.json' \
+  'VITE_BRAND_NAME=Geoportale Emilia-Romagna' \
+  'VITE_BRAND_LOGO_URL=/branding/logo.svg' \
+  'VITE_BRAND_LOGO_LINK=https://geoportale.regione.emilia-romagna.it/' \
+  'VITE_BRAND_FAVICON_URL=/branding/favicon.png' \
+  'VITE_BRAND_ACCENT_COLOR=#519ac2' \
   >> apps/geolibre-desktop/.env.local
+# Logo and favicon are not shipped; place them here so /branding/... resolves:
+#   deploy/emilia-romagna/branding/logo.svg
+#   deploy/emilia-romagna/branding/favicon.png
 npm run dev
 ```
 
 Then open `http://127.0.0.1:5173/init/catalogo-rapido.json` — you should see
 JSON, not the app shell. Use **`/init/catalogo-rapido.json`**, not a
 repo-relative path such as `deploy/emilia-romagna/init/...` (that URL does not
-exist under Vite). Mirror any other compose `GEOLIBRE_*` settings you need as
-`VITE_*` in the same file (Ion token, branding, geocoder, …).
+exist under Vite). Name and accent apply from the env alone; logo and favicon
+need the files under `branding/` (then `http://127.0.0.1:5173/branding/logo.svg`
+works). Mirror any other compose `GEOLIBRE_*` settings you need as `VITE_*` in
+the same file (Ion token, geocoder, …).
 
 ## What each part configures
 

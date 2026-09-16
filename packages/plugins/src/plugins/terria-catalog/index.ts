@@ -17,6 +17,7 @@ import type { GeoLibreAppAPI, GeoLibrePlugin } from "../../types";
 import { addArcGISLayer, fetchArcGISMapServiceSublayers } from "../arcgis-layer";
 import { addRerPoiLayer, rerPoiOptionsFromCatalogItem } from "../rer-poi";
 import {
+  catalogNodeMatchesQuery,
   filterCatalog,
   findCatalogNode,
   parseTerriaCatalogText,
@@ -186,6 +187,8 @@ let rerender: (() => void) | null = null;
 let unsubscribeStore: (() => void) | null = null;
 let unsubscribeSession: (() => void) | null = null;
 let loadGeneration = 0;
+/** Bumps when the search box changes so stale map-server prefetches don't redraw. */
+let searchPrefetchGeneration = 0;
 const listeners = new Set<() => void>();
 
 export function setTerriaCatalogLabels(next: Partial<TerriaCatalogLabels>): void {
@@ -829,14 +832,14 @@ export interface CatalogSearchMatch {
 }
 
 /**
- * Entries of every loaded catalog whose name contains `query`, for the
- * search box: supported items only (an entry nobody can open is noise
- * there), the sublayers of an already-expanded map-service group included,
+ * Entries of every loaded catalog whose name (or url / layers) matches `query`,
+ * for the place-search box: supported items only (an entry nobody can open is
+ * noise there), the sublayers of an already-expanded map-service group included,
  * up to `limit`.
  */
 export function searchCatalogItems(query: string, limit = 6): CatalogSearchMatch[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
+  const probe = query.trim();
+  if (!probe) return [];
   const out: CatalogSearchMatch[] = [];
   const walk = (sourceUrl: string, nodes: readonly CatalogNode[], path: string[]) => {
     for (const node of nodes) {
@@ -849,7 +852,7 @@ export function searchCatalogItems(query: string, limit = 6): CatalogSearchMatch
         node.supported &&
         node.type !== "esri-mapServer-group" &&
         !hiddenFromUser(node) &&
-        node.name.toLowerCase().includes(q)
+        catalogNodeMatchesQuery(node, probe)
       ) {
         out.push({ sourceUrl, item: node, path });
       }
@@ -861,19 +864,48 @@ export function searchCatalogItems(query: string, limit = 6): CatalogSearchMatch
     for (const [groupId, children] of source.resolvedGroups) {
       const group = findCatalogNode(source.catalog.roots, groupId);
       const path = group ? [group.name] : [];
-      for (const child of children) {
-        if (out.length >= limit) break;
-        if (child.name.toLowerCase().includes(q))
-          out.push({ sourceUrl: source.url, item: child, path });
-      }
+      walk(source.url, children, path);
     }
   }
   return out.slice(0, limit);
 }
 
+/**
+ * Fetch sublayers for every `esri-mapServer-group` still unresolved. Those
+ * entries look like nested catalog folders; search must open them and list
+ * their children (e.g. "3 - Uso del Suolo" → "Uso del Suolo" → layers).
+ */
+async function prefetchMapServerGroupsForSearch(): Promise<void> {
+  const jobs: Promise<unknown>[] = [];
+  const walk = (sourceUrl: string, nodes: readonly CatalogNode[]) => {
+    for (const node of nodes) {
+      if (node.kind === "group") {
+        walk(sourceUrl, node.members);
+        continue;
+      }
+      if (node.type === "esri-mapServer-group" && node.url) {
+        const source = sourceOf(sourceUrl);
+        if (source && !source.resolvedGroups.has(node.id)) {
+          jobs.push(expandMapServerGroup(sourceUrl, node.id));
+        }
+      }
+    }
+  };
+  for (const source of sources) {
+    if (!source.catalog) continue;
+    walk(source.url, source.catalog.roots);
+  }
+  if (jobs.length > 0) await Promise.all(jobs);
+}
+
 export function setCatalogQuery(next: string): void {
   query = next;
   notify();
+  if (!next.trim()) return;
+  const generation = ++searchPrefetchGeneration;
+  void prefetchMapServerGroupsForSearch().then(() => {
+    if (generation === searchPrefetchGeneration && query.trim()) notify();
+  });
 }
 
 export function toggleCatalogGroup(id: string): void {
@@ -891,6 +923,10 @@ const styles = {
   row: "display:flex;gap:6px;",
   input:
     "min-width:0;flex:1;padding:6px 8px;border:1px solid hsl(var(--border));border-radius:6px;" +
+    "background:hsl(var(--background));color:hsl(var(--foreground));",
+  searchInput:
+    "min-width:0;width:100%;box-sizing:border-box;padding:4px 8px;font-size:12px;line-height:1.3;" +
+    "border:1px solid hsl(var(--border));border-radius:6px;" +
     "background:hsl(var(--background));color:hsl(var(--foreground));",
   button:
     "padding:5px 9px;border:1px solid hsl(var(--border));border-radius:5px;cursor:pointer;" +
@@ -1000,8 +1036,10 @@ function renderGroupRow(
   depth: number,
   onToggle: () => void,
   description?: string,
+  /** When filtering, open ancestors even if they are not in `expanded`. */
+  forceOpen = false,
 ): boolean {
-  const open = expanded.has(id);
+  const open = forceOpen || expanded.has(id);
   const row = element("div", undefined, styles.group);
   row.style.paddingInlineStart = `${8 + depth * 14}px`;
   row.setAttribute("role", "button");
@@ -1028,10 +1066,15 @@ function renderNodes(
   nodes: readonly CatalogNode[],
   depth: number,
   added: Map<string, GeoLibreLayer>,
+  /** Non-empty filter: open every group in the filtered tree (all depths). */
+  filtering = false,
 ): void {
   for (const node of nodes) {
     if (hiddenFromUser(node)) continue;
     if (node.kind === "group") {
+      // While filtering, open every retained group — including nested subgroups
+      // kept under a name-matched parent (those still have isOpen:false from the
+      // file). Relying only on filterCatalog's isOpen stopped at one level.
       const open = renderGroupRow(
         list,
         node.id,
@@ -1039,11 +1082,14 @@ function renderNodes(
         depth,
         () => toggleCatalogGroup(node.id),
         node.description,
+        filtering,
       );
-      if (open) renderNodes(list, source, node.members, depth + 1, added);
+      if (open) renderNodes(list, source, node.members, depth + 1, added, filtering);
       continue;
     }
     if (node.type === "esri-mapServer-group" && node.url) {
+      // Never fetch from render (expand → notify → draw loop). Search prefetches
+      // via setCatalogQuery; while filtering, force-open the nested folder.
       const open = renderGroupRow(
         list,
         node.id,
@@ -1054,10 +1100,11 @@ function renderNodes(
           if (expanded.has(node.id)) void expandMapServerGroup(source.url, node.id);
         },
         node.description,
+        filtering,
       );
       if (open) {
         const children = source.resolvedGroups.get(node.id) ?? [];
-        renderNodes(list, source, children, depth + 1, added);
+        renderNodes(list, source, children, depth + 1, added, filtering);
       }
       continue;
     }
@@ -1087,7 +1134,7 @@ function buildPanel(container: HTMLElement): () => void {
     if (event.key === "Enter") load();
   });
   urlRow.append(urlInput, loadButton);
-  const searchInput = element("input", undefined, styles.input);
+  const searchInput = element("input", undefined, styles.searchInput);
   searchInput.type = "search";
   searchInput.placeholder = labels.searchPlaceholder;
   searchInput.value = query;
@@ -1149,12 +1196,13 @@ function buildPanel(container: HTMLElement): () => void {
         source.catalog.roots.length === 1 && source.catalog.roots[0].kind === "group"
           ? (source.catalog.roots[0] as CatalogGroup).members
           : source.catalog.roots;
-      const visible = filterCatalog(roots, query);
+      const filtering = Boolean(query.trim());
+      const visible = filterCatalog(roots, query, source.resolvedGroups);
       if (visible.length === 0) {
         tree.appendChild(element("div", labels.noMatches, styles.status));
         continue;
       }
-      renderNodes(tree, source, visible, 0, added);
+      renderNodes(tree, source, visible, 0, added, filtering);
     }
   };
   rerender = draw;

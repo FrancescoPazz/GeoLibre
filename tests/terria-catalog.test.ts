@@ -22,6 +22,7 @@ import {
   removeCatalogItem,
   resetTerriaCatalog,
   searchCatalogItems,
+  setCatalogQuery,
   setCatalogItemStyle,
   setCatalogZoomOnAdd,
   setTerriaCatalogAdapters,
@@ -140,6 +141,204 @@ describe("parseTerriaCatalog", () => {
     assert.equal(catalogItems(topo).length, 4, "a matched group keeps all its members");
     assert.deepEqual(filterCatalog(catalog.roots, "zzz"), []);
     assert.equal(filterCatalog(catalog.roots, "  ").length, 1);
+  });
+
+  it("matches dettaglio in names and uso_del across spaces/underscores and urls", () => {
+    const mini = parseTerriaCatalog({
+      catalog: [
+        {
+          type: "group",
+          name: "Root",
+          members: [
+            {
+              type: "esri-mapServer",
+              name: "Uso del Suolo dettaglio 2017",
+              url: "https://example.org/portale/uso_del_suolo/MapServer",
+              layers: "2017_uso_suolo",
+              id: "dett",
+            },
+            {
+              type: "esri-mapServer-group",
+              name: "Uso del Suolo",
+              url: "https://example.org/portale/uso_del_suolo/MapServer",
+              id: "uso",
+            },
+          ],
+        },
+      ],
+    });
+    const dettaglio = filterCatalog(mini.roots, "dettaglio");
+    assert.deepEqual(
+      catalogItems(dettaglio).map((i) => i.name),
+      ["Uso del Suolo dettaglio 2017"],
+    );
+    assert.equal((dettaglio[0] as CatalogGroup).isOpen, true);
+
+    const uso = filterCatalog(mini.roots, "uso_del");
+    assert.deepEqual(
+      catalogItems(uso)
+        .map((i) => i.name)
+        .sort(),
+      ["Uso del Suolo", "Uso del Suolo dettaglio 2017"].sort(),
+    );
+  });
+
+  it("opens every nested group under a name-matched parent", () => {
+    const mini = parseTerriaCatalog({
+      catalog: [
+        {
+          type: "group",
+          name: "Root",
+          members: [
+            {
+              type: "group",
+              name: "Level one",
+              id: "l1",
+              members: [
+                {
+                  type: "group",
+                  name: "Level two",
+                  id: "l2",
+                  members: [
+                    {
+                      type: "group",
+                      name: "Level three",
+                      id: "l3",
+                      members: [
+                        {
+                          type: "wms",
+                          name: "Deep leaf",
+                          id: "leaf",
+                          url: "https://example.org/wms",
+                          layers: "a",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    // Match the top folder only — descendants do not match the query; the full
+    // subtree is kept and every nested group must be marked open.
+    const filtered = filterCatalog(mini.roots, "level one");
+    const l1 = filtered[0] as CatalogGroup;
+    assert.equal(l1.name, "Root");
+    assert.equal(l1.isOpen, true);
+    const levelOne = l1.members[0] as CatalogGroup;
+    assert.equal(levelOne.name, "Level one");
+    assert.equal(levelOne.isOpen, true);
+    const levelTwo = levelOne.members[0] as CatalogGroup;
+    assert.equal(levelTwo.name, "Level two");
+    assert.equal(levelTwo.isOpen, true);
+    const levelThree = levelTwo.members[0] as CatalogGroup;
+    assert.equal(levelThree.name, "Level three");
+    assert.equal(levelThree.isOpen, true);
+    assert.equal((levelThree.members[0] as { name: string }).name, "Deep leaf");
+  });
+
+  it("expands a map-server folder under a name-matched parent when sublayers are resolved", () => {
+    const mini = parseTerriaCatalog({
+      catalog: [
+        {
+          type: "group",
+          name: "3 - Uso del Suolo",
+          id: "uso-root",
+          members: [
+            {
+              type: "esri-mapServer-group",
+              name: "Uso del Suolo",
+              id: "uso-ms",
+              url: "https://example.org/portale/uso_del_suolo/MapServer",
+            },
+          ],
+        },
+      ],
+    });
+    const resolved = new Map([
+      [
+        "uso-ms",
+        [
+          {
+            kind: "item" as const,
+            id: "uso-ms/0",
+            name: "2017_uso_suolo",
+            type: "esri-mapServer",
+            supported: true,
+            url: "https://example.org/portale/uso_del_suolo/MapServer",
+            layers: "0",
+            styleNamesBeforeTitles: false,
+            inWorkbench: false,
+            hideWhenUnauthorized: false,
+            useAuthentication: false,
+            clustering: false,
+            extra: {},
+          },
+          {
+            kind: "item" as const,
+            id: "uso-ms/1",
+            name: "2020_uso_suolo",
+            type: "esri-mapServer",
+            supported: true,
+            url: "https://example.org/portale/uso_del_suolo/MapServer",
+            layers: "1",
+            styleNamesBeforeTitles: false,
+            inWorkbench: false,
+            hideWhenUnauthorized: false,
+            useAuthentication: false,
+            clustering: false,
+            extra: {},
+          },
+        ],
+      ],
+    ]);
+    const filtered = filterCatalog(mini.roots, "uso", resolved);
+    const root = filtered[0] as CatalogGroup;
+    assert.equal(root.name, "3 - Uso del Suolo");
+    assert.equal(root.isOpen, true);
+    const folder = root.members[0] as CatalogGroup;
+    assert.equal(folder.kind, "group");
+    assert.equal(folder.name, "Uso del Suolo");
+    assert.equal(folder.isOpen, true);
+    assert.deepEqual(
+      folder.members.map((m) => (m as { name: string }).name),
+      ["2017_uso_suolo", "2020_uso_suolo"],
+    );
+  });
+
+  it("includes already-resolved ArcGIS sublayers that match the query", () => {
+    const groupId = "bMyL8M"; // DBTR Layers esri-mapServer-group in the fixture
+    const resolved = new Map([
+      [
+        groupId,
+        [
+          {
+            kind: "item" as const,
+            id: `${groupId}/9`,
+            name: "dettaglio",
+            type: "esri-mapServer",
+            supported: true,
+            url: "https://example.org/MapServer",
+            layers: "9",
+            styleNamesBeforeTitles: false,
+            inWorkbench: false,
+            hideWhenUnauthorized: false,
+            useAuthentication: false,
+            clustering: false,
+            extra: {},
+          },
+        ],
+      ],
+    ]);
+    const filtered = filterCatalog(catalog.roots, "dettaglio", resolved);
+    const items = catalogItems(filtered);
+    assert.ok(
+      items.some((i) => i.id === `${groupId}/9` && i.name === "dettaglio"),
+      `sublayer should surface under its map-service group, got ${items.map((i) => i.name)}`,
+    );
   });
 });
 
@@ -508,6 +707,25 @@ describe("terria catalog plugin", () => {
       sub.map((h) => [h.item.id, h.path]),
       [["bMyL8M/1", ["DBTR Layers"]]],
     );
+  });
+
+  it("prefetches map-server folders when the catalog search query is set", async () => {
+    const host = fakeHost();
+    terriaCatalogPlugin.activate(host.app);
+    await loadCatalog(CATALOG_URL);
+    assert.equal(host.sublayerRequests.length, 0);
+    setCatalogQuery("uso");
+    await flush();
+    assert.ok(
+      host.sublayerRequests.length >= 1,
+      `expected map-server prefetch on search, got ${host.sublayerRequests.length}`,
+    );
+    const hits = searchCatalogItems("provincia");
+    assert.ok(
+      hits.some((h) => h.item.id === "bMyL8M/1"),
+      "sublayers become searchable after search prefetch",
+    );
+    setCatalogQuery("");
   });
 
   it("restores its catalogs from the project state", async () => {
