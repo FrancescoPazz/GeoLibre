@@ -1,3 +1,4 @@
+import { adaptMapboxPMTilesControl } from "./mapbox-pmtiles-control";
 import {
   clearExternalNativePaintBridge,
   DEFAULT_LAYER_STYLE,
@@ -83,7 +84,11 @@ import type {
 import type { GaussianSplatControl, GaussianSplatLayerAdapter } from "maplibre-gl-splat";
 import type { LidarControlEventHandler, PointCloudInfo } from "maplibre-gl-lidar";
 import type { GeoLibreAppAPI, GeoLibreMapControlPosition, GeoLibrePlugin } from "../types";
-import { ensureMercatorProjection } from "./map-projection-utils";
+import {
+  ensureMercatorProjection,
+  acquireMercatorProjectionLock,
+  releaseMercatorProjectionLock,
+} from "./map-projection-utils";
 import { ensureSharedDeckOverlay, setSharedDeckLayers } from "./shared-deck-overlay";
 import { attachTerrainMeasure, measurePanelElement, type TerrainMapLike } from "./terrain-measure";
 import { INTERNAL_HELPER_LAYER_PATTERNS } from "./internal-layers";
@@ -1718,6 +1723,16 @@ function finiteNumber(value: unknown, fallback: number): number {
 }
 
 export function openFlatGeobufAddVectorLayerPanel(app: GeoLibreAppAPI): void {
+  if (app.getMapRenderer?.() === "mapbox") {
+    // The vector importer materializes FlatGeobuf into the shared layer store.
+    // The standalone control owns MapLibre layers outside that bridge.
+    void import("./maplibre-vector")
+      .then(({ openVectorLayerPanel }) => openVectorLayerPanel(app))
+      .catch((error) => {
+        console.error("[GeoLibre] Failed to open the vector layer panel", error);
+      });
+    return;
+  }
   void openStandaloneFlatGeobufControl(app);
 }
 
@@ -1729,6 +1744,11 @@ export async function addCogRasterLayer(
     return addGeoTiffRasterLayer(app, options);
   }
 
+  // The Components plugin itself is MapLibre-only (no `engines`); this read is
+  // reached from the STAC plugin's audit closure. The COG control is
+  // maplibre-gl-raster, whose tile protocol only registers with MapLibre, and
+  // on Mapbox the STAC plugin draws COGs through the engine instead.
+  // engine-audit-allow: getMap-mapbox
   ensureMercatorProjection(app.getMap?.());
   const control = await ensureCogRasterControl(app);
   if (!control) {
@@ -1799,7 +1819,7 @@ export async function addPMTilesLayerFromUrl(
 ): Promise<boolean> {
   const { PMTilesLayerControl: PMTilesLayerControlClass } = await getComponentsConstructors();
 
-  pmtilesControl ??= createPMTilesControl(PMTilesLayerControlClass);
+  pmtilesControl ??= createPMTilesControl(PMTilesLayerControlClass, app);
 
   if (!pmtilesControlMounted) {
     const added = app.addMapControl(pmtilesControl, pmtilesControlPosition);
@@ -1813,7 +1833,19 @@ export async function addPMTilesLayerFromUrl(
     pmtilesControl.hide();
   }
 
-  const map = options.fit === false ? app.getMap?.() : undefined;
+  const map = options.fit === false ? (app.getMap?.() ?? app.getMapboxMap?.()) : undefined;
+  const cameraEvents = map as
+    | {
+        on(
+          event: "movestart" | "moveend",
+          handler: (event: { originalEvent?: unknown }) => void,
+        ): unknown;
+        off(
+          event: "movestart" | "moveend",
+          handler: (event: { originalEvent?: unknown }) => void,
+        ): unknown;
+      }
+    | undefined;
   const readCamera = () =>
     map
       ? {
@@ -1834,18 +1866,19 @@ export async function addPMTilesLayerFromUrl(
       userMoving = false;
     }
   };
-  map?.on("movestart", onMoveStart);
-  map?.on("moveend", onMoveEnd);
+  cameraEvents?.on("movestart", onMoveStart);
+  cameraEvents?.on("moveend", onMoveEnd);
+  const control = pmtilesControl;
   const endAdd = beginProgrammaticPMTilesAdd(url);
   try {
-    await pmtilesControl.addLayer(url);
+    await control.addLayer(url);
   } finally {
     endAdd();
     // Preserve a host user's camera interaction that happened while the archive
     // header was loading, rather than restoring the older pre-load position.
     if (userMoving) camera = readCamera();
-    map?.off("movestart", onMoveStart);
-    map?.off("moveend", onMoveEnd);
+    cameraEvents?.off("movestart", onMoveStart);
+    cameraEvents?.off("moveend", onMoveEnd);
   }
   // The upstream PMTiles control always frames a newly added archive. Restore
   // the host's camera when a programmatic caller explicitly opts out.
@@ -1857,7 +1890,7 @@ export async function addPMTilesLayerFromUrl(
   // hidden its own on-panel error would never be seen either — the caller has
   // to surface it. `_addLayer` clears `error` on entry, so this reads the
   // outcome of the call above.
-  const { error } = pmtilesControl.getState();
+  const { error } = control.getState();
   if (error) throw new Error(error);
   return true;
 }
@@ -2306,8 +2339,8 @@ export async function addCloudNetcdfLayer(
   }
 
   // The untiled Zarr renderer draws in Web Mercator; switch off globe first
-  // (matching the COG raster flow) so the layer paints.
-  ensureMercatorProjection(app.getMap?.());
+  // (matching the COG raster flow) so the layer paints, on either 2D engine.
+  ensureMercatorProjection(app.getMap?.() ?? app.getMapboxMap?.());
 
   const refs =
     options.refs ?? (await loadKerchunkReference(options.url, { headers: options.headers }));
@@ -2933,7 +2966,7 @@ async function ensureCogRasterControl(app: GeoLibreAppAPI): Promise<CogLayerCont
 async function openStandalonePMTilesControl(app: GeoLibreAppAPI): Promise<boolean> {
   const { PMTilesLayerControl: PMTilesLayerControlClass } = await getComponentsConstructors();
 
-  pmtilesControl ??= createPMTilesControl(PMTilesLayerControlClass);
+  pmtilesControl ??= createPMTilesControl(PMTilesLayerControlClass, app);
 
   if (!pmtilesControlMounted) {
     const added = app.addMapControl(pmtilesControl, pmtilesControlPosition);
@@ -3014,6 +3047,10 @@ async function openStandaloneMeasureControl(app: GeoLibreAppAPI): Promise<boolea
     measureControlMounted = true;
     // Terrain-aware 3D readouts (surface distance/area) appended to the
     // control's panel; requires the panel from onAdd, so attach after mounting.
+    // The Components plugin itself is MapLibre-only (no `engines`); the read
+    // is reached from the STAC plugin's audit closure, and the readouts depend
+    // on MapLibre's terrain either way.
+    // engine-audit-allow: getMap-mapbox
     measureTerrainDetach = attachTerrainMeasure(
       measureControl,
       () => (app.getMap?.() ?? null) as TerrainMapLike | null,
@@ -3325,7 +3362,7 @@ async function openStandaloneLidarControl(
     await getComponentsConstructors();
 
   const created = !lidarControl;
-  lidarControl ??= createLidarControl(LidarControlClass, LidarLayerAdapterClass);
+  lidarControl ??= createLidarControl(LidarControlClass, LidarLayerAdapterClass, app);
 
   if (!lidarControlMounted) {
     const added = app.addMapControl(lidarControl, lidarControlPosition);
@@ -3336,6 +3373,7 @@ async function openStandaloneLidarControl(
     lidarControlMounted = true;
   }
 
+  ensureMercatorProjection(app.getMap?.() ?? app.getMapboxMap?.());
   startLidarThemeSync();
 
   setTimeout(() => {
@@ -3343,6 +3381,7 @@ async function openStandaloneLidarControl(
       showLidarControl(lidarControl);
       lidarControl?.expand();
     } else if (created) {
+      lidarControl?.collapse();
       hideLidarControl(lidarControl);
     }
   }, 0);
@@ -3397,7 +3436,7 @@ export async function restoreLidarLayers(app: GeoLibreAppAPI): Promise<void> {
     // The deck.gl point-cloud overlay only renders under the Mercator
     // projection (the streaming loader's viewport math breaks under the default
     // globe), matching the USGS LiDAR plugin and the other deck.gl controls.
-    ensureMercatorProjection(app.getMap?.());
+    ensureMercatorProjection(app.getMap?.() ?? app.getMapboxMap?.());
 
     for (const layer of pending) {
       const url = lidarLayerUrl(layer);
@@ -3867,6 +3906,7 @@ export function clearMirrorCogLayers(control: CogLayerControl): void {
 function createLidarControl(
   LidarControlClass: LidarControlConstructor,
   LidarLayerAdapterClass: LidarLayerAdapterConstructor,
+  app: GeoLibreAppAPI,
 ): LidarControl {
   // Force the LiDAR panel to follow the in-app light/dark theme rather than the
   // system prefers-color-scheme (which can differ), matching how the panel is
@@ -3876,10 +3916,43 @@ function createLidarControl(
     theme: resolveDocumentTheme(),
   });
   lidarLayerAdapter = new LidarLayerAdapterClass(control);
+  const onUnload = createLidarUnloadHandler();
+  const onLoad = createLidarLoadHandler();
+  const handleLoad: LidarControlEventHandler = (event) => {
+    acquireMercatorProjectionLock("lidar", app);
+    onLoad(event);
+  };
+  const onRemove = control.onRemove.bind(control);
+  control.onRemove = () => {
+    // Mapbox destroys controls when switching engines. Drop singleton handles
+    // so project restoration streams onto the new map, not the removed one.
+    lidarStoreUnsubscribe?.();
+    lidarStoreUnsubscribe = null;
+    stopLidarThemeSync();
+    pendingLidarRestores.clear();
+    lidarRestoreInFlight = false;
+    // Stopping a renderer emits unload for every streamed cloud. Preserve
+    // project records during teardown so the next engine can restore them.
+    control.off("unload", onUnload);
+    // A restore still streaming into this control must not land as a fresh
+    // layer once its queue entry is gone: the saved record stays in the store
+    // and the next engine's restoreLidarLayers re-streams it under its own id.
+    control.off("load", handleLoad);
+    onRemove();
+    releaseMercatorProjectionLock("lidar", app);
+    if (lidarControl === control) {
+      lidarControl = null;
+      lidarControlMounted = false;
+      lidarLayerAdapter = null;
+    }
+  };
   control.on("collapse", () => hideLidarControl(control));
-  control.on("load", createLidarLoadHandler());
-  control.on("unload", createLidarUnloadHandler());
+  control.on("load", handleLoad);
+  control.on("unload", onUnload);
   lidarStoreUnsubscribe ??= useAppStore.subscribe((state, previous) => {
+    if (state.layers === previous.layers) return;
+    if (state.layers.some(isLidarControlLayer)) acquireMercatorProjectionLock("lidar", app);
+    else releaseMercatorProjectionLock("lidar", app);
     const currentById = new Map(state.layers.map((layer) => [layer.id, layer]));
 
     for (const layer of previous.layers) {
@@ -4012,11 +4085,27 @@ function registerZarrPaintBridge(layerId: string): void {
 
 function createPMTilesControl(
   PMTilesLayerControlClass: PMTilesLayerControlConstructor,
+  app: GeoLibreAppAPI,
 ): PMTilesLayerControl {
   const control = new PMTilesLayerControlClass(PMTILES_OPTIONS);
+  if (app.getMapRenderer?.() === "mapbox") adaptMapboxPMTilesControl(control, app);
+  const removeHandler = createPMTilesLayerRemoveHandler();
+  const onRemove = control.onRemove.bind(control);
+  control.onRemove = () => {
+    pmtilesStoreUnsubscribe?.();
+    pmtilesStoreUnsubscribe = null;
+    // The map is going away, not the project. Ignore the control's unload echo.
+    control.off("layerremove", removeHandler);
+    for (const layer of control.getState().layers) controlOwnedArchives.delete(layer.id);
+    onRemove();
+    if (pmtilesControl === control) {
+      pmtilesControl = null;
+      pmtilesControlMounted = false;
+    }
+  };
   control.on("collapse", () => control.hide());
   control.on("layeradd", createPMTilesLayerAddHandler());
-  control.on("layerremove", createPMTilesLayerRemoveHandler());
+  control.on("layerremove", removeHandler);
   pmtilesStoreUnsubscribe ??= useAppStore.subscribe((state, previous) => {
     // Every store write lands here, and the map writes pointer coordinates on each mousemove.
     // Only a layers action replaces the array, so identity settles it before any scanning.
@@ -6526,6 +6615,9 @@ function hideLidarControl(control: LidarControl | null): void {
 function showLidarControl(control: LidarControl | null): void {
   const container = control?.getContainer();
   if (container) container.style.display = "";
+  // Restored clouds can update state while the toggle is hidden. Recompute
+  // panel placement after showing it, even if expand() would be a no-op.
+  control?.setState({});
 }
 
 function hideSplattingControl(control: GaussianSplatControl | null): void {

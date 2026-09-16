@@ -62,6 +62,8 @@ Pick the layer tool by what the data *is*, not by file extension alone:
 - `add_ogc_layer`      - a WMS or WMTS endpoint.
 - `add_3d_tiles_layer` - an OGC 3D Tiles tileset (URL or Cesium Ion asset id).
 - `add_cesium_ion_layer` - a Cesium Ion asset (tileset or imagery) by id, 3D globe only.
+- `add_czml_layer`     - a CZML dynamic 3D scene (orbits, vehicle tracks) by URL or
+  inline packets, 3D globe only.
 
 Layers are referenced by id or by display name. `describe_project` is the cheap
 way to see what a project currently holds; it never echoes back inlined
@@ -720,6 +722,50 @@ def build_server(workspace: Workspace) -> MCPServer:
         )
         return add(path, layer, index)
 
+    @tool()
+    def add_czml_layer(
+        path: str,
+        name: str,
+        url: str | None = None,
+        data: list[dict[str, Any]] | dict[str, Any] | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """Add a CZML (Cesium Language) dynamic 3D scene: orbits, tracks, moving models.
+
+        Pass either the URL of a `.czml` document or its packets inline. Renders
+        on the 3D globe only (set the project's `primaryRenderer` to
+        `"cesium"`), which follows the document's `clock` packet for playback.
+
+        Args:
+            path: Path to the `.geolibre.json` file.
+            name: The layer's display name.
+            url: An `http(s)://` URL of a `.czml` document.
+            data: The CZML packet array (or a single packet) to inline instead
+                of a URL; the first packet is normally
+                `{"id": "document", "version": "1.0"}`.
+            index: Draw-order position; appended on top when omitted.
+
+        Returns:
+            The new layer's id and the project's updated layer count.
+        """
+        layer = _project.czml_layer(name, url=url, data=data)
+        return add(path, layer, index)
+
+    @tool()
+    def add_cesium_kml_layer(
+        path: str,
+        name: str,
+        url: str | None = None,
+        data: str | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """Add native KML/KMZ with document styles, overlays, and network links.
+
+        Supply a document URL, inline XML, or a KMZ data URL. Renders on the
+        globe only; set the project's primaryRenderer to "cesium".
+        """
+        return add(path, _project.cesium_kml_layer(name, url=url, data=data), index)
+
     # -- editing layers -------------------------------------------------------
 
     @tool()
@@ -918,7 +964,7 @@ def build_server(workspace: Workspace) -> MCPServer:
 
     @tool()
     def set_renderer(path: str, renderer: str, pane_id: str | None = None) -> dict[str, Any]:
-        """Select maplibre or cesium for the primary map or a secondary pane ID."""
+        """Select maplibre, cesium, or mapbox for the primary map or a secondary pane ID."""
         with edit(path) as (file, project):
             authoring.set_renderer(project, renderer, pane_id=pane_id)
         return _summarize(file, project, renderer=renderer, paneId=pane_id)

@@ -388,6 +388,24 @@ def test_add_cesium_ion_imagery(m):
     assert layer["metadata"]["externalNativeLayer"] is True
 
 
+def test_add_czml_url(m):
+    m.add_czml("https://e/sat.czml", name="Satellites")
+    layer = _last_layer(m)
+    assert layer["type"] == "3d-tiles"
+    assert layer["name"] == "Satellites"
+    assert layer["source"]["url"] == "https://e/sat.czml"
+    assert layer["metadata"]["sourceKind"] == "czml"
+    assert layer["metadata"]["externalNativeLayer"] is True
+
+
+def test_add_czml_inline_packets(m):
+    packets = [{"id": "document", "version": "1.0"}, {"id": "p", "point": {"pixelSize": 6}}]
+    m.add_czml(data=packets, source_path="/local/p.czml")
+    layer = _last_layer(m)
+    assert layer["source"]["czmlData"] == packets
+    assert layer["sourcePath"] == "/local/p.czml"
+
+
 def test_add_video_wraps_single_url(m):
     m.add_video("https://e/a.mp4", [[0, 0], [1, 0], [1, 1], [0, 1]])
     assert _last_layer(m)["source"]["urls"] == ["https://e/a.mp4"]
@@ -1421,3 +1439,20 @@ def test_layer_set_popup_bumps_the_sync_sequence(m):
     seq = m._seq
     layer.set_popup(["a"])
     assert m._seq > seq
+
+
+def test_mapbox_renderer_roundtrip(m, tmp_path):
+    """Mapbox survives project save/load and mixed renderer split views."""
+    from geolibre import Map
+
+    m.set_renderer("mapbox")
+    m.set_map_layout(1, 2, view_kinds=["mapbox", "cesium"])
+    assert m.get_renderer() == "mapbox"
+    pane = m.project["secondaryMapViews"][0]
+    m.set_renderer("mapbox", pane_id=pane["id"])
+    path = tmp_path / "mapbox.geolibre.json"
+    m.save_project(path)
+    reopened = Map(renderer="mapbox")
+    reopened.load_project(path)
+    assert reopened.get_renderer() == "mapbox"
+    assert reopened.get_renderer(pane_id=pane["id"]) == "mapbox"

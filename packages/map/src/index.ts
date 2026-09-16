@@ -1,3 +1,6 @@
+export { MapboxCanvas, type MapboxCanvasProps } from "./MapboxCanvas";
+export { MapboxEngine, MAPBOX_CAPABILITIES } from "./mapbox-engine";
+export { isMapboxSupportedLayer, styleUsesUnsupportedSource } from "./mapbox-layers";
 export {
   MapCanvas,
   type MapCanvasIdentifyAllLabels,
@@ -36,6 +39,7 @@ export {
 // `CesiumCanvas`'s dynamic import exists to keep it off.
 export type { CesiumWidgetControlLabels } from "./cesium-widget-controls";
 export { isCesiumSupportedLayerType } from "./cesium-layer-sync";
+export { arcgisVectorStyle } from "./arcgis-vector-style";
 export {
   CESIUM_CAPABILITIES,
   CESIUM_PANE_CAPABILITIES,
@@ -109,6 +113,7 @@ export {
   lineDecorationColorValue,
 } from "./derived-geometry";
 export { ResetBearingControl } from "./reset-bearing-control";
+export { MapboxGlobeControl, type MapboxGlobeControlOptions } from "./mapbox-globe-control";
 export { MaptoolkitLogoControl } from "./maptoolkit-logo-control";
 export {
   LAYER_OPACITY_FOR_BLEND,

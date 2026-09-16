@@ -1,10 +1,15 @@
+import { cesiumKmlSource, isCesiumKmlLayer } from "@geolibre/core";
+import { bindDocumentOpacity } from "./cesium-document-opacity";
 import {
   cesiumIonAssetId,
   compileFeatureExpression,
-  compileQuickFilters,
+  compileLayerFilters,
+  czmlSource,
   DEFAULT_LAYER_STYLE,
   geojsonHasZCoordinates,
   getCesiumIonToken,
+  isCzmlLayer,
+  parseCzml,
   resolveThreeDTilesRequestHeaders,
   ruleBasedVisibilityFilter,
   transformGeojsonElevation,
@@ -176,7 +181,21 @@ const BOUNDING_SPHERE_STATE_PENDING = 1;
  */
 const ARCGIS_MAP_SERVICE_KIND = "arcgis-map-service";
 
-type EntryKind = "imagery" | "geojson" | "3dtiles" | "points" | "pointcloud";
+type EntryKind = "imagery" | "geojson" | "3dtiles" | "points" | "pointcloud" | "czml" | "kml";
+
+/** The `clock` packet a loaded CZML data source carries, as Cesium exposes it. */
+interface CzmlDocumentClock {
+  startTime?: unknown;
+  stopTime?: unknown;
+  currentTime?: unknown;
+  clockRange?: unknown;
+  multiplier?: unknown;
+}
+
+/** The document clock of a loaded CZML data source, or undefined without one. */
+function czmlDocumentClock(handle: unknown): CzmlDocumentClock | undefined {
+  return (handle as { clock?: CzmlDocumentClock } | null | undefined)?.clock ?? undefined;
+}
 
 /** The slice of a rendered tile's content the attribute-name discovery reads. */
 interface TileContentLike {
@@ -204,6 +223,7 @@ function pointCloudUrl(layer: GeoLibreLayer): string | undefined {
  * file has no globe loader), or a point cloud already in 3D Tiles form.
  */
 function isTilesetLayer(layer: GeoLibreLayer): boolean {
+  if (isCzmlLayer(layer) || isCesiumKmlLayer(layer)) return false;
   if (layer.type === "3d-tiles") return true;
   if (layer.type === "gaussian-splat")
     return isSplatTilesetUrl(str(layer.source.url) ?? str(layer.sourcePath));
@@ -232,6 +252,8 @@ interface LayerEntry {
   abort?: AbortController;
   /** Removes the one-shot tile listener that reads a tileset's attribute names. */
   fieldsListener?: () => void;
+  documentCleanup?: () => void;
+  overlayContainer?: HTMLElement;
   /** Set when the entry is removed mid-load so the resolved handle is discarded. */
   cancelled: boolean;
   /**
@@ -270,9 +292,10 @@ interface LayerEntry {
 }
 
 /**
- * Compose a layer's per-feature filter expression from its transient time filter,
- * embed API filter, compiled quick filters, rule-based visibility filter, and
- * annotation visibility filter. Returns null when no filter constrains the layer.
+ * Compose a layer's per-feature filter expression from its transient time
+ * filter, embed API filter, persisted authored filters, rule-based visibility
+ * filter, and annotation visibility filter. Returns null when no filter
+ * constrains the layer.
  */
 export function composeLayerFeatureFilter(layer: GeoLibreLayer): unknown[] | null {
   const filters: unknown[] = [];
@@ -283,9 +306,9 @@ export function composeLayerFeatureFilter(layer: GeoLibreLayer): unknown[] | nul
   if (Array.isArray(layer.embedFilter) && layer.embedFilter.length > 0) {
     filters.push(layer.embedFilter);
   }
-  const quickFilter = compileQuickFilters(layer.quickFilters);
-  if (quickFilter) {
-    filters.push(quickFilter);
+  const authoredFilter = compileLayerFilters(layer);
+  if (authoredFilter) {
+    filters.push(authoredFilter);
   }
   const ruleFilter = ruleBasedVisibilityFilter(layer.style ?? {});
   if (ruleFilter) {
@@ -463,6 +486,8 @@ function wmtsCapabilities(
  */
 export function isCesiumSupportedLayerType(layer: GeoLibreLayer): boolean {
   return (
+    isCzmlLayer(layer) ||
+    isCesiumKmlLayer(layer) ||
     hasGeoJsonCollection(layer) ||
     layer.type === "geojson" ||
     isTilesetLayer(layer) ||
@@ -477,6 +502,11 @@ export function isCesiumSupportedLayerType(layer: GeoLibreLayer): boolean {
 /** Whether this layer can render on the globe now (kind supported + data ready). */
 function isSupported(layer: GeoLibreLayer): boolean {
   if (!isCesiumSupportedLayerType(layer)) return false;
+  if (isCesiumKmlLayer(layer)) return Boolean(cesiumKmlSource(layer));
+  if (isCzmlLayer(layer)) {
+    const src = czmlSource(layer);
+    return Boolean(src && (src.url || src.data));
+  }
   if (hasRenderableGeoJson(layer)) return true;
   // A layer that carries a FeatureCollection renders from it or not at all.
   // Falling through to the imagery checks below would let an incidental
@@ -638,7 +668,15 @@ export function imageryColorAdjustments(style: LayerStyle | undefined): {
   };
 }
 
+/**
+ * Determine the synchronizer entry kind for a given layer.
+ *
+ * @param layer The layer to evaluate.
+ * @returns The EntryKind categorization for the globe renderer.
+ */
 function entryKind(layer: GeoLibreLayer): EntryKind {
+  if (isCesiumKmlLayer(layer)) return "kml";
+  if (isCzmlLayer(layer)) return "czml";
   if (hasRenderableGeoJson(layer)) return planPointRendering(layer).batched ? "points" : "geojson";
   if (isTilesetLayer(layer)) return "3dtiles";
   if (isDecodedPointCloudLayer(layer)) return "pointcloud";
@@ -783,6 +821,16 @@ function needsRebuild(prev: GeoLibreLayer, next: GeoLibreLayer): boolean {
         JSON.stringify(prev.source.requestHeaders ?? null) !==
           JSON.stringify(next.source.requestHeaders ?? null) ||
         prev.source.altitudeOffset !== next.source.altitudeOffset
+      );
+    case "kml":
+      return cesiumKmlSource(prev) !== cesiumKmlSource(next);
+    case "czml":
+      return (
+        czmlSource(prev)?.url !== czmlSource(next)?.url ||
+        // The raw store value, not `czmlSource().data`: that wraps a bare
+        // packet in a fresh array per call, which would read as a change.
+        prev.source.czmlData !== next.source.czmlData ||
+        str(prev.sourcePath) !== str(next.sourcePath)
       );
   }
 }
@@ -1034,6 +1082,11 @@ export class CesiumLayerSync {
             }
           }
         }
+      } else if (entry.kind === "czml" || entry.kind === "kml") {
+        const ds = entry.handle as DataSource;
+        if (ds.isLoading || !entry.added) {
+          pending.push(layer.name);
+        }
       } else if (entry.kind === "imagery" && !(entry.handle as ImageryLayer).ready)
         pending.push(layer.name);
     }
@@ -1073,15 +1126,20 @@ export class CesiumLayerSync {
    */
   private cogTiler: Promise<ReturnType<typeof cachingCogTiler>> | null = null;
   private loadCogTiler(): Promise<ReturnType<typeof cachingCogTiler>> {
-    this.cogTiler ??= (this.deps.loadCogTiler ?? (() => import("cog-tiler-wasm")))().then(
-      cachingCogTiler,
-      (error) => {
-        // A failed module load must not poison every later COG for the life
-        // of the globe; the next COG layer retries the import.
-        this.cogTiler = null;
-        throw error;
-      },
-    );
+    this.cogTiler ??= (
+      this.deps.loadCogTiler ??
+      (async () => {
+        const module = await import("cog-tiler-wasm");
+        const { default: wasmUrl } = await import("lerc/lerc-wasm.wasm?url");
+        module.configureLercDecoder({ wasmUrl });
+        return module;
+      })
+    )().then(cachingCogTiler, (error) => {
+      // A failed module load must not poison every later COG for the life
+      // of the globe; the next COG layer retries the import.
+      this.cogTiler = null;
+      throw error;
+    });
     return this.cogTiler;
   }
 
@@ -1185,11 +1243,42 @@ export class CesiumLayerSync {
     }
     this.applyHighlight();
     this.watchCameraZoom();
+    this.reorderKmlOverlays();
+    // Reordering two loaded CZML layers changes which one comes first.
+    this.electCzmlClockOwner();
   }
+
+  /**
+   * Re-append the KML ScreenOverlay containers in store order. `createKml`
+   * appends each container once, so a later panel reorder (which rebuilds
+   * nothing) would leave two overlapping overlays stacked the way they happened
+   * to load. Sibling DOM order decides that stacking, so re-appending in turn
+   * re-asserts it — skipped unless the order actually changed, since each pass
+   * moves live DOM nodes on a hot path.
+   */
+  private reorderKmlOverlays(): void {
+    const containers: HTMLElement[] = [];
+    for (const layer of this.currentLayers) {
+      const container = this.entries.get(layer.id)?.overlayContainer;
+      if (container) containers.push(container);
+    }
+    const order = this.currentLayers
+      .filter((l) => this.entries.get(l.id)?.overlayContainer)
+      .map((l) => l.id)
+      .join("\n");
+    if (order === this.lastKmlOverlayOrder) return;
+    this.lastKmlOverlayOrder = order;
+    for (const container of containers) container.parentElement?.appendChild(container);
+  }
+
+  /** The KML overlay stacking order {@link reorderKmlOverlays} last asserted. */
+  private lastKmlOverlayOrder = "";
 
   destroy(): void {
     this.restoreHighlight();
     this.selection = null;
+    // Nothing to hand the clock to while everything is torn down.
+    this.czmlClockOwner = undefined;
     for (const entry of this.entries.values()) this.destroyEntry(entry);
     this.entries.clear();
     this.removeDrapeLayer();
@@ -1556,6 +1645,8 @@ export class CesiumLayerSync {
     this.entries.set(layer.id, entry);
     if (kind === "imagery") void this.createImagery(entry);
     else if (kind === "geojson") void this.createGeoJson(entry);
+    else if (kind === "kml") void this.createKml(entry);
+    else if (kind === "czml") void this.createCzml(entry);
     else if (kind === "pointcloud") void this.createPointCloud(entry);
     else if (kind === "points") this.createPointBatch(entry);
     else void this.createTileset(entry);
@@ -2264,6 +2355,128 @@ export class CesiumLayerSync {
     }
   }
 
+  /** Load native KML/KMZ geometry, styles, overlays, and network links. */
+  private async createKml(entry: LayerEntry): Promise<void> {
+    const { Cesium: C, viewer } = this;
+    const source = cesiumKmlSource(entry.layer);
+    if (!source) return;
+    const container = document.createElement("div");
+    Object.assign(container.style, { position: "absolute", inset: "0", pointerEvents: "none" });
+    viewer.canvas.parentElement?.appendChild(container);
+    entry.overlayContainer = container;
+    const ds = new C.KmlDataSource({ camera: viewer.camera, canvas: viewer.canvas });
+    try {
+      const target = source.startsWith("<")
+        ? new DOMParser().parseFromString(source, "application/xml")
+        : source.startsWith("data:")
+          ? await (await fetch(source)).blob()
+          : source;
+      if (entry.cancelled) {
+        ds.destroy();
+        return;
+      }
+      await ds.load(target, { screenOverlayContainer: container });
+      if (entry.cancelled) {
+        ds.destroy();
+        return;
+      }
+      entry.handle = ds;
+      entry.documentCleanup = bindDocumentOpacity(C, ds, () => this.effectiveOpacity(entry));
+      this.applyAppearance(entry);
+      await viewer.dataSources.add(ds);
+      if (entry.cancelled) {
+        viewer.dataSources.remove(ds, true);
+        return;
+      }
+      entry.added = true;
+      viewer.scene.requestRender();
+    } catch (error) {
+      ds.destroy();
+      container.remove();
+      if (!entry.cancelled)
+        entry.loadError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /**
+   * Load a CZML (Cesium Language) document as a dynamic 3D scene (issue #2290).
+   * Supports URL endpoints or inline packets (an array, or the same serialized
+   * as a JSON string) with dynamic time-tagged positions, orbits, models, paths,
+   * and clock synchronization. Which document drives the viewer clock is
+   * decided by {@link electCzmlClockOwner}.
+   *
+   * @param entry The synchronizer entry tracking this CZML layer.
+   */
+  private async createCzml(entry: LayerEntry): Promise<void> {
+    const { Cesium, viewer } = this;
+    const source = czmlSource(entry.layer);
+    if (!source) return;
+    // `CzmlDataSource.load` treats a string as a URL to fetch, so a serialized
+    // inline document has to be parsed before it reaches Cesium.
+    const inline = typeof source.data === "string" ? parseCzml(source.data) : source.data;
+    if (typeof source.data === "string" && !inline) {
+      entry.loadError = "Invalid CZML document";
+      return;
+    }
+    const target = inline ?? source.url;
+    if (!target) return;
+
+    try {
+      const dataSource = await Cesium.CzmlDataSource.load(target);
+      if (entry.cancelled) return;
+
+      entry.handle = dataSource;
+      dataSource.show = entry.layer.visible;
+
+      await viewer.dataSources.add(dataSource);
+      if (entry.cancelled) {
+        viewer.dataSources.remove(dataSource, true);
+        return;
+      }
+      entry.added = true;
+      // Only a document that reached the scene may drive the clock.
+      this.electCzmlClockOwner();
+      viewer.scene?.requestRender?.();
+    } catch (error) {
+      if (entry.cancelled) return;
+      entry.loadError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /**
+   * Re-elect the CZML layer that drives the viewer clock: the first layer in
+   * the synced layer order whose loaded document carries a `clock` packet. The
+   * globe has a single clock, so election goes by layer order rather than by
+   * load completion — two documents loading in parallel settle the same way
+   * every time — and removing the owner hands the clock to the next document
+   * instead of leaving the viewer on a stale interval. Nothing is written while
+   * the owner stays the same, so a later CZML load never resets the Time
+   * Slider's position, which keeps driving `currentTime` through
+   * {@link setTime}. When the last CZML layer leaves, the clock is left where
+   * that document set it: the Time Slider owns time from then on, and nothing
+   * else on the globe expects a particular interval.
+   */
+  private electCzmlClockOwner(): void {
+    let owner: LayerEntry | undefined;
+    for (const layer of this.currentLayers) {
+      const entry = this.entries.get(layer.id);
+      if (entry?.kind !== "czml" || entry.cancelled || !entry.added) continue;
+      if (!czmlDocumentClock(entry.handle)) continue;
+      owner = entry;
+      break;
+    }
+    if (owner?.layer.id === this.czmlClockOwner) return;
+    this.czmlClockOwner = owner?.layer.id;
+    const clock = owner ? czmlDocumentClock(owner.handle) : undefined;
+    const viewerClock = this.viewer.clock;
+    if (!clock || !viewerClock) return;
+    if (clock.startTime) viewerClock.startTime = clock.startTime as never;
+    if (clock.stopTime) viewerClock.stopTime = clock.stopTime as never;
+    if (clock.currentTime) viewerClock.currentTime = clock.currentTime as never;
+    if (clock.clockRange !== undefined) viewerClock.clockRange = clock.clockRange as never;
+    if (clock.multiplier !== undefined) viewerClock.multiplier = clock.multiplier as never;
+  }
+
   private async createTileset(entry: LayerEntry): Promise<void> {
     const { Cesium, viewer } = this;
     const layer = entry.layer;
@@ -2356,6 +2569,11 @@ export class CesiumLayerSync {
     tileset.modelMatrix = Cesium.Matrix4.fromTranslation(translation);
   }
 
+  /**
+   * Apply visual appearance (visibility, opacity, symbology, filters) to an active entry.
+   *
+   * @param entry The layer entry to update on the globe.
+   */
   private applyAppearance(entry: LayerEntry): void {
     const { handle, layer } = entry;
     if (!handle) return;
@@ -2375,6 +2593,12 @@ export class CesiumLayerSync {
       (handle as DataSource).show = layer.visible;
       this.applyGeoJsonStyle(entry);
       this.applyGeoJsonFilter(entry);
+    } else if (entry.kind === "czml" || entry.kind === "kml") {
+      (handle as DataSource).show = layer.visible;
+      if (entry.overlayContainer) {
+        entry.overlayContainer.style.display = layer.visible ? "" : "none";
+        entry.overlayContainer.style.opacity = String(this.effectiveOpacity(entry));
+      }
     } else if (entry.kind === "pointcloud") {
       const collection = handle as PointPrimitiveCollection;
       collection.show = layer.visible;
@@ -2882,9 +3106,24 @@ export class CesiumLayerSync {
   /** Fill-pattern repeat counts, by entity; see {@link patternRepeat}. */
   private readonly patternRepeats = new WeakMap<Entity, Cartesian2>();
 
+  /**
+   * Id of the CZML layer whose document `clock` the viewer clock follows; see
+   * {@link electCzmlClockOwner}. Re-elected when that layer is destroyed.
+   */
+  private czmlClockOwner: string | undefined;
+
+  /**
+   * Tear down an entry and release its Cesium resources from the scene.
+   *
+   * @param entry The layer entry being destroyed.
+   */
   private destroyEntry(entry: LayerEntry): void {
     entry.cancelled = true;
     entry.abort?.abort();
+    entry.documentCleanup?.();
+    entry.documentCleanup = undefined;
+    entry.overlayContainer?.remove();
+    entry.overlayContainer = undefined;
     entry.fieldsListener?.();
     entry.fieldsListener = undefined;
     this.storyOpacities.delete(entry.layer.id);
@@ -2899,7 +3138,9 @@ export class CesiumLayerSync {
       const provider = imagery.imageryProvider as { destroy?: () => void } | undefined;
       this.viewer.imageryLayers.remove(imagery, true);
       if (provider instanceof ProtocolImageryProvider) provider.destroy();
-    } else if (entry.kind === "geojson") {
+    } else if (entry.kind === "geojson" || entry.kind === "czml" || entry.kind === "kml") {
+      // `cancelled` is already set, so the election skips this entry.
+      if (this.czmlClockOwner === entry.layer.id) this.electCzmlClockOwner();
       entry.cluster?.dispose();
       entry.cluster = undefined;
       // A cancelled entry can hold a data source that never reached the scene;

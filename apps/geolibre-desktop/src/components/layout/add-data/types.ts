@@ -23,7 +23,9 @@ export type AddDataKind =
   | "iceberg"
   | "deckgl-viz"
   | "video"
-  | "cesium-ion";
+  | "cesium-ion"
+  | "czml"
+  | "kml";
 
 /** A data source loadable either from a remote URL or a local file. */
 export type FeedMode = "url" | "file";
