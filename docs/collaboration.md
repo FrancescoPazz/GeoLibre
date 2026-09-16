@@ -61,37 +61,37 @@ All frames are JSON. `CollabMessage` is a discriminated union on `type`. See
 
 Client → server:
 
-| type | payload | notes |
-| --- | --- | --- |
-| `join` | `displayName, color, hostToken?, inviteToken?, identityToken?` | first frame after connect; the relay assigns the `clientId` (returned in `welcome`) |
-| `snapshot` | `project, rev` | a debounced project push; co-editors only |
-| `presence` | `cursor?, view?` | throttled cursor / viewport |
-| `set-mode` | `mode` | host only |
-| `set-participant-mode` | `clientId, canEdit` | host only; pin one guest to can-edit / view-only (#754; persisted per participant key, so it survives a reconnect only for identity/invite joins — see *Moderation*) |
-| `mint-invite` | `role, maxUses?` | host only; mint a co-edit or view-only invite link |
-| `revoke-invite` | `token` | host only; invalidate an active invite link |
-| `set-session-config` | `requireIdentity` | host only; mandate signed-in identity to join |
-| `set-layer-locks` | `lockedLayerIds` | host only; mark specific layer IDs read-only |
-| `kick-participant` | `clientId, reason?` | host only; disconnect a participant |
-| `block-participant` | `clientId, reason?` | host only; disconnect and bar that participant key from rejoining (see the caveat under *Moderation*) |
-| `chat` | `text, coordinate?` | a chat message, with an optional attached map coordinate (#754) |
+| type                   | payload                                                        | notes                                                                                                                                                                |
+| ---------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `join`                 | `displayName, color, hostToken?, inviteToken?, identityToken?` | first frame after connect; the relay assigns the `clientId` (returned in `welcome`)                                                                                  |
+| `snapshot`             | `project, rev`                                                 | a debounced project push; co-editors only                                                                                                                            |
+| `presence`             | `cursor?, view?`                                               | throttled cursor / viewport                                                                                                                                          |
+| `set-mode`             | `mode`                                                         | host only                                                                                                                                                            |
+| `set-participant-mode` | `clientId, canEdit`                                            | host only; pin one guest to can-edit / view-only (#754; persisted per participant key, so it survives a reconnect only for identity/invite joins — see _Moderation_) |
+| `mint-invite`          | `role, maxUses?`                                               | host only; mint a co-edit or view-only invite link                                                                                                                   |
+| `revoke-invite`        | `token`                                                        | host only; invalidate an active invite link                                                                                                                          |
+| `set-session-config`   | `requireIdentity`                                              | host only; mandate signed-in identity to join                                                                                                                        |
+| `set-layer-locks`      | `lockedLayerIds`                                               | host only; mark specific layer IDs read-only                                                                                                                         |
+| `kick-participant`     | `clientId, reason?`                                            | host only; disconnect a participant                                                                                                                                  |
+| `block-participant`    | `clientId, reason?`                                            | host only; disconnect and bar that participant key from rejoining (see the caveat under _Moderation_)                                                                |
+| `chat`                 | `text, coordinate?`                                            | a chat message, with an optional attached map coordinate (#754)                                                                                                      |
 
 Server → client:
 
-| type | payload | notes |
-| --- | --- | --- |
-| `welcome` | `clientId, role, mode, participants[], snapshot \| null, presence, chat[], rev, requireIdentity, identitySupported, lockedLayerIds, invites[]` | sent once on join; the late-joiner bootstrap |
-| `snapshot` | `project, origin, rev` | fan-out of a peer's snapshot |
-| `presence` | `clientId, cursor?, view?` | fan-out of a peer's presence |
-| `participants` | `participants[]` | on join / leave / role / permission change; each carries `editOverride` and `identity` |
-| `mode` | `mode` | host changed the session mode |
-| `invite-created` | `invite` | fan-out of a new invite link created by host |
-| `invite-revoked` | `token` | fan-out when host revokes an invite link |
-| `session-config` | `requireIdentity` | broadcast when session identity policy changes |
-| `layer-locks` | `lockedLayerIds` | broadcast when host locks/unlocks layer IDs |
-| `kicked` | `reason` | sent to a participant who was kicked or blocked by the host |
-| `chat` | `message` | fan-out of a chat message (echoed to the sender, so order is server-authoritative) (#754) |
-| `error` | `code, message` | e.g. `forbidden`, `too-large`, `identity-required`, `identity-unavailable`, `layer-locked` |
+| type             | payload                                                                                                                                        | notes                                                                                      |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `welcome`        | `clientId, role, mode, participants[], snapshot \| null, presence, chat[], rev, requireIdentity, identitySupported, lockedLayerIds, invites[]` | sent once on join; the late-joiner bootstrap                                               |
+| `snapshot`       | `project, origin, rev`                                                                                                                         | fan-out of a peer's snapshot                                                               |
+| `presence`       | `clientId, cursor?, view?`                                                                                                                     | fan-out of a peer's presence                                                               |
+| `participants`   | `participants[]`                                                                                                                               | on join / leave / role / permission change; each carries `editOverride` and `identity`     |
+| `mode`           | `mode`                                                                                                                                         | host changed the session mode                                                              |
+| `invite-created` | `invite`                                                                                                                                       | fan-out of a new invite link created by host                                               |
+| `invite-revoked` | `token`                                                                                                                                        | fan-out when host revokes an invite link                                                   |
+| `session-config` | `requireIdentity`                                                                                                                              | broadcast when session identity policy changes                                             |
+| `layer-locks`    | `lockedLayerIds`                                                                                                                               | broadcast when host locks/unlocks layer IDs                                                |
+| `kicked`         | `reason`                                                                                                                                       | sent to a participant who was kicked or blocked by the host                                |
+| `chat`           | `message`                                                                                                                                      | fan-out of a chat message (echoed to the sender, so order is server-authoritative) (#754)  |
+| `error`          | `code, message`                                                                                                                                | e.g. `forbidden`, `too-large`, `identity-required`, `identity-unavailable`, `layer-locked` |
 
 ### Echo / feedback-loop prevention
 
@@ -114,7 +114,7 @@ accepted MVP limitation; a coalesced-history option is a v2 item.
 
 - `POST /sessions` — host creates a session: generates a short base32 code, mints
   a host token, stores `{ mode, hostToken }`, returns `{ sessionId, hostToken,
-  mode }` to the host only.
+mode }` to the host only.
 - `GET /sessions/:id/ws` — WebSocket upgrade, routed to
   `env.COLLAB_SESSION.get(idFromName(id))`.
 
@@ -180,7 +180,7 @@ guest pinned to view-only has their `snapshot` pushes rejected with
 `error: forbidden`, exactly like the session-wide view-only path. An override is
 also persisted against the guest's **participant key**, so it is reapplied when
 they rejoin — but only for identity- and invite-based joins, for the same reason
-a block is (see *Moderation* below): an anonymous guest arrives with a fresh
+a block is (see _Moderation_ below): an anonymous guest arrives with a fresh
 `clientId` and therefore a fresh key, so their override reverts to the session
 default on reconnect. The host roster surfaces a per-guest toggle; other
 participants see each guest's current permission read-only.
@@ -403,7 +403,7 @@ it.
 
 4. **Drive a session:**
    - Window A: **Project → Collaborate…**, enter a name, pick a color, **Start
-     session** (choose *Anyone can edit*). Copy the session code or the share
+     session** (choose _Anyone can edit_). Copy the session code or the share
      link.
    - Window B: open the share link directly (the Collaborate dialog auto-opens
      with the code prefilled — just enter a name and **Join**), or open
@@ -411,7 +411,7 @@ it.
    - Verify: B immediately sees A's existing layers; adding/removing a layer,
      changing a style, or panning in A reflects in B within ~300 ms; each window
      shows the other's live **cursor** and a dashed **viewport rectangle**;
-     toggling A (the host) to *view-only* blocks B's edits.
+     toggling A (the host) to _view-only_ blocks B's edits.
    - Verify Parts 3 & 4 (#754) via the on-canvas status badge (bottom-left,
      click to expand): A (the host) can flip B between **Can edit** and
      **View-only** per-participant in the roster, and either window can send a

@@ -9,14 +9,14 @@ GeoLibre Web is a single-page app that browsers cache aggressively. After a new 
 Try these in order:
 
 - **Hard refresh** the page to bypass the cache once:
-    - **Windows / Linux**: `Ctrl + Shift + R` (Chrome, Edge, Firefox).
-    - **macOS Chrome / Edge / Firefox**: `Cmd + Shift + R`.
-    - **macOS Safari**: `Cmd + Option + R`.
+  - **Windows / Linux**: `Ctrl + Shift + R` (Chrome, Edge, Firefox).
+  - **macOS Chrome / Edge / Firefox**: `Cmd + Shift + R`.
+  - **macOS Safari**: `Cmd + Option + R`.
 - **Open the app in a private / incognito window** to confirm the problem is cache related. If it works there, the cache is the cause.
 - **Clear the cached files** for the GeoLibre site if a hard refresh is not enough, then reload.
 
 !!! note "Safari users"
-    Safari caches web GIS apps aggressively, so it is the most common source of these issues. To empty Safari's cache, choose **Develop → Empty Caches** (`Cmd + Option + E`), or **Safari → Clear History**, then reload the page. If the **Develop** menu is hidden, enable it in **Safari → Settings → Advanced → Show features for web developers**.
+Safari caches web GIS apps aggressively, so it is the most common source of these issues. To empty Safari's cache, choose **Develop → Empty Caches** (`Cmd + Option + E`), or **Safari → Clear History**, then reload the page. If the **Develop** menu is hidden, enable it in **Safari → Settings → Advanced → Show features for web developers**.
 
 A fresh page load against the latest build resolves the large majority of "the app looks broken after updating" reports.
 

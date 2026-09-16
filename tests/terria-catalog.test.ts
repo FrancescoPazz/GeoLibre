@@ -487,7 +487,11 @@ describe("terria catalog plugin", () => {
         ],
       ],
     );
-    assert.equal(searchCatalogItems("dbtr").length, 5, "matches across groups, the group itself excluded");
+    assert.equal(
+      searchCatalogItems("dbtr").length,
+      5,
+      "matches across groups, the group itself excluded",
+    );
     assert.equal(searchCatalogItems("dbtr", 2).length, 2, "capped");
     assert.equal(searchCatalogItems("  ").length, 0);
     assert.ok(

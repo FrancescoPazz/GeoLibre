@@ -38,7 +38,7 @@ supply them:
   and by username.
 - **Token expiry.** `401` covers an expired token, but tokens issued here do not
   carry an expiry and stay valid until `DELETE /api/auth/token` revokes them.
-- **A request-size limit.** The server rejects an oversized *declared*
+- **A request-size limit.** The server rejects an oversized _declared_
   `Content-Length` before reading the body, but a chunked or HTTP/2 request
   declares no length and is parsed in full before the per-route limit applies.
   Cap request size at the proxy as well.
@@ -49,16 +49,16 @@ deployment.
 
 ## Limits
 
-| Field | Limit |
-| --- | ---: |
-| project title (derived from the uploaded project) | 100 Unicode code points |
-| username | 3–39 lowercase ASCII letters, digits, or hyphens |
-| slug | 1–100 lowercase ASCII letters, digits, or hyphens |
-| description | 2,000 Unicode code points |
-| tags | 20 tags, 40 Unicode code points each |
-| project document | 50 MiB UTF-8 JSON |
-| thumbnail | 5 MiB; PNG, JPEG, or WebP |
-| `limit` | default 24, maximum 100 |
+| Field                                             |                                             Limit |
+| ------------------------------------------------- | ------------------------------------------------: |
+| project title (derived from the uploaded project) |                           100 Unicode code points |
+| username                                          |  3–39 lowercase ASCII letters, digits, or hyphens |
+| slug                                              | 1–100 lowercase ASCII letters, digits, or hyphens |
+| description                                       |                         2,000 Unicode code points |
+| tags                                              |              20 tags, 40 Unicode code points each |
+| project document                                  |                                 50 MiB UTF-8 JSON |
+| thumbnail                                         |                         5 MiB; PNG, JPEG, or WebP |
+| `limit`                                           |                           default 24, maximum 100 |
 
 Servers may configure a smaller upload limit, but must return `413` and an
 `error` explaining that limit.
@@ -92,7 +92,7 @@ Response `201`:
 
 ```json
 {
-  "account": {"id": "uuid", "username": "ada", "createdAt": "2026-08-03T12:00:00Z"},
+  "account": { "id": "uuid", "username": "ada", "createdAt": "2026-08-03T12:00:00Z" },
   "token": "secret-token"
 }
 ```
@@ -102,7 +102,7 @@ Response `201`:
 Exchanges account credentials for a personal API token.
 
 ```json
-{"username": "ada", "password": "correct horse battery staple"}
+{ "username": "ada", "password": "correct horse battery staple" }
 ```
 
 Response `200` has the same shape as account creation. Tokens are opaque and
@@ -117,7 +117,7 @@ Revokes the presented Bearer token. Response: `204`.
 Returns the account associated with the token:
 
 ```json
-{"user": {"id": "uuid", "username": "ada", "createdAt": "2026-08-03T12:00:00Z"}}
+{ "user": { "id": "uuid", "username": "ada", "createdAt": "2026-08-03T12:00:00Z" } }
 ```
 
 An identity provider may create accounts without a username. Project creation
@@ -175,7 +175,16 @@ or `private`.
 Response `201`:
 
 ```json
-{"project": {"id": "uuid", "username": "ada", "slug": "wetlands", "projectUrl": "...", "viewerUrl": "...", "rawJsonUrl": "..."}}
+{
+  "project": {
+    "id": "uuid",
+    "username": "ada",
+    "slug": "wetlands",
+    "projectUrl": "...",
+    "viewerUrl": "...",
+    "rawJsonUrl": "..."
+  }
+}
 ```
 
 The `project` object is the full project representation. In particular,
@@ -187,7 +196,7 @@ successful response without them as invalid.
 Returns a page in newest-updated-first order:
 
 ```json
-{"projects": [], "limit": 24, "offset": 0, "total": 0}
+{ "projects": [], "limit": 24, "offset": 0, "total": 0 }
 ```
 
 Query parameters:
@@ -228,7 +237,7 @@ and `tags`. Response: `{"project": <project>}`.
 Requires ownership. Creates a new immutable version.
 
 ```json
-{"content": "{\"version\":\"1.0\", ...}"}
+{ "content": "{\"version\":\"1.0\", ...}" }
 ```
 
 Response `201`: `{"project": <project>, "version": <positive integer>}`.
@@ -243,12 +252,24 @@ Requires ownership. Returns the project's activity log, newest first, capped
 at 100 entries:
 
 ```json
-{"activity": [
-  {"id": "…", "action": "visibility_change", "actorId": "…",
-   "details": {"before": "private", "after": "public"}, "createdAt": "…"},
-  {"id": "…", "action": "open", "actorId": null,
-   "details": {"date": "2026-08-21", "count": 40}, "createdAt": "…"}
-]}
+{
+  "activity": [
+    {
+      "id": "…",
+      "action": "visibility_change",
+      "actorId": "…",
+      "details": { "before": "private", "after": "public" },
+      "createdAt": "…"
+    },
+    {
+      "id": "…",
+      "action": "open",
+      "actorId": null,
+      "details": { "date": "2026-08-21", "count": 40 },
+      "createdAt": "…"
+    }
+  ]
+}
 ```
 
 Actions and their `details`: `version_save` (`version`), `fork`

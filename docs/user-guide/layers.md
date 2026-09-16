@@ -22,13 +22,13 @@ basemap under a thematic fill or an aerial image, set the top layer to
 **Multiply**, and the relief shows through the colour instead of being hidden by
 it. Lowering opacity instead would wash out both.
 
-| Mode | What it does | Typical use |
-| --- | --- | --- |
-| **Normal** | Ordinary transparency — the default | Everything else |
-| **Multiply** | Darkens: the two colours are multiplied | Colour or imagery over a hillshade; adding shadow |
-| **Screen** | Lightens: the inverse of Multiply | Lifting a dark layer out of a dark basemap |
-| **Lighten** | Keeps whichever colour is brighter | Overlaying bright features without darkening the map |
-| **Add** | Sums the colours, clipping toward white | Glow effects, heat and density overlays |
+| Mode         | What it does                            | Typical use                                          |
+| ------------ | --------------------------------------- | ---------------------------------------------------- |
+| **Normal**   | Ordinary transparency — the default     | Everything else                                      |
+| **Multiply** | Darkens: the two colours are multiplied | Colour or imagery over a hillshade; adding shadow    |
+| **Screen**   | Lightens: the inverse of Multiply       | Lifting a dark layer out of a dark basemap           |
+| **Lighten**  | Keeps whichever colour is brighter      | Overlaying bright features without darkening the map |
+| **Add**      | Sums the colours, clipping toward white | Glow effects, heat and density overlays              |
 
 Blending applies to a layer's fills, outlines, points, markers, and raster
 tiles. **Labels are deliberately excluded** and always draw normally, so place
@@ -83,37 +83,37 @@ WMS, WMTS), PMTiles, MBTiles, and vector tiles.
 
 Selecting a layer expands a row of icon buttons on its card:
 
-| Button | What it does |
-| --- | --- |
-| **Move up** / **Move down** | Shift the layer one position in the stack. |
-| **Zoom to layer** | Fit the map to the layer's extent (for layers whose bounds are known). |
-| **Identify features** | Click features on the map to see their attributes in a popup. On a raster layer this reads the pixel value instead, and on a multiband raster it also builds a [spectral profile](styling.md#spectral-profile). |
-| **Open Style panel** | Select the layer and open its [styling controls](styling.md). |
-| **Layer actions** | The full menu, below. |
-| **Metadata** | Inspect the layer's source and configuration. |
-| **Remove layer** | Delete the layer from the project. |
+| Button                      | What it does                                                                                                                                                                                                    |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Move up** / **Move down** | Shift the layer one position in the stack.                                                                                                                                                                      |
+| **Zoom to layer**           | Fit the map to the layer's extent (for layers whose bounds are known).                                                                                                                                          |
+| **Identify features**       | Click features on the map to see their attributes in a popup. On a raster layer this reads the pixel value instead, and on a multiband raster it also builds a [spectral profile](styling.md#spectral-profile). |
+| **Open Style panel**        | Select the layer and open its [styling controls](styling.md).                                                                                                                                                   |
+| **Layer actions**           | The full menu, below.                                                                                                                                                                                           |
+| **Metadata**                | Inspect the layer's source and configuration.                                                                                                                                                                   |
+| **Remove layer**            | Delete the layer from the project.                                                                                                                                                                              |
 
 The **Layer actions** menu (the `…` button) holds everything else:
 
 ![The Layer actions menu on a vector layer](https://assets.geolibre.app/images/geolibre-layer-actions.webp)
 
-| Item | What it does |
-| --- | --- |
-| **Rename** | Change the layer's display name. |
-| **Open Style panel** | Same as the palette button on the card. |
-| **New group from layer** | Wrap this layer in a new [group](#layer-groups). |
-| **Edit geometry** | Hand the layer to the GeoEditor for vertex-level editing. |
-| **Load features into editor…** | Copy features from this layer into the GeoEditor's sketch layer. |
-| **Open attribute table** | Show this layer's records in the [Attribute table](attribute-table.md). |
-| **Quick analysis** | Run a buffer, centroids, convex hull, or bounding box over the whole layer with no dialog. See [Right-click quick actions](map-controls.md#right-click-quick-actions). |
-| **Select features** | The interactive selection modes: by click, rectangle, polygon, freehand, or radius, plus **Clear Selection**. Hold `Shift` to add, `Alt` to remove, `Shift`+`Alt` to intersect, and `Esc` to cancel. |
+| Item                                                | What it does                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Rename**                                          | Change the layer's display name.                                                                                                                                                                                                                                                      |
+| **Open Style panel**                                | Same as the palette button on the card.                                                                                                                                                                                                                                               |
+| **New group from layer**                            | Wrap this layer in a new [group](#layer-groups).                                                                                                                                                                                                                                      |
+| **Edit geometry**                                   | Hand the layer to the GeoEditor for vertex-level editing.                                                                                                                                                                                                                             |
+| **Load features into editor…**                      | Copy features from this layer into the GeoEditor's sketch layer.                                                                                                                                                                                                                      |
+| **Open attribute table**                            | Show this layer's records in the [Attribute table](attribute-table.md).                                                                                                                                                                                                               |
+| **Quick analysis**                                  | Run a buffer, centroids, convex hull, or bounding box over the whole layer with no dialog. See [Right-click quick actions](map-controls.md#right-click-quick-actions).                                                                                                                |
+| **Select features**                                 | The interactive selection modes: by click, rectangle, polygon, freehand, or radius, plus **Clear Selection**. Hold `Shift` to add, `Alt` to remove, `Shift`+`Alt` to intersect, and `Esc` to cancel.                                                                                  |
 | **Select by Expression…** / **Select by Location…** | Build a selection from an attribute expression or a spatial relationship. Select by Expression can also apply the expression as a persistent layer filter, hiding non-matching features without creating a new layer. Both are also on the [Edit menu](interface.md#the-top-toolbar). |
-| **Bind to Time Slider…** | Drive the Time Slider from one of this layer's date or number fields. |
-| **Export** | Write the layer out as GeoJSON, GeoParquet, GeoPackage, KML, KMZ, zipped Shapefile, or CSV (attributes only). |
-| **Styles** | Import and export symbology — see [below](#importing-and-exporting-styles). |
-| **Save to My Data** | Store the fully configured layer in your personal library, ready to re-add from the [Browser panel](adding-data.md#the-browser-panel) in any later project. |
-| **Copy style** / **Paste style** | Carry symbology from one layer to another. |
-| **Refresh** / **Auto refresh** | Reload the source now, or on an interval — see [Refreshing live layers](#refreshing-live-layers). |
+| **Bind to Time Slider…**                            | Drive the Time Slider from one of this layer's date or number fields.                                                                                                                                                                                                                 |
+| **Export**                                          | Write the layer out as GeoJSON, GeoParquet, GeoPackage, KML, KMZ, zipped Shapefile, or CSV (attributes only).                                                                                                                                                                         |
+| **Styles**                                          | Import and export symbology — see [below](#importing-and-exporting-styles).                                                                                                                                                                                                           |
+| **Save to My Data**                                 | Store the fully configured layer in your personal library, ready to re-add from the [Browser panel](adding-data.md#the-browser-panel) in any later project.                                                                                                                           |
+| **Copy style** / **Paste style**                    | Carry symbology from one layer to another.                                                                                                                                                                                                                                            |
+| **Refresh** / **Auto refresh**                      | Reload the source now, or on an interval — see [Refreshing live layers](#refreshing-live-layers).                                                                                                                                                                                     |
 
 Some entries are unavailable on layers they do not apply to: **Select by Location** needs a second layer to compare against, and **Paste style** needs a style on the clipboard.
 
@@ -143,7 +143,7 @@ Groups are folders in the layer stack. They can nest, so a project can carry a r
 - **Create**: **New group** adds an empty folder. **New group from layer** wraps the layer you are on, and **New group from selected layers** wraps a multi-selection.
 - **Fill**: **Move to group** moves one layer, **Move selected layers to group** moves a whole selection in one step (keeping their relative order), and **Add data to group** opens Add Data with the new layer targeted at that group.
 - **Organize**: rename a group, collapse or expand it, move it up or down, and set a group-level opacity that applies to everything inside.
-- **Visibility**: hiding a group hides its layers. A layer inside a hidden group is marked *Hidden because its group is not visible*, so you can tell it apart from a layer you turned off yourself.
+- **Visibility**: hiding a group hides its layers. A layer inside a hidden group is marked _Hidden because its group is not visible_, so you can tell it apart from a layer you turned off yourself.
 - **Remove**: **Ungroup (keep layers)** dissolves the folder and leaves its layers in place; **Delete group and layers** removes both.
 
 Groups and their nesting are saved with the project, and [importing a QGIS project](projects.md#importing-a-qgis-project) brings that project's group tree across.
@@ -163,4 +163,4 @@ Layers added from a [DuckDB source](adding-data.md#databases) or produced by the
 The **Background** entry at the bottom of the panel is the basemap. Toggle its visibility and adjust its opacity here. To change which basemap is shown, use the **Basemaps** plugin from the [Plugins menu](plugins.md). See [Adding Data](adding-data.md#basemaps).
 
 !!! tip "Editing geometry"
-    To draw or edit features directly on the map, activate the **GeoEditor** plugin from the [Plugins menu](plugins.md). It adds drawing, vertex editing, and deletion tools for GeoJSON layers.
+To draw or edit features directly on the map, activate the **GeoEditor** plugin from the [Plugins menu](plugins.md). It adds drawing, vertex editing, and deletion tools for GeoJSON layers.

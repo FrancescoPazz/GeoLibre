@@ -21,7 +21,7 @@
 
 A free and open-source, lightweight, cloud-native GIS platform for visualizing, exploring, and analyzing geospatial data. It runs everywhere you do, in the web browser, on the desktop, on mobile, and inside Jupyter notebooks, all while keeping your data local and private.
 
-It also ships **1,000+ geoprocessing tools** that run *entirely in your browser* on WebAssembly — terrain, hydrology, LiDAR, remote sensing, and vector analysis with no server, no install, and no data ever leaving your machine.
+It also ships **1,000+ geoprocessing tools** that run _entirely in your browser_ on WebAssembly — terrain, hydrology, LiDAR, remote sensing, and vector analysis with no server, no install, and no data ever leaving your machine.
 
 GeoLibre is built with **Tauri v2**, **React**, **TypeScript**, **MapLibre GL JS**, **DuckDB-WASM Spatial**, and **deck.gl**. The same workspace runs as a native desktop app, native Android and iOS apps, in any modern web browser, and adapts responsively to mobile and small screens.
 
@@ -127,17 +127,17 @@ The tools come from the [Whitebox Next Gen](https://github.com/opengeos/Whitebox
 suite plus GeoLibre's own WASM tools, and are browsable by category straight from
 the Processing menu:
 
-| Category | Tools | Examples |
-| --- | --- | --- |
-| **Vector** | 313 | overlays, buffers, joins, cleaning, topology, generalization |
-| **Raster** | 256 | algebra, filters, reclassification, zonal and focal statistics |
-| **Remote sensing** | 154 | spectral indices, band math, classification, change detection |
-| **Hydrology** | 100 | flow accumulation, watersheds, stream networks, depression filling |
-| **Terrain** | 99 | slope, aspect, hillshade, curvature, ruggedness, viewsheds |
-| **LiDAR** | 65 | point-cloud filtering, ground classification, DEM/DSM generation |
-| **Conversion** | 49 | format translation to cloud-native GeoParquet, PMTiles, and COG |
-| **Network** | 26 | connectivity, cost distance, and routing analysis |
-| **Projection** | 4 | reprojection for raster and vector data |
+| Category           | Tools | Examples                                                           |
+| ------------------ | ----- | ------------------------------------------------------------------ |
+| **Vector**         | 313   | overlays, buffers, joins, cleaning, topology, generalization       |
+| **Raster**         | 256   | algebra, filters, reclassification, zonal and focal statistics     |
+| **Remote sensing** | 154   | spectral indices, band math, classification, change detection      |
+| **Hydrology**      | 100   | flow accumulation, watersheds, stream networks, depression filling |
+| **Terrain**        | 99    | slope, aspect, hillshade, curvature, ruggedness, viewsheds         |
+| **LiDAR**          | 65    | point-cloud filtering, ground classification, DEM/DSM generation   |
+| **Conversion**     | 49    | format translation to cloud-native GeoParquet, PMTiles, and COG    |
+| **Network**        | 26    | connectivity, cost distance, and routing analysis                  |
+| **Projection**     | 4     | reprojection for raster and vector data                            |
 
 Any tool is deep-linkable with a `?tool=` URL parameter that preselects it and
 pre-fills its form. See the [Processing Tools guide](https://geolibre.app/user-guide/processing/#whitebox-toolbox)
@@ -187,7 +187,7 @@ See the [Become a Sponsor](https://geolibre.app/sponsor/) page for what sponsors
 
 GeoLibre is built on the free and open-source geospatial and web communities — including MapLibre GL JS, deck.gl, DuckDB-WASM Spatial, Turf.js, Tauri, React, and many more. See the full [Acknowledgements](https://geolibre.app/acknowledgements/) page for the complete list of projects and community contributors.
 
-- The **Atmosphere Effects** plugin (deep-space backdrop, parallax starfield, comets, and the globe atmosphere halo) adapts the technique and visual design from [Leonel Dias](https://leoneljdias.github.io/)'s article [*Globe atmosphere, halo, and comets*](https://leoneljdias.github.io/posts/globe-atmosphere-halo-comets/) — the layered Canvas 2D approach, the halo gradient and "screen" blend, the limb-sampling that keeps the halo aligned under pitch, and the starfield/comet parameters.
+- The **Atmosphere Effects** plugin (deep-space backdrop, parallax starfield, comets, and the globe atmosphere halo) adapts the technique and visual design from [Leonel Dias](https://leoneljdias.github.io/)'s article [_Globe atmosphere, halo, and comets_](https://leoneljdias.github.io/posts/globe-atmosphere-halo-comets/) — the layered Canvas 2D approach, the halo gradient and "screen" blend, the limb-sampling that keeps the halo aligned under pitch, and the starfield/comet parameters.
 - **Community contributors** — thanks to [**Ryanphoenix**](https://github.com/Ryanphoenix) for many valued contributions, including issue reports, feedback, and improvements.
 - **Beta testers** — thanks to [**René van der Velde**](https://github.com/renevandervelde) (Netherlands) for early testing, detailed bug reports, and feature requests.
 

@@ -3,7 +3,7 @@
 This tutorial derives terrain products from a digital elevation model (DEM): a hillshade, a slope map, and contour lines. It uses the [Raster tools](../user-guide/processing.md#raster) under **Processing → GeoLibre Toolbox → Raster**.
 
 !!! note "Which engine runs these"
-    **Hillshade**, **Slope**, and **Aspect** each offer a **Client (browser)** engine, so this tutorial's first three steps work in the browser build with nothing installed. **Contour** and **Clip by mask layer** have no client engine and need the rasterio Python sidecar, which the desktop app manages — see [Getting Started](../getting-started.md#optional-python-sidecar). The engine picker at the top of each tool shows what is available; prefer the sidecar for large rasters or for terrain in a geographic CRS.
+**Hillshade**, **Slope**, and **Aspect** each offer a **Client (browser)** engine, so this tutorial's first three steps work in the browser build with nothing installed. **Contour** and **Clip by mask layer** have no client engine and need the rasterio Python sidecar, which the desktop app manages — see [Getting Started](../getting-started.md#optional-python-sidecar). The engine picker at the top of each tool shows what is available; prefer the sidecar for large rasters or for terrain in a geographic CRS.
 
 ## 1. Load a DEM
 

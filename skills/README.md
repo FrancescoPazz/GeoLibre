@@ -5,8 +5,8 @@ it, from a chat session, a script, or a notebook. They are for people driving
 GeoLibre from an external agent, not for people working on GeoLibre's own source
 (that is what the repo's `CLAUDE.md` covers).
 
-| Skill | What it teaches |
-| --- | --- |
+| Skill                            | What it teaches                                                                                                                                                                                                   |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`geolibre/`](geolibre/SKILL.md) | Author `.geolibre.json` projects: pick an entry point (`geolibre-mcp`, the Python package, hand-written JSON, the embed API), add and style layers, add legends and colorbars, and export a standalone HTML page. |
 
 ## Install

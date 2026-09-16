@@ -2,15 +2,15 @@
 
 **Processing → GeoLibre Toolbox → AI Segmentation** turns imagery into vector features
 using [segment-geospatial](https://github.com/opengeos/segment-geospatial)
-(SamGeo) and Meta's **SAM 3** model. Describe what you want — *"trees"*,
-*"buildings"*, *"water"* — or run automatic segmentation, and GeoLibre adds the
+(SamGeo) and Meta's **SAM 3** model. Describe what you want — _"trees"_,
+_"buildings"_, _"water"_ — or run automatic segmentation, and GeoLibre adds the
 resulting polygons as a new vector layer.
 
 !!! note "Requires the Python sidecar and a model backend"
-    Segmentation runs deep-learning models, so it needs the GeoLibre desktop
-    app with the Python sidecar **plus** a running `samgeo-api` model server. A
-    CUDA GPU is strongly recommended; CPU inference works but is slow. See
-    [Setup](#setup) below.
+Segmentation runs deep-learning models, so it needs the GeoLibre desktop
+app with the Python sidecar **plus** a running `samgeo-api` model server. A
+CUDA GPU is strongly recommended; CPU inference works but is slow. See
+[Setup](#setup) below.
 
 ## How it works
 
@@ -43,11 +43,11 @@ Then either let GeoLibre launch the model server for you, or run it yourself:
 - **Run it yourself / on another machine.** Start the server and point GeoLibre
   at it:
 
-    ```bash
-    samgeo-api --port 8000
-    # then run the sidecar with:
-    GEOLIBRE_ML_SAMGEO_URL=http://127.0.0.1:8000
-    ```
+  ```bash
+  samgeo-api --port 8000
+  # then run the sidecar with:
+  GEOLIBRE_ML_SAMGEO_URL=http://127.0.0.1:8000
+  ```
 
 !!! note "Desktop app: point it at an external `samgeo-api`"
 
@@ -79,11 +79,11 @@ pip install -e "backend/geolibre_server[ml]"
 
 ### Configuration
 
-| Environment variable | Purpose |
-| --- | --- |
-| `GEOLIBRE_ML_SAMGEO_URL` | Base URL of an already-running `samgeo-api`. When set, the sidecar proxies here and does not launch a child process. |
-| `GEOLIBRE_ML_SAMGEO_CMD` | Command used to launch `samgeo-api` on demand (default `samgeo-api`). `--host`/`--port` are appended automatically. |
-| `GEOLIBRE_ML_DEFAULT_MODEL` | Model the UI defaults to (default `sam3`). |
+| Environment variable        | Purpose                                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `GEOLIBRE_ML_SAMGEO_URL`    | Base URL of an already-running `samgeo-api`. When set, the sidecar proxies here and does not launch a child process. |
+| `GEOLIBRE_ML_SAMGEO_CMD`    | Command used to launch `samgeo-api` on demand (default `samgeo-api`). `--host`/`--port` are appended automatically.  |
+| `GEOLIBRE_ML_DEFAULT_MODEL` | Model the UI defaults to (default `sam3`).                                                                           |
 
 ## Using it
 
@@ -94,11 +94,11 @@ pip install -e "backend/geolibre_server[ml]"
    also work but produce pixel-space results). The polygons come back in the
    raster's coordinate system, so they land in the right place on the map.
 4. **Pick a mode:**
-    - **Text prompt** — type what to segment (e.g. `trees`, `buildings`,
-      `cars`) and set a **Confidence threshold** (0–1; lower finds more, higher
-      is stricter). SAM 3 finds every matching object in the image.
-    - **Automatic (everything)** — segments all distinct objects without a
-      prompt.
+   - **Text prompt** — type what to segment (e.g. `trees`, `buildings`,
+     `cars`) and set a **Confidence threshold** (0–1; lower finds more, higher
+     is stricter). SAM 3 finds every matching object in the image.
+   - **Automatic (everything)** — segments all distinct objects without a
+     prompt.
 5. Click **Segment**. The result is added as a new GeoJSON polygon layer named
    after the prompt, and the map zooms to it.
 
@@ -125,23 +125,23 @@ shared by every prompt type, and results land as GeoJSON polygon layers.
 1. Start the model server (`samgeo-api --port 8000`; the panel links to the
    [setup guide](https://samgeo.gishub.org/api/)) and click **Check
    connection**.
-2. **Choose the image.** *Image source* lists every COG or GeoTIFF layer
+2. **Choose the image.** _Image source_ lists every COG or GeoTIFF layer
    already on the map — pick one to segment it in place — or leave it on
    **Upload a file** and choose a local `.tif`/`.png`/`.jpg`. The
-   **Aerial imagery (UC Berkeley)** sample in *Add Data → Raster Layer* is a
+   **Aerial imagery (UC Berkeley)** sample in _Add Data → Raster Layer_ is a
    good first image.
 3. **Pick a mode:**
-    - **Text prompt** — a concept such as `building` or `tree`, with a
-      confidence threshold and mask-size limits.
-    - **Point prompts** — click **+ Foreground point** / **− Background
-      point**, then click the map; green and red markers show the prompts.
-      At least one foreground point is required.
-    - **Bounding box (find similar)** — click **Draw box on map** and drag a
-      rectangle; SAM 3 returns every object that resembles the boxed one.
-    - **Automatic (everything)** — segments all distinct objects. SAM 3 is a
-      prompt-driven model, so this mode runs SAM 2's automatic mask generator
-      instead (choose the checkpoint under *SAM2 model*; `points_per_side`,
-      IoU and stability thresholds apply here).
+   - **Text prompt** — a concept such as `building` or `tree`, with a
+     confidence threshold and mask-size limits.
+   - **Point prompts** — click **+ Foreground point** / **− Background
+     point**, then click the map; green and red markers show the prompts.
+     At least one foreground point is required.
+   - **Bounding box (find similar)** — click **Draw box on map** and drag a
+     rectangle; SAM 3 returns every object that resembles the boxed one.
+   - **Automatic (everything)** — segments all distinct objects. SAM 3 is a
+     prompt-driven model, so this mode runs SAM 2's automatic mask generator
+     instead (choose the checkpoint under _SAM2 model_; `points_per_side`,
+     IoU and stability thresholds apply here).
 4. Click **Segment**. Polygons are reprojected from the raster's CRS to WGS84
    and added as a layer named after the prompt or mode; the map zooms to it.
    With `segment-geospatial` 1.4.2 or newer each feature carries a `score`
@@ -153,20 +153,20 @@ The panel's settings (API URL, mode, model, thresholds) persist with the
 project.
 
 !!! note "Image uploads go to the API URL you configure"
-    The image is POSTed to the configured server. A project file can carry a
-    saved API URL, so check the field before segmenting a local image with a
-    project you did not author.
+The image is POSTed to the configured server. A project file can carry a
+saved API URL, so check the field before segmenting a local image with a
+project you did not author.
 
 ## API (advanced)
 
 The sidecar exposes these endpoints (proxied to `samgeo-api`):
 
-| Method | Endpoint | Description |
-| --- | --- | --- |
-| GET | `/ml/status` | Backend availability, default model, version, and model list. |
-| POST | `/ml/segment/text` | Text-prompt segmentation (`prompt`, `confidence_threshold`). |
-| POST | `/ml/segment/automatic` | Automatic mask generation. |
-| POST | `/ml/segment/predict` | Box/point prompt segmentation (`boxes`, `point_coords`, `point_labels`, `point_crs`). |
+| Method | Endpoint                | Description                                                                           |
+| ------ | ----------------------- | ------------------------------------------------------------------------------------- |
+| GET    | `/ml/status`            | Backend availability, default model, version, and model list.                         |
+| POST   | `/ml/segment/text`      | Text-prompt segmentation (`prompt`, `confidence_threshold`).                          |
+| POST   | `/ml/segment/automatic` | Automatic mask generation.                                                            |
+| POST   | `/ml/segment/predict`   | Box/point prompt segmentation (`boxes`, `point_coords`, `point_labels`, `point_crs`). |
 
 Each `segment/*` endpoint takes a multipart `file` (the image) plus
 `model_version` (default `sam3`) and `output_format` (default `geojson`) and

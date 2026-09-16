@@ -149,16 +149,16 @@ m.add_raster(dataset, name="Temperature",
 `array_args` is used only for xarray input (passing it with a URL or path warns
 and is ignored). It takes:
 
-| Key | Meaning |
-| --- | --- |
-| `variable` | Pick one variable out of a `Dataset` (otherwise every variable becomes a band). |
-| `isel` | Mapping of dimension name → index, applied with `.isel()` to drop extra dimensions (time, depth). |
-| `x_dim` / `y_dim` | Spatial dimension names, when they are not `x`/`y`, `lon`/`lat`, or `longitude`/`latitude`. |
-| `crs` | CRS to write, e.g. `"EPSG:3857"`. |
-| `nodata` | Nodata value to write. |
+| Key               | Meaning                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------- |
+| `variable`        | Pick one variable out of a `Dataset` (otherwise every variable becomes a band).                   |
+| `isel`            | Mapping of dimension name → index, applied with `.isel()` to drop extra dimensions (time, depth). |
+| `x_dim` / `y_dim` | Spatial dimension names, when they are not `x`/`y`, `lon`/`lat`, or `longitude`/`latitude`.       |
+| `crs`             | CRS to write, e.g. `"EPSG:3857"`.                                                                 |
+| `nodata`          | Nodata value to write.                                                                            |
 
 Anything else in `array_args` is forwarded to `rio.to_raster` (`compress`, and
-so on). `driver` only *defaults* to `"COG"`, so passing
+so on). `driver` only _defaults_ to `"COG"`, so passing
 `array_args={"driver": "GTiff"}` really does write a plain GeoTIFF instead.
 
 Only `lon`/`lat` and `longitude`/`latitude` dimensions imply EPSG:4326. Any

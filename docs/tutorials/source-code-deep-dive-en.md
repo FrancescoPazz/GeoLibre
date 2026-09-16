@@ -14,18 +14,18 @@ The repository is an npm workspaces monorepo with 7 packages plus a desktop appl
 
 ### 1.1 Format Parsing: Lightweight First, Heavy Artillery as Fallback
 
-| Library | Version | Role | Why This One |
-|---|---|---|---|
-| **`@duckdb/duckdb-wasm`** | 1.33.1 | GeoParquet, FlatGeobuf, GML, DXF, TAB, and spatial SQL | A single library serving as both **format driver** and **compute engine** |
-| **`shpjs`** | 6.2 | Shapefile | Pure JS, tens of KB; `.prj` for projection, `.cpg` for encoding (**Chinese attribute encoding issues resolved**) |
-| **`fflate`** | 0.8 | zip / kmz / aprx decompression | Extremely small and fast |
-| **`sql.js`** | 1.14 | GeoPackage read **and write** | **GPKG is essentially SQLite** — lightweight and efficient |
-| **`exifr`** | 7.1 | Photo EXIF GPS → point layer | Practical for UAV/drone scenarios |
-| **`gdal3.js`** | 2.8 | Only used for georeferenced GeoTIFF/COG export | WASM ~28MB + data ~12MB, loaded from CDN only, never bundled |
-| **`geotiff`** | 3.0 | GeoTIFF decoding | — |
-| **`h5wasm` / `netcdfjs`** | — | HDF5 / NetCDF-3 | Clear division of labor, each handles one format |
-| **`@osmix/pbf` `@osmix/core`** | — | OSM PBF | Runs in a Web Worker |
-| **`pmtiles`** `proj4` `fast-xml-parser` | — | Tile archives / projections / XML | Foundational utilities |
+| Library                                 | Version | Role                                                   | Why This One                                                                                                     |
+| --------------------------------------- | ------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| **`@duckdb/duckdb-wasm`**               | 1.33.1  | GeoParquet, FlatGeobuf, GML, DXF, TAB, and spatial SQL | A single library serving as both **format driver** and **compute engine**                                        |
+| **`shpjs`**                             | 6.2     | Shapefile                                              | Pure JS, tens of KB; `.prj` for projection, `.cpg` for encoding (**Chinese attribute encoding issues resolved**) |
+| **`fflate`**                            | 0.8     | zip / kmz / aprx decompression                         | Extremely small and fast                                                                                         |
+| **`sql.js`**                            | 1.14    | GeoPackage read **and write**                          | **GPKG is essentially SQLite** — lightweight and efficient                                                       |
+| **`exifr`**                             | 7.1     | Photo EXIF GPS → point layer                           | Practical for UAV/drone scenarios                                                                                |
+| **`gdal3.js`**                          | 2.8     | Only used for georeferenced GeoTIFF/COG export         | WASM ~28MB + data ~12MB, loaded from CDN only, never bundled                                                     |
+| **`geotiff`**                           | 3.0     | GeoTIFF decoding                                       | —                                                                                                                |
+| **`h5wasm` / `netcdfjs`**               | —       | HDF5 / NetCDF-3                                        | Clear division of labor, each handles one format                                                                 |
+| **`@osmix/pbf` `@osmix/core`**          | —       | OSM PBF                                                | Runs in a Web Worker                                                                                             |
+| **`pmtiles`** `proj4` `fast-xml-parser` | —       | Tile archives / projections / XML                      | Foundational utilities                                                                                           |
 
 **The key takeaway here is "choose the lightest path for each format."** The source file `packages/plugins/package.json` has over 60 dependencies, yet there is no monolithic "unified read layer" — each format takes its own shortest path.
 
@@ -41,12 +41,12 @@ The same pattern repeats for Shapefile: **try shpjs first, only fall back to Duc
 
 This area is easy to misunderstand. Tracing through the source (per `docs/architecture.md:75-79`):
 
-| Engine | Where It Runs | Positioning |
-|---|---|---|
-| **Turf.js** (`@turf/*`, ~20 sub-packages) | Browser, pure JS | **Default engine for vector tools**, zero dependencies, zero backend |
-| **GeoPandas / Shapely** | Python sidecar | Upgrade path when **projection-aware** results are needed |
-| **GeoPandas / Shapely** | Browser via Pyodide | **Same codebase**, usable in the web version |
-| **DuckDB / PGlite+PostGIS / SedonaDB** | Browser or sidecar | Three engines for the SQL Workspace |
+| Engine                                    | Where It Runs       | Positioning                                                          |
+| ----------------------------------------- | ------------------- | -------------------------------------------------------------------- |
+| **Turf.js** (`@turf/*`, ~20 sub-packages) | Browser, pure JS    | **Default engine for vector tools**, zero dependencies, zero backend |
+| **GeoPandas / Shapely**                   | Python sidecar      | Upgrade path when **projection-aware** results are needed            |
+| **GeoPandas / Shapely**                   | Browser via Pyodide | **Same codebase**, usable in the web version                         |
+| **DuckDB / PGlite+PostGIS / SedonaDB**    | Browser or sidecar  | Three engines for the SQL Workspace                                  |
 
 Note that Turf is imported **per sub-package** (`@turf/buffer`, `@turf/intersect`, etc.), not as a whole. This is important — importing all of Turf at once is substantial; per-package imports are what make it practical.
 
@@ -56,18 +56,18 @@ The "one codebase, two runtimes" design is documented at `docs/architecture.md:7
 
 ### 1.3 Rendering & Layers: The MapLibre Plugin Ecosystem
 
-| Library | Role |
-|---|---|
-| **`maplibre-gl`** 5.24 | Primary map |
-| **`deck.gl`** 9.3 (core/layers/geo-layers/mesh-layers/aggregation-layers/mapbox) | COG, 3D Tiles, I3S, visualization layers, interleaved into the MapLibre canvas |
-| **`maplibre-gl-3d-tiles` / `-lidar` / `-splat` / `-raster` / `-vector`** | **Without switching engines, directly add 3D Tiles, point clouds, and Gaussian splats onto MapLibre** |
-| **`@developmentseed/deck.gl-geotiff` / `-raster`** | COG rendering |
-| **`@carbonplan/zarr-layer`** | Zarr scientific data |
-| **`@loaders.gl/i3s`** / **`@esri/maplibre-arcgis`** | Esri ecosystem integration |
-| **`@geoman-io/maplibre-geoman-free`** | Drawing and editing |
-| **`maplibre-gl-time-slider` / `-swipe` / `-layer-control` / `-basemap-control`** | Interactive controls |
-| **`@tanstack/react-virtual`** | Attribute table virtualization |
-| **`cesium`** 1.143 | Optional 3D globe split-view, **lazy-loaded ~4.8 MB in a separate chunk** |
+| Library                                                                          | Role                                                                                                  |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **`maplibre-gl`** 5.24                                                           | Primary map                                                                                           |
+| **`deck.gl`** 9.3 (core/layers/geo-layers/mesh-layers/aggregation-layers/mapbox) | COG, 3D Tiles, I3S, visualization layers, interleaved into the MapLibre canvas                        |
+| **`maplibre-gl-3d-tiles` / `-lidar` / `-splat` / `-raster` / `-vector`**         | **Without switching engines, directly add 3D Tiles, point clouds, and Gaussian splats onto MapLibre** |
+| **`@developmentseed/deck.gl-geotiff` / `-raster`**                               | COG rendering                                                                                         |
+| **`@carbonplan/zarr-layer`**                                                     | Zarr scientific data                                                                                  |
+| **`@loaders.gl/i3s`** / **`@esri/maplibre-arcgis`**                              | Esri ecosystem integration                                                                            |
+| **`@geoman-io/maplibre-geoman-free`**                                            | Drawing and editing                                                                                   |
+| **`maplibre-gl-time-slider` / `-swipe` / `-layer-control` / `-basemap-control`** | Interactive controls                                                                                  |
+| **`@tanstack/react-virtual`**                                                    | Attribute table virtualization                                                                        |
+| **`cesium`** 1.143                                                               | Optional 3D globe split-view, **lazy-loaded ~4.8 MB in a separate chunk**                             |
 
 ![3D Tiles, vectors, glTF, and Gaussian splats intermixed in a single layer list](https://assets.geolibre.app/images/3dtiles.webp)
 
@@ -96,11 +96,11 @@ Among these dozen or so engines, **one stands out as worth trying right now**: `
 
 These three names are often conflated. They are nested:
 
-| Layer | What It Is | Relationship |
-|---|---|---|
-| **WebAssembly** | Binary instruction format in the browser | Just "the ability to run native code"; does nothing GIS-related on its own |
-| **DuckDB-WASM** | DuckDB (an analytical database written in C++) compiled to WASM | **It is "DuckDB implemented via WASM," not WASM itself** |
-| **Spatial Extension** | DuckDB's spatial extension, also a separate `.wasm` file | Requires a **separate `INSTALL` / `LOAD`**; without it, there are no spatial functions at all |
+| Layer                 | What It Is                                                      | Relationship                                                                                  |
+| --------------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **WebAssembly**       | Binary instruction format in the browser                        | Just "the ability to run native code"; does nothing GIS-related on its own                    |
+| **DuckDB-WASM**       | DuckDB (an analytical database written in C++) compiled to WASM | **It is "DuckDB implemented via WASM," not WASM itself**                                      |
+| **Spatial Extension** | DuckDB's spatial extension, also a separate `.wasm` file        | Requires a **separate `INSTALL` / `LOAD`**; without it, there are no spatial functions at all |
 
 > **The most common misconception**: thinking that installing duckdb-wasm gives you spatial capabilities. It does not. `ST_Read`, `ST_Transform`, `ST_AsWKB` — these all live in the spatial extension, which is a second WASM artifact fetched from CDN and loaded at runtime.
 
@@ -110,15 +110,15 @@ And behind the spatial extension's `ST_Read` lies **a subset of GDAL**. The impl
 
 DuckDB invocation points in the source code are categorized as follows:
 
-| Use Case | Interface Used | Notes |
-|---|---|---|
-| GeoParquet | `read_parquet` | **Both local and remote go through this**; remote uses HTTP Range requests |
-| FlatGeobuf / GML / DXF / TAB, etc. | `ST_Read` | GDAL backend; format coverage depends on what the extension loads |
-| Shapefile (zip) | First `shpjs`, fall back to Spatial | Lightweight first, heavy weapon as fallback |
-| KML | First custom parser (preserve styling), fall back to Spatial | Spatial only gets geometry; styling is lost |
-| CSV with WKT geometry columns | DuckDB SQL | Converts text geometry directly into a layer |
-| Coordinate system transformation | `ST_Transform` | GeoJSON with legacy top-level `crs` members are reprojected through this |
-| **SQL Workspace** | Full DuckDB SQL | **Loaded layers are registered as tables and can be directly JOINed** |
+| Use Case                           | Interface Used                                               | Notes                                                                      |
+| ---------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| GeoParquet                         | `read_parquet`                                               | **Both local and remote go through this**; remote uses HTTP Range requests |
+| FlatGeobuf / GML / DXF / TAB, etc. | `ST_Read`                                                    | GDAL backend; format coverage depends on what the extension loads          |
+| Shapefile (zip)                    | First `shpjs`, fall back to Spatial                          | Lightweight first, heavy weapon as fallback                                |
+| KML                                | First custom parser (preserve styling), fall back to Spatial | Spatial only gets geometry; styling is lost                                |
+| CSV with WKT geometry columns      | DuckDB SQL                                                   | Converts text geometry directly into a layer                               |
+| Coordinate system transformation   | `ST_Transform`                                               | GeoJSON with legacy top-level `crs` members are reprojected through this   |
+| **SQL Workspace**                  | Full DuckDB SQL                                              | **Loaded layers are registered as tables and can be directly JOINed**      |
 
 > **Key insight**: Pay attention to the last row. This is an easily underestimated design choice: layers on the map are simultaneously tables in SQL. Users can write `JOIN` and `ST_Intersects` across two layers, and the result becomes a new layer directly. **"Map" and "database" are two views of the same thing.**
 
@@ -158,7 +158,9 @@ const spatialExtensionByDb = new WeakMap<duckdb.AsyncDuckDB, Promise<void>>();
 export async function ensureSpatialExtension(db, connection, beforeLoad?) {
   let promise = spatialExtensionByDb.get(db);
   if (!promise) {
-    promise = (async () => { /* …INSTALL / LOAD… */ })();
+    promise = (async () => {
+      /* …INSTALL / LOAD… */
+    })();
     spatialExtensionByDb.set(db, promise);
   }
   try {
@@ -204,12 +206,12 @@ Two additional defensive details: the retry is triggered only when the statement
 
 Many articles praise DuckDB-WASM. This section specifically examines the actual limitations revealed in the source code. Understanding these constraints provides more confidence than operating blindly.
 
-| Limitation | Value | Reason |
-|---|---|---|
-| Remote file size | **2 GiB** | DuckDB-WASM's HTTP filesystem stores remote file sizes in 32 bits |
-| Single-tab memory | ~4 GiB | WASM address space ceiling |
-| Feature count confirmation threshold | 500,000 | User must confirm before materializing beyond this |
-| Threading | Single-threaded | Very large data should go back to the server |
+| Limitation                           | Value           | Reason                                                            |
+| ------------------------------------ | --------------- | ----------------------------------------------------------------- |
+| Remote file size                     | **2 GiB**       | DuckDB-WASM's HTTP filesystem stores remote file sizes in 32 bits |
+| Single-tab memory                    | ~4 GiB          | WASM address space ceiling                                        |
+| Feature count confirmation threshold | 500,000         | User must confirm before materializing beyond this                |
+| Threading                            | Single-threaded | Very large data should go back to the server                      |
 
 The 2 GiB limit has an instructive detail: the guard check happens **before ingestion begins** (`_registerSource` runs ahead of the streaming branch, so "streaming reads" can't bypass it either). GeoLibre's approach is to communicate this clearly in the file browser panel rather than letting users click Add and wait for an inevitable failure. **Failures that can be determined in advance should never be deferred to runtime.**
 
@@ -245,15 +247,15 @@ The core idea in one sentence: **Don't pursue one scheme to rule them all — sw
 
 Threshold constants in the source (all verifiable):
 
-| Constant | Value | Location | What It Protects |
-|---|---|---|---|
-| `LARGE_VECTOR_FEATURE_THRESHOLD` | **50,000** | `core/src/types.ts:670` | Main-thread GeoJSON parsing |
-| `maxHistoryFeatureCount` | 500,000 | `core/src/history.ts:29` | Undo stack memory |
-| `DUCKDB_VECTOR_FEATURE_WARN_COUNT` | 100,000 | `core/src/types.ts:1838` | Result materialization memory |
-| `MAX_CEREUS_FEATURES` | 50,000 | `lib/sedona-workspace.ts:25` | WASM heap |
-| `MAX_DERIVED_FEATURES` | 50,000 | `map/src/derived-geometry.ts:37` | Derived geometry computation |
-| `historyCoalesceMs` | 400 ms | `core/src/history.ts:6` | Undo record explosion |
-| Remote files | 2 GiB | `plugins/remote-file-formats.ts` | DuckDB-WASM 32-bit |
+| Constant                           | Value      | Location                         | What It Protects              |
+| ---------------------------------- | ---------- | -------------------------------- | ----------------------------- |
+| `LARGE_VECTOR_FEATURE_THRESHOLD`   | **50,000** | `core/src/types.ts:670`          | Main-thread GeoJSON parsing   |
+| `maxHistoryFeatureCount`           | 500,000    | `core/src/history.ts:29`         | Undo stack memory             |
+| `DUCKDB_VECTOR_FEATURE_WARN_COUNT` | 100,000    | `core/src/types.ts:1838`         | Result materialization memory |
+| `MAX_CEREUS_FEATURES`              | 50,000     | `lib/sedona-workspace.ts:25`     | WASM heap                     |
+| `MAX_DERIVED_FEATURES`             | 50,000     | `map/src/derived-geometry.ts:37` | Derived geometry computation  |
+| `historyCoalesceMs`                | 400 ms     | `core/src/history.ts:6`          | Undo record explosion         |
+| Remote files                       | 2 GiB      | `plugins/remote-file-formats.ts` | DuckDB-WASM 32-bit            |
 
 **Note that these thresholds are all named constants, all have documentation comments, and both `historyCoalesceMs` and `maxHistoryFeatureCount` have setters for runtime adjustment (set to 0 in tests).** This is a tier above magic numbers scattered through the code.
 
@@ -291,7 +293,7 @@ MapLibre cancels tile requests that scroll off-screen, and the result would be d
 **Generalized: every "on-demand production" async pipeline must support cancellation.** Applied to real projects: reprojecting off-screen tiles while the user rapidly drags the map, queries from previous pages still running while the attribute table rapidly flips pages, a previous layer's parse result arriving late and overwriting the new layer during rapid layer switching (**classic race condition**).
 
 !!! warning "`AbortController` Is Not Just for `fetch`"
-    Any loop that spans more than one frame should check `signal.aborted` in the loop body and exit early.
+Any loop that spans more than one frame should check `signal.aborted` in the loop body and exit early.
 
 ### 3.3 Undo Stack: Three Refinements Worth Studying
 
@@ -335,12 +337,12 @@ The `manualChunks` configuration in `apps/geolibre-desktop/vite.config.ts` is th
 
 A detailed size breakdown from the source comments, organized here:
 
-| Heavy Resource | Size | Strategy |
-|---|---|---|
-| CesiumJS | ~4.8 MB | Separate chunk, `import()` only when switching to globe view |
-| PGlite + PostGIS | ~25 MB (bundling into desktop would add **~22 MB of nearly incompressible size**) | Default via jsDelivr CDN, not included in the build |
-| gdal3.js | WASM ~28 MB + data ~12 MB | **Never bundled**, always from CDN; disabling CDN disables the feature |
-| Pyodide / CereusDB | Tens of MB each | CDN-loaded; PGlite and CereusDB can be bundled-in via build switches |
+| Heavy Resource     | Size                                                                              | Strategy                                                               |
+| ------------------ | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| CesiumJS           | ~4.8 MB                                                                           | Separate chunk, `import()` only when switching to globe view           |
+| PGlite + PostGIS   | ~25 MB (bundling into desktop would add **~22 MB of nearly incompressible size**) | Default via jsDelivr CDN, not included in the build                    |
+| gdal3.js           | WASM ~28 MB + data ~12 MB                                                         | **Never bundled**, always from CDN; disabling CDN disables the feature |
+| Pyodide / CereusDB | Tens of MB each                                                                   | CDN-loaded; PGlite and CereusDB can be bundled-in via build switches   |
 
 **So that "only 30 MB installer" figure is achieved by "almost no heavy engine is bundled."** The philosophy worth borrowing: the default location for heavy engines should be "downloaded the first time the user clicks on it," not "included in the package just in case."
 
@@ -387,10 +389,26 @@ This section is pure web engineering, less GIS-specific, but has the lowest migr
 
 ```ts
 export const LAYER_TYPES = [
-  "geojson", "raster", "wms", "wmts", "xyz", "vector-tiles", "arcgis",
-  "pmtiles", "mbtiles", "zarr", "lidar", "gaussian-splat", "3d-tiles",
-  "cog", "flatgeobuf", "geoparquet", "duckdb-query", "deckgl-viz",
-  "video", "image",
+  "geojson",
+  "raster",
+  "wms",
+  "wmts",
+  "xyz",
+  "vector-tiles",
+  "arcgis",
+  "pmtiles",
+  "mbtiles",
+  "zarr",
+  "lidar",
+  "gaussian-splat",
+  "3d-tiles",
+  "cog",
+  "flatgeobuf",
+  "geoparquet",
+  "duckdb-query",
+  "deckgl-viz",
+  "video",
+  "image",
 ] as const;
 export type LayerType = (typeof LAYER_TYPES)[number];
 ```
@@ -404,7 +422,9 @@ The comments explain the rationale: **"as a runtime list so untrusted input (an 
 ```ts
 export interface MapViewState {
   center: [number, number];
-  zoom: number; bearing: number; pitch: number;
+  zoom: number;
+  bearing: number;
+  pitch: number;
   bbox?: [number, number, number, number];
 }
 ```
@@ -429,13 +449,13 @@ This section stands alone because it's especially relevant for intranet, offline
 
 The web build is an installable PWA using `vite-plugin-pwa` + Workbox. Caching is **deliberately split into three tiers**:
 
-| Tier | Strategy | Content | Why This Split |
-|---|---|---|---|
-| **Precache** | Precache | HTML + JS/CSS chunks essential for map startup | **After first visit, the shell works without network**; heavy chunks are **excluded** to avoid massive first-screen downloads |
-| **Same-origin runtime cache** | CacheFirst | Content-hashed artifacts under `/assets/`: MapLibre, **DuckDB-WASM and its spatial extension**, plugin chunks | Content-hashed filenames make CacheFirst safe — redeployment generates new URLs, old entries won't be served as new |
-| **CDN engine cache** | CacheFirst (separate rule `geolibre-cdn-engines`) | Pyodide, PGlite/PostGIS, CereusDB, gdal3.js on jsDelivr | URLs embed exact version numbers, similarly preventing stale serving; jsDelivr's CORS headers make these properly verifiable and evictable 200 responses, not opaque |
+| Tier                          | Strategy                                          | Content                                                                                                       | Why This Split                                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Precache**                  | Precache                                          | HTML + JS/CSS chunks essential for map startup                                                                | **After first visit, the shell works without network**; heavy chunks are **excluded** to avoid massive first-screen downloads                                        |
+| **Same-origin runtime cache** | CacheFirst                                        | Content-hashed artifacts under `/assets/`: MapLibre, **DuckDB-WASM and its spatial extension**, plugin chunks | Content-hashed filenames make CacheFirst safe — redeployment generates new URLs, old entries won't be served as new                                                  |
+| **CDN engine cache**          | CacheFirst (separate rule `geolibre-cdn-engines`) | Pyodide, PGlite/PostGIS, CereusDB, gdal3.js on jsDelivr                                                       | URLs embed exact version numbers, similarly preventing stale serving; jsDelivr's CORS headers make these properly verifiable and evictable 200 responses, not opaque |
 
-**So the accurate description for these CDN engines is: in the web PWA, the network is required for the first *successful* fetch — CacheFirst only serves from cache once a matching response has actually been stored — and they are available offline from then on.** Desktop builds install no Service Worker at all, so this does not apply to them; see the bullets below.
+**So the accurate description for these CDN engines is: in the web PWA, the network is required for the first _successful_ fetch — CacheFirst only serves from cache once a matching response has actually been stored — and they are available offline from then on.** Desktop builds install no Service Worker at all, so this does not apply to them; see the bullets below.
 
 Why not just bundle everything? The following details make it clear.
 
@@ -449,7 +469,7 @@ Several particularly pragmatic details:
 - New deployments use `registerType: "autoUpdate"` + `skipWaiting`, but **deliberately suppress Workbox's default "force reload on activation"** — because under relative-base sub-paths like `/demo/`, it incorrectly triggers and wipes out the user's in-progress map state. Page recovery is handled by `installStaleChunkReload`, which **only reloads when an orphaned lazy chunk 404s**, with cooldown protection
 
 !!! tip "The Most Valuable Detail"
-    This last detail is the most valuable in the entire section — the kind of code "only written after experiencing real production issues." Auto-update causing users to lose unsaved work is the most common and most damaging PWA mistake.
+This last detail is the most valuable in the entire section — the kind of code "only written after experiencing real production issues." Auto-update causing users to lose unsaved work is the most common and most damaging PWA mistake.
 
 ### Key Takeaways
 
@@ -476,11 +496,11 @@ Cloud-native pipeline: **Data → convert to COG / GeoParquet / PMTiles / FlatGe
 
 This is the most fundamental shift. Traditional formats (GeoJSON, Shapefile, striped GeoTIFF) **offer no useful partial-range access — even when an index exists it sits in a sidecar file, so the client still has to fetch all of the data**. Cloud-native formats keep that index inside the data file itself, enabling pruning across three dimensions:
 
-| Pruning Dimension | Mechanism | Effect |
-|---|---|---|
-| **Spatial** | FlatGeobuf's R-tree index, PMTiles tile layout | **Only fetch features/tiles within the viewport** |
-| **Resolution** | COG pyramids (overviews), PMTiles zoom levels | View the entire country at the coarsest level; don't decode 100 million pixels |
-| **Attribute columns** | GeoParquet's **columnar storage** | If you need only 3 columns, read only those 3 columns' bytes; other columns are never touched |
+| Pruning Dimension     | Mechanism                                      | Effect                                                                                        |
+| --------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Spatial**           | FlatGeobuf's R-tree index, PMTiles tile layout | **Only fetch features/tiles within the viewport**                                             |
+| **Resolution**        | COG pyramids (overviews), PMTiles zoom levels  | View the entire country at the coarsest level; don't decode 100 million pixels                |
+| **Attribute columns** | GeoParquet's **columnar storage**              | If you need only 3 columns, read only those 3 columns' bytes; other columns are never touched |
 
 **The third dimension is GeoParquet's most underappreciated strength. Columnar storage + row-group statistics (min/max) means `WHERE` predicates can be pushed down** — DuckDB can determine from statistics alone that an entire row group doesn't satisfy the condition and skip it, without ever downloading those bytes.
 
@@ -517,14 +537,14 @@ This is especially critical for government dashboards and public service portals
 
 ### 6.2 How GeoLibre Reads These Formats
 
-| Format | Read Path | Key Point |
-|---|---|---|
-| **PMTiles** | MapLibre custom protocol (`pmtiles` package) | One file replaces an entire tile service; frontend only registers one extra protocol |
-| **COG** | **`cog-tiler-wasm` (default)** / deck.gl GPU / TiTiler | Three switchable engines; the first two are fully client-side |
-| **GeoParquet** | DuckDB-WASM `read_parquet` | Optional "in-place streaming query" — no need to copy the entire dataset into memory |
-| **FlatGeobuf** | DuckDB Spatial `ST_Read` | Built-in spatial index, naturally suited for range reads |
-| **MosaicJSON / STAC catalog** | Raster control reads catalog, **stitches scenes at read time** | The catalog itself contains no data — only a list of asset URLs |
-| **Cloud-optimized NetCDF/HDF5** | kerchunk reference manifest → Zarr rendering pipeline | See 6.5 |
+| Format                          | Read Path                                                      | Key Point                                                                            |
+| ------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **PMTiles**                     | MapLibre custom protocol (`pmtiles` package)                   | One file replaces an entire tile service; frontend only registers one extra protocol |
+| **COG**                         | **`cog-tiler-wasm` (default)** / deck.gl GPU / TiTiler         | Three switchable engines; the first two are fully client-side                        |
+| **GeoParquet**                  | DuckDB-WASM `read_parquet`                                     | Optional "in-place streaming query" — no need to copy the entire dataset into memory |
+| **FlatGeobuf**                  | DuckDB Spatial `ST_Read`                                       | Built-in spatial index, naturally suited for range reads                             |
+| **MosaicJSON / STAC catalog**   | Raster control reads catalog, **stitches scenes at read time** | The catalog itself contains no data — only a list of asset URLs                      |
+| **Cloud-optimized NetCDF/HDF5** | kerchunk reference manifest → Zarr rendering pipeline          | See 6.5                                                                              |
 
 ### 6.3 The Real Barrier Is Not Format Conversion — It's CORS
 
@@ -537,7 +557,7 @@ The same Worker contains an even more instructive comment about why planetary ba
 > MapLibre uses `fetch()` to retrieve raster tiles, which goes through CORS checks — so the map renders as a black screen. Meanwhile, openplanetarymap.org itself works fine because Leaflet loads tiles via `<img>` tags, **and `<img>` does not perform CORS checks**.
 
 !!! danger "Critical Trap"
-    The same tile URL displays in Leaflet but not in MapLibre. The root cause may be neither the code nor the tile itself — it's that the two libraries fetch images differently.
+The same tile URL displays in Leaflet but not in MapLibre. The root cause may be neither the code nor the tile itself — it's that the two libraries fetch images differently.
 
 Three practices worth borrowing from this pipeline: **fetch data server-side and add CORS headers** (avoid having the browser hit the wall directly), **cache results at the edge** (repeat requests don't go back to origin), **strict allowlist, never an open proxy** (the source code's words: "keyed to a tight allowlist so it is never an open proxy"). The third is a security baseline: a public proxy that can forward arbitrary URLs will eventually be abused, and the consequences are on you.
 

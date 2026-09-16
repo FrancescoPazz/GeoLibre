@@ -8,7 +8,7 @@ and kept in sync by hand:
 - **Python / GeoPandas + Shapely** —
   `backend/geolibre_server/geolibre_server/vector_ops.py` (the FastAPI sidecar
   engine). `apps/geolibre-desktop/src/lib/pyodide/vector_ops.generated.py` is an
-  auto-generated verbatim copy of this file, so it is the *same* engine — there
+  auto-generated verbatim copy of this file, so it is the _same_ engine — there
   are two implementations to keep aligned, not three.
 
 Both expose the same 21 tools and the **same canonical parameter names**, so a
@@ -69,7 +69,7 @@ glob the directory, so no test code changes are needed.
 The two engines do **not** compute identical floating-point geometry for every
 tool — Turf buffers in a planar approximation while GeoPandas reprojects to UTM,
 Turf and Shapely use different simplification and Voronoi algorithms, etc. So a
-fixture asserts at the strongest tier the two engines *actually* share:
+fixture asserts at the strongest tier the two engines _actually_ share:
 
 - **Exact tier** — tools that are pure attribute/selection logic or carry input
   geometry through untouched (`select-by-value`, `select-by-location`,
@@ -78,8 +78,8 @@ fixture asserts at the strongest tier the two engines *actually* share:
   the "kept in sync with the backend" attribute logic lives, so it is asserted
   the hardest.
 - **Structural tier** — geometry-approximation tools, which assert
-  `featureCount` and `geometryTypes`, plus a `bbox` *only where the two engines
-  share the output extent*:
+  `featureCount` and `geometryTypes`, plus a `bbox` _only where the two engines
+  share the output extent_:
   - **count + type + bbox** — the deterministic set ops and hull whose extent
     matches across engines: `dissolve`, `clip`, `intersection`, `difference`,
     `union`, `convex-hull`, `explode` (carries input geometry through), and the
@@ -109,7 +109,7 @@ no fixture asserts them because the engines genuinely do not agree:
   `Skipped N feature(s) the buffer could not process`, and the rest of the batch
   still produces a layer. The GeoPandas engine buffers the whole `GeoSeries`
   vectorized, so a GEOS/Shapely throw (uncommon — degenerate input normally
-  comes back as an empty geometry, which *is* handled identically as `Dropped`)
+  comes back as an empty geometry, which _is_ handled identically as `Dropped`)
   fails the whole request with no partial result and no `Skipped` message.
   Per-feature Python buffering would give up the vectorized path's speed for a
   case Shapely rarely produces, so the messages agree on `Dropped` and diverge

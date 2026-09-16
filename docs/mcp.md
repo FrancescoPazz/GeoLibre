@@ -86,50 +86,50 @@ Give it a directory meant for maps, not your home directory.
 
 ### Project lifecycle
 
-| Tool | What it does |
-| --- | --- |
-| `create_project` | Write a new, empty project with a name, center, zoom, and basemap. |
+| Tool               | What it does                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `create_project`   | Write a new, empty project with a name, center, zoom, and basemap.                                                       |
 | `describe_project` | Summarize the camera, basemap, layers, and map controls. Inlined feature data is reported as a count, never echoed back. |
-| `list_catalog` | List the named basemaps, color ramps, and legend presets, plus the active workspace roots. |
+| `list_catalog`     | List the named basemaps, color ramps, and legend presets, plus the active workspace roots.                               |
 
 ### Adding layers
 
-| Tool | For |
-| --- | --- |
-| `add_geojson_layer` | Vector data inlined into the project, from a URL, a workspace file, or literal GeoJSON. Self-contained, and the only kind `classify_layer` can style. |
-| `add_vector_layer` | A large remote FlatGeobuf / GeoParquet / GeoJSON read in place. |
-| `add_raster_layer` | A Cloud Optimized GeoTIFF, with band, colormap, and rescale options. |
-| `add_tile_layer` | A raster XYZ tile template. |
-| `add_tiles_layer` | PMTiles archives and vector tile services. |
-| `add_ogc_layer` | WMS and WMTS endpoints. |
-| `add_3d_tiles_layer` | OGC 3D Tiles tilesets, by URL or Cesium Ion asset id. |
-| `add_cesium_ion_layer` | Cesium Ion assets (tileset or imagery) by id; rendered by the 3D globe only. |
-| `add_czml_layer` | A CZML (Cesium Language) dynamic 3D scene, by URL or inline packets; rendered by the 3D globe only. |
-| `add_cesium_kml_layer` | Native globe KML/KMZ from a URL, inline XML, or KMZ data URL, preserving document styles and overlays. |
+| Tool                   | For                                                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `add_geojson_layer`    | Vector data inlined into the project, from a URL, a workspace file, or literal GeoJSON. Self-contained, and the only kind `classify_layer` can style. |
+| `add_vector_layer`     | A large remote FlatGeobuf / GeoParquet / GeoJSON read in place.                                                                                       |
+| `add_raster_layer`     | A Cloud Optimized GeoTIFF, with band, colormap, and rescale options.                                                                                  |
+| `add_tile_layer`       | A raster XYZ tile template.                                                                                                                           |
+| `add_tiles_layer`      | PMTiles archives and vector tile services.                                                                                                            |
+| `add_ogc_layer`        | WMS and WMTS endpoints.                                                                                                                               |
+| `add_3d_tiles_layer`   | OGC 3D Tiles tilesets, by URL or Cesium Ion asset id.                                                                                                 |
+| `add_cesium_ion_layer` | Cesium Ion assets (tileset or imagery) by id; rendered by the 3D globe only.                                                                          |
+| `add_czml_layer`       | A CZML (Cesium Language) dynamic 3D scene, by URL or inline packets; rendered by the 3D globe only.                                                   |
+| `add_cesium_kml_layer` | Native globe KML/KMZ from a URL, inline XML, or KMZ data URL, preserving document styles and overlays.                                                |
 
 ### Editing
 
-| Tool | What it does |
-| --- | --- |
-| `update_layer` | Rename, show/hide, set opacity, or reorder. |
-| `remove_layer` | Drop a layer. |
-| `style_layer` | Merge style keys (`fillColor`, `strokeWidth`, `circleRadius`, …). |
-| `set_layer_popup` | Choose the fields a click popup shows, their labels and formats, and an optional hover tooltip. |
-| `classify_layer` | Build a graduated choropleth from a numeric column. |
-| `list_layer_properties` | List a layer's feature properties with sample values. |
+| Tool                    | What it does                                                                                    |
+| ----------------------- | ----------------------------------------------------------------------------------------------- |
+| `update_layer`          | Rename, show/hide, set opacity, or reorder.                                                     |
+| `remove_layer`          | Drop a layer.                                                                                   |
+| `style_layer`           | Merge style keys (`fillColor`, `strokeWidth`, `circleRadius`, …).                               |
+| `set_layer_popup`       | Choose the fields a click popup shows, their labels and formats, and an optional hover tooltip. |
+| `classify_layer`        | Build a graduated choropleth from a numeric column.                                             |
+| `list_layer_properties` | List a layer's feature properties with sample values.                                           |
 
 Layers are addressed by id **or** by display name, so a client can work from
 what `describe_project` showed it without tracking UUIDs.
 
 ### Framing and decoration
 
-| Tool | What it does |
-| --- | --- |
-| `set_view` | Set center, zoom, bearing, and pitch, or pass a `bbox` to frame an area. |
-| `set_basemap` | Switch the background style. |
-| `add_legend` | Add a legend from a preset, a `{label: color}` map, or paired lists. |
-| `add_colorbar` | Add a colorbar for continuous data. |
-| `add_swipe` | Configure the split-map comparison slider. |
+| Tool           | What it does                                                             |
+| -------------- | ------------------------------------------------------------------------ |
+| `set_view`     | Set center, zoom, bearing, and pitch, or pass a `bbox` to frame an area. |
+| `set_basemap`  | Switch the background style.                                             |
+| `add_legend`   | Add a legend from a preset, a `{label: color}` map, or paired lists.     |
+| `add_colorbar` | Add a colorbar for continuous data.                                      |
+| `add_swipe`    | Configure the split-map comparison slider.                               |
 
 ### Export
 

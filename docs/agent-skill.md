@@ -10,17 +10,17 @@ It lives in the repository at
 ## What it is for
 
 GeoLibre already has an in-app [AI Assistant](user-guide/ai-assistant.md), which
-chats with your data *inside* the running app and applies changes through the
+chats with your data _inside_ the running app and applies changes through the
 app's own store. The skill covers the other direction: an agent working
 **outside** GeoLibre — in your terminal, your editor, or a notebook — that
 should produce a GeoLibre map as its output.
 
-| | AI Assistant | Agent skill |
-| --- | --- | --- |
-| Runs | Inside the app | In your agent, outside the app |
-| Acts on | The live map you are looking at | A `.geolibre.json` file on disk |
-| Needs | A configured AI provider | An agent that loads skills |
-| Output | Edits you can undo with Ctrl/Cmd + Z | A project file and/or a standalone HTML page |
+|         | AI Assistant                         | Agent skill                                  |
+| ------- | ------------------------------------ | -------------------------------------------- |
+| Runs    | Inside the app                       | In your agent, outside the app               |
+| Acts on | The live map you are looking at      | A `.geolibre.json` file on disk              |
+| Needs   | A configured AI provider             | An agent that loads skills                   |
+| Output  | Edits you can undo with Ctrl/Cmd + Z | A project file and/or a standalone HTML page |
 
 They compose: an agent authors the project, you open it in GeoLibre and keep
 working with the Assistant.

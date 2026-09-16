@@ -152,8 +152,8 @@ const fakeComponentsModule = {
 } as unknown as NonNullable<ComponentsModules[0]>;
 
 function installStubModule(): void {
-  __setComponentsModuleLoaderForTests(
-    (): Promise<ComponentsModules> => Promise.resolve([fakeComponentsModule, null]),
+  __setComponentsModuleLoaderForTests((): Promise<ComponentsModules> =>
+    Promise.resolve([fakeComponentsModule, null]),
   );
 }
 

@@ -150,17 +150,17 @@ optional Python sidecar, Jupyter server, and martin tile server are all runtime
 downloads of executable code, so the Store build compiles them out rather than
 shipping them broken. Here is how the two macOS builds compare:
 
-| Feature | Homebrew / DMG | Mac App Store |
-| --- | --- | --- |
-| Whitebox toolbox (1,000+ WebAssembly tools) | Yes | Yes |
-| Processing → GeoLibre Toolbox → Vector, browser-engine Conversion, client raster tools | Yes | Yes |
-| SQL Workspace (DuckDB-WASM, PGlite/PostGIS, in-browser Apache Sedona on CereusDB) | Yes | Yes |
-| Python sidecar engines (GeoPandas vector, rasterio raster, GDAL conversion, SamGeo segmentation, the SedonaDB sidecar behind the Apache Sedona engine) | Yes | No |
-| Add Data → PostgreSQL / PostGIS (martin tile server) | Yes | No |
-| Notebook panel on a local JupyterLab server | Yes | JupyterLite only |
-| Installing external plugins from a zip or the registry | Yes | Built-in and bundled plugins only |
-| Earth Engine sign-in | Yes | No |
-| In-app update checks | Yes | Updates come from the Store |
+| Feature                                                                                                                                                | Homebrew / DMG | Mac App Store                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | --------------------------------- |
+| Whitebox toolbox (1,000+ WebAssembly tools)                                                                                                            | Yes            | Yes                               |
+| Processing → GeoLibre Toolbox → Vector, browser-engine Conversion, client raster tools                                                                 | Yes            | Yes                               |
+| SQL Workspace (DuckDB-WASM, PGlite/PostGIS, in-browser Apache Sedona on CereusDB)                                                                      | Yes            | Yes                               |
+| Python sidecar engines (GeoPandas vector, rasterio raster, GDAL conversion, SamGeo segmentation, the SedonaDB sidecar behind the Apache Sedona engine) | Yes            | No                                |
+| Add Data → PostgreSQL / PostGIS (martin tile server)                                                                                                   | Yes            | No                                |
+| Notebook panel on a local JupyterLab server                                                                                                            | Yes            | JupyterLite only                  |
+| Installing external plugins from a zip or the registry                                                                                                 | Yes            | Built-in and bundled plugins only |
+| Earth Engine sign-in                                                                                                                                   | Yes            | No                                |
+| In-app update checks                                                                                                                                   | Yes            | Updates come from the Store       |
 
 Everything client-side is unchanged: MapLibre and deck.gl rendering, Add Data for
 local and remote files, DuckDB-WASM vector reading, the Whitebox WASM toolbox,

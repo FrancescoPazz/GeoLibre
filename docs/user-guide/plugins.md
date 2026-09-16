@@ -10,33 +10,33 @@ The **Plugins** menu lists every available plugin under **Activate plugin**. Cli
 
 The built-in plugins are:
 
-| Plugin | What it adds |
-| --- | --- |
-| **Layer Control** | The on-map layer list. On by default. |
-| **GeoEditor** | Drawing, vertex editing, and deletion tools for GeoJSON layers. |
-| **Annotations** | The map-annotation toolbar and Elements panel. See [Annotations](map-controls.md#annotations-and-the-elements-panel). |
-| **Basemaps** | A basemap gallery for switching the background map, from the same catalog as the [Change basemap dialog](adding-data.md#basemaps). |
-| **Web Services** | A submenu of catalog and service browsers: FEMA NFHL, NASA Earthdata, US EPA EnviroAtlas, USGS National Map, USGS NLDI, Vantor Open Data, Planet Open Data, Earthdata GIS, OpenAerialMap, ArcGIS Hub, Socrata, CKAN, STAC Catalogs, Source Cooperative, Natural Earth, Hugging Face, and GeoLens. See [Web Services](web-services.md). |
-| **Historical Imagery** | Browse historical aerial and satellite imagery for a location. |
-| **Time Slider** | Filter a temporal layer by a date or number field. |
-| **Timelapse** | Animate annual cloudless basemaps (EOX Sentinel-2, and NASA GIBS Landsat/WELD and MODIS land cover) with a provider picker and legend. |
-| **Overture Maps** | Browse and add Overture Maps themes. |
-| **GeoAgent** | An in-map AI agent panel. |
-| **USGS LiDAR** | Clip a USGS point cloud to an area of interest and download the result as COPC. |
-| **Street View** | Google Street View panoramas at a clicked point. |
-| **Mapillary** | Mapillary street-level imagery. |
-| **Elevation Profile** | A terrain profile along a drawn line, or along the line features currently selected on a layer. |
-| **Layer Swipe** | A swipe bar comparing two layers. |
-| **DGGS** | A submenu of discrete global grid overlays — H3, S2, A5, DGGRID, DGGAL, OLC, Geohash, and Tilecode — each rendering its grid over the current view, identifying a cell, and exporting the grid or selection. |
-| **Flight Simulator** | Fly over terrain and 3D layers with keyboard controls. |
-| **SamGeo** | Segment imagery into vector features. See [AI Segmentation](segmentation.md). |
+| Plugin                 | What it adds                                                                                                                                                                                                                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Layer Control**      | The on-map layer list. On by default.                                                                                                                                                                                                                                                                                                  |
+| **GeoEditor**          | Drawing, vertex editing, and deletion tools for GeoJSON layers.                                                                                                                                                                                                                                                                        |
+| **Annotations**        | The map-annotation toolbar and Elements panel. See [Annotations](map-controls.md#annotations-and-the-elements-panel).                                                                                                                                                                                                                  |
+| **Basemaps**           | A basemap gallery for switching the background map, from the same catalog as the [Change basemap dialog](adding-data.md#basemaps).                                                                                                                                                                                                     |
+| **Web Services**       | A submenu of catalog and service browsers: FEMA NFHL, NASA Earthdata, US EPA EnviroAtlas, USGS National Map, USGS NLDI, Vantor Open Data, Planet Open Data, Earthdata GIS, OpenAerialMap, ArcGIS Hub, Socrata, CKAN, STAC Catalogs, Source Cooperative, Natural Earth, Hugging Face, and GeoLens. See [Web Services](web-services.md). |
+| **Historical Imagery** | Browse historical aerial and satellite imagery for a location.                                                                                                                                                                                                                                                                         |
+| **Time Slider**        | Filter a temporal layer by a date or number field.                                                                                                                                                                                                                                                                                     |
+| **Timelapse**          | Animate annual cloudless basemaps (EOX Sentinel-2, and NASA GIBS Landsat/WELD and MODIS land cover) with a provider picker and legend.                                                                                                                                                                                                 |
+| **Overture Maps**      | Browse and add Overture Maps themes.                                                                                                                                                                                                                                                                                                   |
+| **GeoAgent**           | An in-map AI agent panel.                                                                                                                                                                                                                                                                                                              |
+| **USGS LiDAR**         | Clip a USGS point cloud to an area of interest and download the result as COPC.                                                                                                                                                                                                                                                        |
+| **Street View**        | Google Street View panoramas at a clicked point.                                                                                                                                                                                                                                                                                       |
+| **Mapillary**          | Mapillary street-level imagery.                                                                                                                                                                                                                                                                                                        |
+| **Elevation Profile**  | A terrain profile along a drawn line, or along the line features currently selected on a layer.                                                                                                                                                                                                                                        |
+| **Layer Swipe**        | A swipe bar comparing two layers.                                                                                                                                                                                                                                                                                                      |
+| **DGGS**               | A submenu of discrete global grid overlays — H3, S2, A5, DGGRID, DGGAL, OLC, Geohash, and Tilecode — each rendering its grid over the current view, identifying a cell, and exporting the grid or selection.                                                                                                                           |
+| **Flight Simulator**   | Fly over terrain and 3D layers with keyboard controls.                                                                                                                                                                                                                                                                                 |
+| **SamGeo**             | Segment imagery into vector features. See [AI Segmentation](segmentation.md).                                                                                                                                                                                                                                                          |
 
 Most entries open a submenu that **activates** the plugin and **positions** its on-map control in any corner: top left, top right, bottom left, or bottom right. A few behave differently: **Flight Simulator** and **SamGeo** toggle directly with no submenu, and **Web Services** and **DGGS** open a list of their sub-plugins instead.
 
 ![A plugin submenu, with Activate above the four map-corner positions](https://assets.geolibre.app/images/geolibre-plugin-position-menu.webp)
 
 !!! note "Components live on the Controls menu"
-    Measure, Bookmark, Legend, Colorbar, Minimap, View State, Search, and HTML are on-map component panels rather than Plugins-menu entries; toggle them from the [Controls menu](map-controls.md). The Print composer is under [Project → Print Layout](projects.md#print).
+Measure, Bookmark, Legend, Colorbar, Minimap, View State, Search, and HTML are on-map component panels rather than Plugins-menu entries; toggle them from the [Controls menu](map-controls.md). The Print composer is under [Project → Print Layout](projects.md#print).
 
 ## Manage Plugins
 
@@ -52,7 +52,7 @@ Open **Settings → Manage Plugins** to browse the marketplace. The dialog is mo
 Compatibility is checked against each entry's `minGeoLibreVersion`, so incompatible plugins are flagged rather than installed.
 
 !!! note "Trust model"
-    The registry is a curated allowlist, manifests require HTTPS (or HTTP on localhost, 127.0.0.1, or `[::1]` for development), and every install requires explicit consent, because plugins run as trusted code. The curated registry and the install confirmation are the primary safeguards.
+The registry is a curated allowlist, manifests require HTTPS (or HTTP on localhost, 127.0.0.1, or `[::1]` for development), and every install requires explicit consent, because plugins run as trusted code. The curated registry and the install confirmation are the primary safeguards.
 
 ## Where plugins come from
 

@@ -18,15 +18,15 @@ app, at <https://web.geolibre.app>, or in a notebook cell.
 
 ## Pick the entry point
 
-| The situation | Use | Why |
-| --- | --- | --- |
-| A chat or agent session, no browser, no notebook | **`geolibre-mcp`** (MCP server) | Purpose-built for this. Writes real project files and standalone HTML. Start here. |
-| MCP not available / a script / bulk generation | **`geolibre` Python package** | `geolibre.Map` builds the same project headlessly; `m.save_project()` / `m.to_html()`. |
-| A Jupyter or Colab notebook | **`geolibre` Python package** | Same API, but the full app renders in the cell and state syncs both ways. |
-| Neither installed, and you only need a file | **Hand-write the JSON** | The schema is small and forgiving. See `references/project-json.md`. |
-| A GeoLibre already running in a web page you control | **`@geolibre/embed` + URL parameters** | Live control of a running instance. See `references/catalog.md`. |
-| Someone is *in* the app and wants a chat panel | The app's built-in **AI Assistant** | Not your job — it acts through the app's own store so its edits are undoable. |
-| Changing GeoLibre itself | The repo, not this skill | See `CLAUDE.md` in <https://github.com/opengeos/GeoLibre>. |
+| The situation                                        | Use                                    | Why                                                                                    |
+| ---------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------- |
+| A chat or agent session, no browser, no notebook     | **`geolibre-mcp`** (MCP server)        | Purpose-built for this. Writes real project files and standalone HTML. Start here.     |
+| MCP not available / a script / bulk generation       | **`geolibre` Python package**          | `geolibre.Map` builds the same project headlessly; `m.save_project()` / `m.to_html()`. |
+| A Jupyter or Colab notebook                          | **`geolibre` Python package**          | Same API, but the full app renders in the cell and state syncs both ways.              |
+| Neither installed, and you only need a file          | **Hand-write the JSON**                | The schema is small and forgiving. See `references/project-json.md`.                   |
+| A GeoLibre already running in a web page you control | **`@geolibre/embed` + URL parameters** | Live control of a running instance. See `references/catalog.md`.                       |
+| Someone is _in_ the app and wants a chat panel       | The app's built-in **AI Assistant**    | Not your job — it acts through the app's own store so its edits are undoable.          |
+| Changing GeoLibre itself                             | The repo, not this skill               | See `CLAUDE.md` in <https://github.com/opengeos/GeoLibre>.                             |
 
 ## Setup (MCP)
 
@@ -52,7 +52,7 @@ Six steps. Most maps use four of them.
    `.geolibre.json`, a `name`, and if you know them a `center` (`[lng, lat]`)
    and `zoom` (0 = world, ~4 = country, ~10 = metro, ~14 = city).
 2. **Add layers** — one `add_*_layer` call per dataset, bottom of the stack
-   first. Pick the tool by what the data *is*, not by what you want to see:
+   first. Pick the tool by what the data _is_, not by what you want to see:
    `references/mcp-tools.md` has the table.
 3. **Frame it** — `set_view` with a `center`+`zoom`, or a `bbox` to fit an area.
 4. **Style it** — `style_layer` to merge style keys, or `classify_layer` to
@@ -61,8 +61,8 @@ Six steps. Most maps use four of them.
 6. **`export_html`** — a single self-contained page the recipient opens with no
    install.
 
-**Finish with `export_html` whenever the user wants something to *look at* or
-*send on*.** A bare `.geolibre.json` is a file they need GeoLibre to open; the
+**Finish with `export_html` whenever the user wants something to _look at_ or
+_send on_.** A bare `.geolibre.json` is a file they need GeoLibre to open; the
 HTML is a map they can double-click. Only stop at the project file when they
 explicitly asked for a project, or will keep editing it.
 
@@ -102,7 +102,7 @@ export_html(path=..., out_path="counties.html", title="Population by county")
   a layer that points at a URL is small but depends on that URL staying up.
 - **A local path is only portable when the data is inlined.**
   `add_geojson_layer` reads a workspace file and copies its features into the
-  project, so that data does travel. A layer that keeps a *reference* to a local
+  project, so that data does travel. A layer that keeps a _reference_ to a local
   file instead — a desktop `sourcePath` layer, a raster served for one notebook
   session — resolves on the authoring machine only, and is invisible both to
   anyone you send the export to and to the hosted web app. Use hosted URLs for
@@ -128,7 +128,7 @@ export_html(path=..., out_path="counties.html", title="Population by county")
 - **`describe_project`** after the last edit — it reports the camera, basemap,
   every layer, and the controls. Inlined features come back as a count, never
   echoed, so it is safe on a large project.
-- **Layers are addressed by id *or* display name**, so you can work from what
+- **Layers are addressed by id _or_ display name**, so you can work from what
   `describe_project` showed without tracking UUIDs. Duplicate names are
   ambiguous — rename before you restyle.
 - To eyeball it: open the exported HTML, or load a public project URL with

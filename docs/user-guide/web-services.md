@@ -15,25 +15,25 @@ They are grouped together because they behave the same way, not because they sha
 
 ## At a glance
 
-| Panel | Provider | What you get |
-| --- | --- | --- |
-| [FEMA NFHL](#fema-nfhl) | FEMA | National Flood Hazard Layer WMS layers |
-| [NASA Earthdata](#nasa-earthdata) | NASA GIBS | 1,100+ pre-rendered global imagery layers, by date |
-| [US EPA EnviroAtlas](#us-epa-enviroatlas) | EPA | Environmental and ecosystem map services |
-| [USGS National Map](#usgs-national-map) | USGS | Topo, imagery, hydrography, elevation, and index services |
-| [USGS NLDI](#usgs-nldi) | USGS | Flowline tracing, hydrolocation, basins, and network navigation |
-| [Vantor Open Data](#vantor-open-data) | Vantor | Disaster-event satellite imagery (COG) |
-| [Planet Open Data](#planet-open-data) | Planet Labs | Planet's disaster data releases, through the STAC browser |
-| [Earthdata GIS](#earthdata-gis) | NASA EOSDIS | ArcGIS image, map, and feature services, and published web maps |
-| [OpenAerialMap](#openaerialmap) | OpenAerialMap | Openly licensed drone and aerial imagery |
-| [ArcGIS Hub](#arcgis-hub) | Esri | Public datasets published to ArcGIS Hub |
-| [Socrata](#socrata) | Socrata | Government open-data portals |
-| [CKAN](#ckan) | HDX | Humanitarian Data Exchange resources |
-| [STAC Catalogs](#stac-catalogs) | any STAC | Any STAC API or static catalog, via STAC Index |
-| [Source Cooperative](#source-cooperative) | Source.coop | Cloud-native products (PMTiles, GeoParquet, COG) |
-| [Natural Earth](#natural-earth) | Natural Earth | The Natural Earth vector and raster themes |
-| [Hugging Face](#hugging-face) | Hugging Face | Geospatial files in dataset repos — and uploads |
-| [GeoLens](#geolens) | your server | A self-hosted spatial catalog |
+| Panel                                     | Provider      | What you get                                                    |
+| ----------------------------------------- | ------------- | --------------------------------------------------------------- |
+| [FEMA NFHL](#fema-nfhl)                   | FEMA          | National Flood Hazard Layer WMS layers                          |
+| [NASA Earthdata](#nasa-earthdata)         | NASA GIBS     | 1,100+ pre-rendered global imagery layers, by date              |
+| [US EPA EnviroAtlas](#us-epa-enviroatlas) | EPA           | Environmental and ecosystem map services                        |
+| [USGS National Map](#usgs-national-map)   | USGS          | Topo, imagery, hydrography, elevation, and index services       |
+| [USGS NLDI](#usgs-nldi)                   | USGS          | Flowline tracing, hydrolocation, basins, and network navigation |
+| [Vantor Open Data](#vantor-open-data)     | Vantor        | Disaster-event satellite imagery (COG)                          |
+| [Planet Open Data](#planet-open-data)     | Planet Labs   | Planet's disaster data releases, through the STAC browser       |
+| [Earthdata GIS](#earthdata-gis)           | NASA EOSDIS   | ArcGIS image, map, and feature services, and published web maps |
+| [OpenAerialMap](#openaerialmap)           | OpenAerialMap | Openly licensed drone and aerial imagery                        |
+| [ArcGIS Hub](#arcgis-hub)                 | Esri          | Public datasets published to ArcGIS Hub                         |
+| [Socrata](#socrata)                       | Socrata       | Government open-data portals                                    |
+| [CKAN](#ckan)                             | HDX           | Humanitarian Data Exchange resources                            |
+| [STAC Catalogs](#stac-catalogs)           | any STAC      | Any STAC API or static catalog, via STAC Index                  |
+| [Source Cooperative](#source-cooperative) | Source.coop   | Cloud-native products (PMTiles, GeoParquet, COG)                |
+| [Natural Earth](#natural-earth)           | Natural Earth | The Natural Earth vector and raster themes                      |
+| [Hugging Face](#hugging-face)             | Hugging Face  | Geospatial files in dataset repos — and uploads                 |
+| [GeoLens](#geolens)                       | your server   | A self-hosted spatial catalog                                   |
 
 ---
 
@@ -58,7 +58,7 @@ Browses [NASA GIBS](https://earthdata.nasa.gov/gibs) (Global Imagery Browse Serv
 - Visibility toggle, legend, opacity slider, and removal for each added layer, plus an **Insert before** selector.
 
 !!! tip "GIBS dates"
-    Some GIBS products publish with a lag, so today's date can return empty tiles. Step back a day if a layer looks blank.
+Some GIBS products publish with a lag, so today's date can return empty tiles. Step back a day if a layer looks blank.
 
 ![The NASA Earthdata panel with MODIS Aqua true-color imagery on the globe and a date picker under Added layers](https://assets.geolibre.app/images/web-services-nasa-earthdata.webp)
 
@@ -140,7 +140,7 @@ Searches public [Socrata](https://dev.socrata.com/) open-data catalogs — the p
 Searches the [Humanitarian Data Exchange](https://data.humdata.org/) CKAN catalog and adds its available GeoJSON resources.
 
 !!! note "Why some searches route through a proxy"
-    HDX does not send CORS headers to browsers, so the web build routes this search through GeoLibre's public tiles Worker. The desktop app queries the API directly over native HTTP. The same applies to the OpenAerialMap metadata API and the Source Cooperative catalog.
+HDX does not send CORS headers to browsers, so the web build routes this search through GeoLibre's public tiles Worker. The desktop app queries the API directly over native HTTP. The same applies to the OpenAerialMap metadata API and the Source Cooperative catalog.
 
 ## STAC Catalogs
 

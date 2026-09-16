@@ -14,13 +14,13 @@
 
 列出格式之前先说清楚「在哪儿跑」，因为后面很多格式有平台差异。
 
-| 形态 | 怎么跑 | 说明 |
-|---|---|---|
-| 浏览器 | 打开 `web.geolibre.app` | 什么都不用装，加载完可离线用 |
-| 桌面 | Tauri v2 原生应用 | Windows / macOS / Linux，微软商店、Homebrew、winget、AUR、Flatpak 都有 |
-| 安卓 | Google Play 原生 App | 每 ABI 约 40MB |
-| iOS | App Store 原生 App | iPhone 与 iPad，同一套代码经 Tauri v2 mobile 构建 |
-| Jupyter | `pip install geolibre` | 整个应用嵌进 notebook 单元格 |
+| 形态    | 怎么跑                  | 说明                                                                   |
+| ------- | ----------------------- | ---------------------------------------------------------------------- |
+| 浏览器  | 打开 `web.geolibre.app` | 什么都不用装，加载完可离线用                                           |
+| 桌面    | Tauri v2 原生应用       | Windows / macOS / Linux，微软商店、Homebrew、winget、AUR、Flatpak 都有 |
+| 安卓    | Google Play 原生 App    | 每 ABI 约 40MB                                                         |
+| iOS     | App Store 原生 App      | iPhone 与 iPad，同一套代码经 Tauri v2 mobile 构建                      |
+| Jupyter | `pip install geolibre`  | 整个应用嵌进 notebook 单元格                                           |
 
 > **核心应用没有账号、没有服务器、没有费用。** 本地文件就地读取、不出本机，应用加载完成后本地流程也能离线继续用。例外的是那些可选的远程能力：在线目录（STAC、Source Cooperative、Overture、Planetary Computer）、从 CDN 下载底图与瓦片，以及 Earth Engine、需要鉴权的 ArcGIS 服务等，都需要联网，部分还需要各自的凭据或 OAuth 登录。
 
@@ -39,30 +39,30 @@ csv, tsv, kml, kmz, gml, gpx, dxf, tab, shp, zip
 
 但真正有意思的是**每种格式背后是谁在读**——这决定了它的实际表现：
 
-| 格式 | 扩展名 | 读取引擎 | 值得注意的细节 |
-|---|---|---|---|
-| **GeoJSON** | `.geojson` `.json` | 原生 `JSON.parse` | 带老式顶层 `crs` 成员会自动走 DuckDB 重投影到 WGS84 |
-| **GeoParquet / Parquet** | `.parquet` `.geoparquet` | DuckDB `read_parquet` | 远程文件走 HTTP Range 流式读，不用整个下载 |
-| **FlatGeobuf** | `.fgb` `.flatgeobuf` | DuckDB `ST_Read` | — |
-| **GeoPackage** | `.gpkg` | **sql.js（SQLite WASM），不是 GDAL** | 多图层会弹选择器；会先修复 `gpkg_ogr_contents` |
-| **Shapefile（散文件）** | `.shp` | shpjs | 桌面端自动读同名 `.dbf/.shx/.prj/.cpg`；3D MultiPatch 改走 DuckDB |
-| **Shapefile（压缩包）** | `.zip` | fflate 解压 → shpjs | `.prj` 决定投影，`.cpg` 决定 DBF 编码（**中文属性乱码可以得到正确处理**）；自动跳过 macOS 的 `__MACOSX` |
-| **KML** | `.kml` | 自研解析器 | **保留内嵌符号化**和 Folder 结构；带 `<TimeSpan>`/`<TimeStamp>` 的地标能接时间轴动画；还能吐出 GroundOverlay 图像和 `<Model>` 三维模型 |
-| **KMZ** | `.kmz` | fflate 解压 | 自定义图标、格式化描述都保留 |
-| **GML** | `.gml` | DuckDB `ST_Read` | — |
-| **GPX** | `.gpx` | 纯 JS | **自动拆成三个图层**：航点 / 轨迹 / 路线 |
-| **CSV / TSV** | `.csv` `.tsv` `.txt` `.dat` | 自研 + DuckDB 兜底 | 自动识别分隔符和经纬度列；WKT 几何列走 DuckDB；对话框可指定源坐标系 |
-| **CAD（DXF/DWG）** | `.dxf` `.dwg` | DuckDB `ST_Read` | 会读出图层清单让你挑；**CAD 不带坐标系，需要手动选 EPSG** |
-| **MapInfo TAB** | `.tab` | `ST_Read` | — |
-| **Esri 文件地理数据库** | `.gdb` **文件夹** | Python sidecar | 桌面端专属，且要 sidecar；Mac App Store 版本里是隐藏的 |
-| **OSM PBF** | `.osm.pbf` `.pbf` | osmix，跑在 Web Worker | 自动拆成点/线/面三层；超 50MB 会提示确认，5 分钟超时保护 |
-| **GeoRSS** | `.xml` `.rss` `.atom` | 纯 JS | RSS 2.0 / Atom / RDF 都吃，GeoRSS Simple + GML 几何 |
-| **地理标记照片** | `.jpg` `.jpeg` `.png` `.tif` `.tiff` `.webp` `.heic` `.heif` | exifr | **读 EXIF GPS 直接生成点图层**，无人机照片很实用 |
+| 格式                     | 扩展名                                                       | 读取引擎                             | 值得注意的细节                                                                                                                         |
+| ------------------------ | ------------------------------------------------------------ | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **GeoJSON**              | `.geojson` `.json`                                           | 原生 `JSON.parse`                    | 带老式顶层 `crs` 成员会自动走 DuckDB 重投影到 WGS84                                                                                    |
+| **GeoParquet / Parquet** | `.parquet` `.geoparquet`                                     | DuckDB `read_parquet`                | 远程文件走 HTTP Range 流式读，不用整个下载                                                                                             |
+| **FlatGeobuf**           | `.fgb` `.flatgeobuf`                                         | DuckDB `ST_Read`                     | —                                                                                                                                      |
+| **GeoPackage**           | `.gpkg`                                                      | **sql.js（SQLite WASM），不是 GDAL** | 多图层会弹选择器；会先修复 `gpkg_ogr_contents`                                                                                         |
+| **Shapefile（散文件）**  | `.shp`                                                       | shpjs                                | 桌面端自动读同名 `.dbf/.shx/.prj/.cpg`；3D MultiPatch 改走 DuckDB                                                                      |
+| **Shapefile（压缩包）**  | `.zip`                                                       | fflate 解压 → shpjs                  | `.prj` 决定投影，`.cpg` 决定 DBF 编码（**中文属性乱码可以得到正确处理**）；自动跳过 macOS 的 `__MACOSX`                                |
+| **KML**                  | `.kml`                                                       | 自研解析器                           | **保留内嵌符号化**和 Folder 结构；带 `<TimeSpan>`/`<TimeStamp>` 的地标能接时间轴动画；还能吐出 GroundOverlay 图像和 `<Model>` 三维模型 |
+| **KMZ**                  | `.kmz`                                                       | fflate 解压                          | 自定义图标、格式化描述都保留                                                                                                           |
+| **GML**                  | `.gml`                                                       | DuckDB `ST_Read`                     | —                                                                                                                                      |
+| **GPX**                  | `.gpx`                                                       | 纯 JS                                | **自动拆成三个图层**：航点 / 轨迹 / 路线                                                                                               |
+| **CSV / TSV**            | `.csv` `.tsv` `.txt` `.dat`                                  | 自研 + DuckDB 兜底                   | 自动识别分隔符和经纬度列；WKT 几何列走 DuckDB；对话框可指定源坐标系                                                                    |
+| **CAD（DXF/DWG）**       | `.dxf` `.dwg`                                                | DuckDB `ST_Read`                     | 会读出图层清单让你挑；**CAD 不带坐标系，需要手动选 EPSG**                                                                              |
+| **MapInfo TAB**          | `.tab`                                                       | `ST_Read`                            | —                                                                                                                                      |
+| **Esri 文件地理数据库**  | `.gdb` **文件夹**                                            | Python sidecar                       | 桌面端专属，且要 sidecar；Mac App Store 版本里是隐藏的                                                                                 |
+| **OSM PBF**              | `.osm.pbf` `.pbf`                                            | osmix，跑在 Web Worker               | 自动拆成点/线/面三层；超 50MB 会提示确认，5 分钟超时保护                                                                               |
+| **GeoRSS**               | `.xml` `.rss` `.atom`                                        | 纯 JS                                | RSS 2.0 / Atom / RDF 都吃，GeoRSS Simple + GML 几何                                                                                    |
+| **地理标记照片**         | `.jpg` `.jpeg` `.png` `.tif` `.tiff` `.webp` `.heic` `.heif` | exifr                                | **读 EXIF GPS 直接生成点图层**，无人机照片很实用                                                                                       |
 
 _明确不支持的：`.xlsx` / `.xls`（经全库搜索，零命中）、原始 `.osm` XML（只认 PBF）。要用 Excel 的先另存为 CSV。_
 
 !!! tip "KML `<Model>` 的三维模型"
-    KML 的 `<Model>` 这条值得关注：它会把内嵌的 COLLADA `.dae` 用 three.js 加载再导出成 GLB 加载到地图中。为了这一个边缘场景引入了 three.js。
+KML 的 `<Model>` 这条值得关注：它会把内嵌的 COLLADA `.dae` 用 three.js 加载再导出成 GLB 加载到地图中。为了这一个边缘场景引入了 three.js。
 
 加载完之后不是「能看见就完事」——符号化、分级配色、图例都是跟着走的：
 
@@ -76,15 +76,15 @@ _明确不支持的：`.xlsx` / `.xls`（经全库搜索，零命中）、原始
 
 栅格这块比矢量窄，但覆盖了云原生那条主线。
 
-| 格式 | 扩展名 | 引擎 | 平台 |
-|---|---|---|---|
-| **GeoTIFF / COG** | `.tif` `.tiff` | 默认 `cog-tiler-wasm`，可切 GPU 引擎 | 全平台；桌面端本地文件走 Tauri asset 协议做 Range 读 |
-| **MosaicJSON / STAC item** | `.json` | 读取时按需拼接 | 全平台 |
-| **地理配准图像** | 任意浏览器能解码的图 + GCP 的 `.csv`/`.txt` | 最小二乘仿射，导出用 gdal3.js | 全平台（gdal3.js 从 CDN 加载） |
-| **KML GroundOverlay** | 来自 `.kml` / `.kmz` | 四角坐标图像图层 | 带 `<TimeSpan>` 的还能接时间轴动画 |
-| **地理配准视频** | `.mp4` + `.webm` | MapLibre video source | 只支持 URL |
-| **转换工具输入（栅格）** | `.tif .tiff .img .vrt .asc .nc .jp2 .hgt` | GDAL / rasterio sidecar | 桌面端；浏览器只收 `.tif/.tiff` |
-| **Whitebox 栅格 I/O** | `.tif .tiff .img .bil .flt .sdat .rdc .asc` | whitebox-wasm | 全平台 |
+| 格式                       | 扩展名                                      | 引擎                                 | 平台                                                 |
+| -------------------------- | ------------------------------------------- | ------------------------------------ | ---------------------------------------------------- |
+| **GeoTIFF / COG**          | `.tif` `.tiff`                              | 默认 `cog-tiler-wasm`，可切 GPU 引擎 | 全平台；桌面端本地文件走 Tauri asset 协议做 Range 读 |
+| **MosaicJSON / STAC item** | `.json`                                     | 读取时按需拼接                       | 全平台                                               |
+| **地理配准图像**           | 任意浏览器能解码的图 + GCP 的 `.csv`/`.txt` | 最小二乘仿射，导出用 gdal3.js        | 全平台（gdal3.js 从 CDN 加载）                       |
+| **KML GroundOverlay**      | 来自 `.kml` / `.kmz`                        | 四角坐标图像图层                     | 带 `<TimeSpan>` 的还能接时间轴动画                   |
+| **地理配准视频**           | `.mp4` + `.webm`                            | MapLibre video source                | 只支持 URL                                           |
+| **转换工具输入（栅格）**   | `.tif .tiff .img .vrt .asc .nc .jp2 .hgt`   | GDAL / rasterio sidecar              | 桌面端；浏览器只收 `.tif/.tiff`                      |
+| **Whitebox 栅格 I/O**      | `.tif .tiff .img .bil .flt .sdat .rdc .asc` | whitebox-wasm                        | 全平台                                               |
 
 ![Google 影像底图与栅格样式面板](https://assets.geolibre.app/images/raster-style-panel.webp)
 
@@ -94,11 +94,11 @@ _注意这个不对等：`.img`、`.vrt`、`.asc`、`.jp2`、`.hgt` 这些只在
 
 ## 四、点云与 LiDAR
 
-| 项 | 支持 | 说明 |
-|---|---|---|
-| **LiDAR 图层** | COPC / LAZ（URL 方式） | 走 `maplibre-gl-lidar` + deck.gl 渲染 |
-| **USGS 3DEP** | 在线点云流式加载 | 独立插件，会附带 3DEP 高程索引 WMS 覆盖图 |
-| **Whitebox LiDAR 工具** | `.las .laz .zlidar .copc .e57 .ply`，输出 `.laz` | 这是全库唯一出现 `.e57` / `.ply` 的地方 |
+| 项                      | 支持                                             | 说明                                      |
+| ----------------------- | ------------------------------------------------ | ----------------------------------------- |
+| **LiDAR 图层**          | COPC / LAZ（URL 方式）                           | 走 `maplibre-gl-lidar` + deck.gl 渲染     |
+| **USGS 3DEP**           | 在线点云流式加载                                 | 独立插件，会附带 3DEP 高程索引 WMS 覆盖图 |
+| **Whitebox LiDAR 工具** | `.las .laz .zlidar .copc .e57 .ply`，输出 `.laz` | 这是全库唯一出现 `.e57` / `.ply` 的地方   |
 
 _LiDAR 图层面板本身的扩展名白名单**不在这个仓库里**，定义在上游 npm 包中。仓库里唯一的直接证据是一个 `.copc.laz` 的示例 URL。LAS/LAZ/COPC/EPT 大概率都支持，但从源码无法百分百确认。_
 
@@ -108,14 +108,14 @@ _LiDAR 图层面板本身的扩展名白名单**不在这个仓库里**，定义
 
 开篇那个「收到 3D Tiles 想看一眼」的场景，这节就是答案。
 
-| 格式 | 输入方式 | 引擎 | 说明 |
-|---|---|---|---|
-| **OGC 3D Tiles** | tileset URL | `maplibre-gl-3d-tiles` + deck.gl `Tile3DLayer` | **支持自定义请求头**，带鉴权的切片也能加 |
-| **Google 照片级 3D Tiles** | 内置 URL | 同上 | 需要 Google Maps API key，走请求头传，不落盘 |
-| **ArcGIS I3S 场景图层** | `…/SceneServer` URL | deck.gl + loaders.gl `I3SLoader` | 整合网格和三维对象图层都支持 |
-| **glTF / GLB** | **只能填 URL** | deck.gl `ScenegraphLayer` | 没有本地文件选择器，这是目前最明显的缺口 |
-| **COLLADA `.dae`** | 只能通过 KML `<Model>` 内嵌 | three.js → GLB | — |
-| **高斯泼溅** | URL | `maplibre-gl-splat` | 存储层类型是 `gaussian-splat` |
+| 格式                       | 输入方式                    | 引擎                                           | 说明                                         |
+| -------------------------- | --------------------------- | ---------------------------------------------- | -------------------------------------------- |
+| **OGC 3D Tiles**           | tileset URL                 | `maplibre-gl-3d-tiles` + deck.gl `Tile3DLayer` | **支持自定义请求头**，带鉴权的切片也能加     |
+| **Google 照片级 3D Tiles** | 内置 URL                    | 同上                                           | 需要 Google Maps API key，走请求头传，不落盘 |
+| **ArcGIS I3S 场景图层**    | `…/SceneServer` URL         | deck.gl + loaders.gl `I3SLoader`               | 整合网格和三维对象图层都支持                 |
+| **glTF / GLB**             | **只能填 URL**              | deck.gl `ScenegraphLayer`                      | 没有本地文件选择器，这是目前最明显的缺口     |
+| **COLLADA `.dae`**         | 只能通过 KML `<Model>` 内嵌 | three.js → GLB                                 | —                                            |
+| **高斯泼溅**               | URL                         | `maplibre-gl-splat`                            | 存储层类型是 `gaussian-splat`                |
 
 ![3D Tiles 加载面板：左侧图层列表里 3D-TILES、矢量、XYZ、glTF 模型、高斯泼溅混排](https://assets.geolibre.app/images/3dtiles.webp)
 
@@ -137,20 +137,20 @@ geoparquet, duckdb-query, deckgl-viz, video, image
 
 「添加数据 → Web 服务」里能填的：
 
-| 服务 | 细节 |
-|---|---|
-| **XYZ** | `{z}/{x}/{y}` 模板，栅格或矢量瓦片都行 |
-| **WMS** | **GetCapabilities 自动拉图层下拉框**；点击要素走 GetFeatureInfo；开发态自带 CORS 代理 |
-| **WMTS** | RESTful 瓦片模板 |
-| **WFS** | GetCapabilities 拉 typeName；可选自动刷新 |
-| **OGC API - Features** | 落地页 / `/collections` / 单个集合 / 完整 `/items` URL 都认，自动翻 `next` 链接，默认取 1000 条 |
-| **OGC API - Tiles（矢量）** | TileJSON 或 MVT 模板，可另填 Mapbox style URL 来解析 `source-layer` 名 |
-| **ArcGIS** | 对话框里**只有两个**：FeatureServer（以 `f=geojson` 拉）和 VectorTileServer |
-| **ArcGIS MapServer / ImageServer** | 不在添加数据对话框里，只能通过 NASA Earthdata GIS、EnviroAtlas 这类插件间接用 |
-| **MBTiles** | `.mbtiles` 本地文件，自定义协议 + Rust 后端读取。**桌面端专属** |
-| **PMTiles** | `.pmtiles`，矢量栅格都行，自动嗅探文件头 |
-| **PostgreSQL / PostGIS** | 连接 → 选表 → 出 MVT，靠内置的 Martin 服务。**桌面端专属** |
-| **deck.gl 可视化图层** | 14 种：散点、热力、六边形、格网、屏幕格网、等值线、弧线、线、大圆、GeoJSON、图标、文本、轨迹、场景图 |
+| 服务                               | 细节                                                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **XYZ**                            | `{z}/{x}/{y}` 模板，栅格或矢量瓦片都行                                                               |
+| **WMS**                            | **GetCapabilities 自动拉图层下拉框**；点击要素走 GetFeatureInfo；开发态自带 CORS 代理                |
+| **WMTS**                           | RESTful 瓦片模板                                                                                     |
+| **WFS**                            | GetCapabilities 拉 typeName；可选自动刷新                                                            |
+| **OGC API - Features**             | 落地页 / `/collections` / 单个集合 / 完整 `/items` URL 都认，自动翻 `next` 链接，默认取 1000 条      |
+| **OGC API - Tiles（矢量）**        | TileJSON 或 MVT 模板，可另填 Mapbox style URL 来解析 `source-layer` 名                               |
+| **ArcGIS**                         | 对话框里**只有两个**：FeatureServer（以 `f=geojson` 拉）和 VectorTileServer                          |
+| **ArcGIS MapServer / ImageServer** | 不在添加数据对话框里，只能通过 NASA Earthdata GIS、EnviroAtlas 这类插件间接用                        |
+| **MBTiles**                        | `.mbtiles` 本地文件，自定义协议 + Rust 后端读取。**桌面端专属**                                      |
+| **PMTiles**                        | `.pmtiles`，矢量栅格都行，自动嗅探文件头                                                             |
+| **PostgreSQL / PostGIS**           | 连接 → 选表 → 出 MVT，靠内置的 Martin 服务。**桌面端专属**                                           |
+| **deck.gl 可视化图层**             | 14 种：散点、热力、六边形、格网、屏幕格网、等值线、弧线、线、大圆、GeoJSON、图标、文本、轨迹、场景图 |
 
 ![OpenFreeMap 3D 底图与绘制工具](https://assets.geolibre.app/images/drawing-tools.webp)
 
@@ -162,11 +162,11 @@ geoparquet, duckdb-query, deckgl-viz, video, image
 
 **科学数据格式：**
 
-| 格式 | 支持范围 |
-|---|---|
-| **Zarr** | 远程 store URL，或本地文件夹。变量和维度选择器会显示真实坐标值。_本地文件夹在浏览器里需要 File System Access API，Firefox / Safari 用不了_ |
+| 格式             | 支持范围                                                                                                                                                                                |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Zarr**         | 远程 store URL，或本地文件夹。变量和维度选择器会显示真实坐标值。_本地文件夹在浏览器里需要 File System Access API，Firefox / Safari 用不了_                                              |
 | **NetCDF / HDF** | 两条路：远程走 **kerchunk 引用 JSON + HTTP Range**（云优化 NetCDF）；本地支持 `.nc .nc4 .cdf .h5 .hdf5`（NetCDF-3 走 netcdfjs，NetCDF-4/HDF5 走 h5wasm）。**HDF4 的 `.hdf` 明确不支持** |
-| **COG** | 见栅格一节 |
+| **COG**          | 见栅格一节                                                                                                                                                                              |
 
 **在线数据目录（打开就能浏览的）：**
 
@@ -198,13 +198,13 @@ geoparquet, duckdb-query, deckgl-viz, video, image
 
 这条容易被忽略，但决定了你能不能将它集成到现有工作流中。
 
-| 格式 | 扩展名 | 方向 |
-|---|---|---|
-| GeoLibre 工程 | `.geolibre` / `.geolibre.json` | 读 + 写 |
-| **QGIS 工程** | `.qgz` `.qgs` | **只能导入**。用 DOMParser 解析 XML，不执行任何 QGIS 代码；只导入它认识的 17 种矢量格式和 GeoTIFF |
-| **Mapbox GL / MapLibre 样式** | `.json` | 导入 + 导出 |
-| **OGC SLD** | `.sld` `.xml` | 导入 + 导出 |
-| **QGIS QML** | `.qml` | 导入 + 导出 |
+| 格式                          | 扩展名                         | 方向                                                                                              |
+| ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| GeoLibre 工程                 | `.geolibre` / `.geolibre.json` | 读 + 写                                                                                           |
+| **QGIS 工程**                 | `.qgz` `.qgs`                  | **只能导入**。用 DOMParser 解析 XML，不执行任何 QGIS 代码；只导入它认识的 17 种矢量格式和 GeoTIFF |
+| **Mapbox GL / MapLibre 样式** | `.json`                        | 导入 + 导出                                                                                       |
+| **OGC SLD**                   | `.sld` `.xml`                  | 导入 + 导出                                                                                       |
+| **QGIS QML**                  | `.qml`                         | 导入 + 导出                                                                                       |
 
 > **关键启发：** 你在 QGIS 里配好的符号化可以搬过来，反过来也行。样式导入的格式是**按内容判断的，不看扩展名**——扔个改错后缀的文件也能认出来。
 
@@ -226,17 +226,17 @@ geoparquet, duckdb-query, deckgl-viz, video, image
 
 ### 格式转换工具（9 个）
 
-| 工具 | 输入 | 输出 |
-|---|---|---|
-| 矢量 → 矢量 | `geojson geojsonl json parquet geoparquet fgb gpkg shp zip kml gml gpx` | 桌面端 14 种驱动：GeoJSON、GeoJSONSeq、FlatGeobuf、GPKG、Shapefile、GML、KML、CSV、SQLite、GMT、DXF、MapInfo、JML、GPX |
-| 矢量 → GeoParquet | 同上 | `.parquet`，压缩可选 `zstd / snappy / gzip / lz4 / 不压缩` |
-| 矢量 → FlatGeobuf | 同上 | `.fgb` |
-| 矢量 → Shapefile | 同上 | `.zip` |
-| 矢量 → GeoPackage | 同上 | `.gpkg` |
-| CSV → GeoParquet | `csv tsv txt` | `.parquet` |
-| **矢量 → PMTiles** | `parquet geoparquet geojson json gpkg fgb shp` | `.pmtiles`。**桌面端最高 24 级**，浏览器端因为用 WASM 切片器层级要浅一些 |
-| **栅格 → PMTiles** | 只收 `.tif/.tiff` | `.pmtiles`（单波段过色带，不是真彩色） |
-| **栅格 → COG** | 桌面 `tif tiff img vrt asc nc jp2 hgt`，浏览器只收 tif | `.tif`，压缩可选 `deflate zstd lzw webp jpeg packbits raw` |
+| 工具               | 输入                                                                    | 输出                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 矢量 → 矢量        | `geojson geojsonl json parquet geoparquet fgb gpkg shp zip kml gml gpx` | 桌面端 14 种驱动：GeoJSON、GeoJSONSeq、FlatGeobuf、GPKG、Shapefile、GML、KML、CSV、SQLite、GMT、DXF、MapInfo、JML、GPX |
+| 矢量 → GeoParquet  | 同上                                                                    | `.parquet`，压缩可选 `zstd / snappy / gzip / lz4 / 不压缩`                                                             |
+| 矢量 → FlatGeobuf  | 同上                                                                    | `.fgb`                                                                                                                 |
+| 矢量 → Shapefile   | 同上                                                                    | `.zip`                                                                                                                 |
+| 矢量 → GeoPackage  | 同上                                                                    | `.gpkg`                                                                                                                |
+| CSV → GeoParquet   | `csv tsv txt`                                                           | `.parquet`                                                                                                             |
+| **矢量 → PMTiles** | `parquet geoparquet geojson json gpkg fgb shp`                          | `.pmtiles`。**桌面端最高 24 级**，浏览器端因为用 WASM 切片器层级要浅一些                                               |
+| **栅格 → PMTiles** | 只收 `.tif/.tiff`                                                       | `.pmtiles`（单波段过色带，不是真彩色）                                                                                 |
+| **栅格 → COG**     | 桌面 `tif tiff img vrt asc nc jp2 hgt`，浏览器只收 tif                  | `.tif`，压缩可选 `deflate zstd lzw webp jpeg packbits raw`                                                             |
 
 _浏览器端输出格式是子集：geojson / json / csv / parquet / geoparquet / gpkg / zip / fgb。想要完整的 14 种驱动得用桌面版（走 Python sidecar）。_
 
@@ -245,7 +245,7 @@ _浏览器端输出格式是子集：geojson / json / csv / parquet / geoparquet
 栅格图层导 GeoTIFF、按框裁栅格子集、底图抽取成 PMTiles 离线包、打印布局出 PNG/PDF/多页 ZIP、**整个工程导成一个独立 HTML 文件**、故事地图导 HTML/PDF、地图录屏 WebM、图表导 SVG/PNG。
 
 !!! tip "工程导成独立 HTML"
-    这条功能被严重低估了——给协作者分享单文件网页查看成果，比让对方安装专用软件现实得多。
+这条功能被严重低估了——给协作者分享单文件网页查看成果，比让对方安装专用软件现实得多。
 
 ---
 
@@ -253,13 +253,13 @@ _浏览器端输出格式是子集：geojson / json / csv / parquet / geoparquet
 
 前面零散提过，这里集中一次。**这是最容易吃亏的地方。**
 
-| 限制 | 影响什么 |
-|---|---|
-| **桌面端（Tauri）专属** | 原生文件/文件夹对话框、本地 MBTiles、本地栅格读取、Shapefile 同名文件自动发现、PostGIS/Martin、文件地理数据库、本地文件监听重载 |
-| **需要 Python sidecar** | 文件地理数据库、桌面端的全部转换工具（首选路径）、栅格工具（rasterio）、AI 分割、PostGIS、Sedona |
-| **Mac App Store 版本** | 不带 Python sidecar：隐藏 PostgreSQL 和 GDB 数据源、隐藏 AI 分割；Whitebox、转换、栅格、矢量工具全部退回浏览器/WASM 引擎；Shapefile companion 文件要手动多选 |
-| **安卓 / iOS 移动端** | 隐藏栅格工具、转换工具、AI 分割、PostgreSQL——这些都依赖 sidecar。Whitebox 工具箱走 WASM，依然可用 |
-| **浏览器端** | 无本地 MBTiles/GDB/PostGIS；转换输出是子集；矢量转换不收 `.zip`；栅格转 COG 只收 GeoTIFF；Zarr 本地文件夹在 Firefox/Safari 不可用 |
+| 限制                    | 影响什么                                                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **桌面端（Tauri）专属** | 原生文件/文件夹对话框、本地 MBTiles、本地栅格读取、Shapefile 同名文件自动发现、PostGIS/Martin、文件地理数据库、本地文件监听重载                              |
+| **需要 Python sidecar** | 文件地理数据库、桌面端的全部转换工具（首选路径）、栅格工具（rasterio）、AI 分割、PostGIS、Sedona                                                             |
+| **Mac App Store 版本**  | 不带 Python sidecar：隐藏 PostgreSQL 和 GDB 数据源、隐藏 AI 分割；Whitebox、转换、栅格、矢量工具全部退回浏览器/WASM 引擎；Shapefile companion 文件要手动多选 |
+| **安卓 / iOS 移动端**   | 隐藏栅格工具、转换工具、AI 分割、PostgreSQL——这些都依赖 sidecar。Whitebox 工具箱走 WASM，依然可用                                                            |
+| **浏览器端**            | 无本地 MBTiles/GDB/PostGIS；转换输出是子集；矢量转换不收 `.zip`；栅格转 COG 只收 GeoTIFF；Zarr 本地文件夹在 Firefox/Safari 不可用                            |
 
 ---
 
@@ -301,15 +301,15 @@ _浏览器端输出格式是子集：geojson / json / csv / parquet / geoparquet
 
 **其它保护阈值**（这些数字本身就是很好的参考）：
 
-| 阈值 | 值 |
-|---|---|
-| 切片渲染触发 | 50,000 要素 |
-| DuckDB 结果物化确认提示 | 500,000 行 |
-| 浏览器端 Sedona 上限 | 50,000 要素 |
-| OSM PBF 提醒 / 超时 | 50 MB / 5 分钟 |
-| 远程矢量文件上限 | 2 GiB（DuckDB-WASM 用 32 位存远程文件大小） |
-| 本地 COG 上限 | 2 GiB |
-| 撤销历史软预算 | 500,000 要素 |
+| 阈值                    | 值                                          |
+| ----------------------- | ------------------------------------------- |
+| 切片渲染触发            | 50,000 要素                                 |
+| DuckDB 结果物化确认提示 | 500,000 行                                  |
+| 浏览器端 Sedona 上限    | 50,000 要素                                 |
+| OSM PBF 提醒 / 超时     | 50 MB / 5 分钟                              |
+| 远程矢量文件上限        | 2 GiB（DuckDB-WASM 用 32 位存远程文件大小） |
+| 本地 COG 上限           | 2 GiB                                       |
+| 撤销历史软预算          | 500,000 要素                                |
 
 **属性表是虚拟化的**，但排序、筛选、选择是在完整数据模型上跑的，虚拟化只管渲染。
 
@@ -328,7 +328,7 @@ _浏览器端输出格式是子集：geojson / json / csv / parquet / geoparquet
 说完优势，来谈谈局限性。
 
 !!! warning "它不是 QGIS 的替代品"
-    这是多篇评测的共识，作者自己也没这么宣称。
+这是多篇评测的共识，作者自己也没这么宣称。
 
 **一、功能范围是故意收窄的。** 它聚焦在浏览器工作流、本地处理、云原生格式、空间 SQL、现代可视化和可移植性。复杂的专业流程该用 QGIS 还得用 QGIS。
 

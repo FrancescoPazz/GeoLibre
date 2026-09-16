@@ -191,17 +191,15 @@ function buildServiceKinds(services: readonly ServiceLibraryEntry[]): BrowserNod
       // The panel's "New connection" (＋) action opens this Add Data source.
       newConnectionKind: kind,
       count: entries.length,
-      children: entries.map(
-        (entry): BrowserNode => ({
-          id: `service:${entry.id}`,
-          kind: "service",
-          label: entry.name,
-          addable: true,
-          serviceId: entry.id,
-          serviceKind: entry.kind,
-          builtin: entry.builtin,
-        }),
-      ),
+      children: entries.map((entry): BrowserNode => ({
+        id: `service:${entry.id}`,
+        kind: "service",
+        label: entry.name,
+        addable: true,
+        serviceId: entry.id,
+        serviceKind: entry.kind,
+        builtin: entry.builtin,
+      })),
     };
   });
 }
@@ -234,15 +232,13 @@ export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
     children: kinds,
   };
 
-  const recentChildren = input.recentProjects.map(
-    (entry): BrowserNode => ({
-      id: `recent:${entry.path}`,
-      kind: "recent-project",
-      label: entry.name,
-      addable: true,
-      projectPath: entry.path,
-    }),
-  );
+  const recentChildren = input.recentProjects.map((entry): BrowserNode => ({
+    id: `recent:${entry.path}`,
+    kind: "recent-project",
+    label: entry.name,
+    addable: true,
+    projectPath: entry.path,
+  }));
   const recentSection: BrowserNode = {
     id: "section:recent",
     kind: "section",
@@ -278,18 +274,16 @@ export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
       addable: false,
       libraryImportExport: true,
       count: input.libraryLayers.length,
-      children: input.libraryLayers.map(
-        (entry): BrowserNode => ({
-          id: `library-layer:${entry.id}`,
-          kind: "library-layer",
-          label: entry.name,
-          addable: true,
-          libraryLayerId: entry.id,
-          renamable: true,
-          deletable: true,
-          ...(entry.needsLocalFile ? { needsLocalFile: true } : {}),
-        }),
-      ),
+      children: input.libraryLayers.map((entry): BrowserNode => ({
+        id: `library-layer:${entry.id}`,
+        kind: "library-layer",
+        label: entry.name,
+        addable: true,
+        libraryLayerId: entry.id,
+        renamable: true,
+        deletable: true,
+        ...(entry.needsLocalFile ? { needsLocalFile: true } : {}),
+      })),
     });
   }
 
@@ -306,18 +300,16 @@ export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
       addable: false,
       newConnectionKind: "postgres",
       count: input.databaseConnections.length,
-      children: input.databaseConnections.map(
-        (connection): BrowserNode => ({
-          id: `connection:${connection.connectionString}`,
-          kind: "connection",
-          label: connection.label,
-          addable: false,
-          connectionString: connection.connectionString,
-          // An empty child list marks it as an expandable group; the panel
-          // lazily fills it with schema/table nodes on first expand.
-          children: [],
-        }),
-      ),
+      children: input.databaseConnections.map((connection): BrowserNode => ({
+        id: `connection:${connection.connectionString}`,
+        kind: "connection",
+        label: connection.label,
+        addable: false,
+        connectionString: connection.connectionString,
+        // An empty child list marks it as an expandable group; the panel
+        // lazily fills it with schema/table nodes on first expand.
+        children: [],
+      })),
     });
   }
 
@@ -332,19 +324,17 @@ export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
       addable: false,
       addFolderAction: true,
       count: input.files.folders.length,
-      children: input.files.folders.map(
-        (folder): BrowserNode => ({
-          id: `folder:${folder.path}`,
-          kind: "folder",
-          label: folder.label,
-          addable: false,
-          path: folder.path,
-          // Pinned roots can be unpinned; subfolders (added on expand) cannot.
-          removable: true,
-          // Expandable group, lazily filled with subfolders/files on expand.
-          children: [],
-        }),
-      ),
+      children: input.files.folders.map((folder): BrowserNode => ({
+        id: `folder:${folder.path}`,
+        kind: "folder",
+        label: folder.label,
+        addable: false,
+        path: folder.path,
+        // Pinned roots can be unpinned; subfolders (added on expand) cannot.
+        removable: true,
+        // Expandable group, lazily filled with subfolders/files on expand.
+        children: [],
+      })),
     });
   }
 
@@ -382,28 +372,24 @@ export function buildDirectoryNodes(
   const folders = visible
     .filter((entry) => entry.isDirectory)
     .sort((a, b) => byLabel(a.name, b.name))
-    .map(
-      (entry): BrowserNode => ({
-        id: `folder:${entry.path}`,
-        kind: "folder",
-        label: entry.name,
-        addable: false,
-        path: entry.path,
-        children: [],
-      }),
-    );
+    .map((entry): BrowserNode => ({
+      id: `folder:${entry.path}`,
+      kind: "folder",
+      label: entry.name,
+      addable: false,
+      path: entry.path,
+      children: [],
+    }));
   const files = visible
     .filter((entry) => !entry.isDirectory && isLoadable(entry.name))
     .sort((a, b) => byLabel(a.name, b.name))
-    .map(
-      (entry): BrowserNode => ({
-        id: `file:${entry.path}`,
-        kind: "file",
-        label: entry.name,
-        addable: true,
-        path: entry.path,
-      }),
-    );
+    .map((entry): BrowserNode => ({
+      id: `file:${entry.path}`,
+      kind: "file",
+      label: entry.name,
+      addable: true,
+      path: entry.path,
+    }));
   return [...folders, ...files];
 }
 
@@ -499,17 +485,15 @@ export function buildPostgisTableNodes(
       count: bySchema.get(schema)?.length ?? 0,
       children: [...(bySchema.get(schema) ?? [])]
         .sort((a, b) => byLabel(a.table, b.table))
-        .map(
-          (entry): BrowserNode => ({
-            id: `table:${connectionString}:${schema}.${entry.table}`,
-            kind: "table",
-            label: entry.table,
-            addable: true,
-            connectionString,
-            tableSchema: schema,
-            tableName: entry.table,
-          }),
-        ),
+        .map((entry): BrowserNode => ({
+          id: `table:${connectionString}:${schema}.${entry.table}`,
+          kind: "table",
+          label: entry.table,
+          addable: true,
+          connectionString,
+          tableSchema: schema,
+          tableName: entry.table,
+        })),
     }));
 }
 

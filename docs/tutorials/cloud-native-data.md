@@ -29,7 +29,7 @@ A Cloud-Optimized GeoTIFF is a regular GeoTIFF organized so clients can read jus
 2. Enter the URL of a COG (`.tif`) and load it. You can then adjust brightness, contrast, saturation, and hue in the [Style panel](../user-guide/styling.md).
 
 !!! tip "Drag and drop"
-    You can also drag a local GeoTIFF or COG onto the map to add it as a raster layer. See [Adding Data](../user-guide/adding-data.md#drag-and-drop).
+You can also drag a local GeoTIFF or COG onto the map to add it as a raster layer. See [Adding Data](../user-guide/adding-data.md#drag-and-drop).
 
 ## Convert local data to cloud-native
 

@@ -7,18 +7,18 @@ three sections. This page is for when you need the names without a round trip.
 
 Named MapLibre vector styles, accepted by `set_basemap` / `Map.set_basemap`:
 
-| Name | Look |
-| --- | --- |
-| `liberty` | The default. Full-detail OpenStreetMap cartography. |
-| `bright` | Lighter, higher-contrast general-purpose style. |
+| Name       | Look                                                                |
+| ---------- | ------------------------------------------------------------------- |
+| `liberty`  | The default. Full-detail OpenStreetMap cartography.                 |
+| `bright`   | Lighter, higher-contrast general-purpose style.                     |
 | `positron` | Muted grey — the right choice under a choropleth or any data layer. |
-| `dark` | Dark background, for bright data and night-mode pages. |
-| `fiord` | Desaturated blue-grey. |
+| `dark`     | Dark background, for bright data and night-mode pages.              |
+| `fiord`    | Desaturated blue-grey.                                              |
 
 A full MapLibre style JSON URL works anywhere a name does.
 
 **Raster basemaps are not basemaps here.** OpenStreetMap raster tiles, Esri
-imagery, and any `{z}/{x}/{y}` service are *layers*: add them with
+imagery, and any `{z}/{x}/{y}` service are _layers_: add them with
 `add_tile_layer` at `index=0`, with an `attribution`.
 
 ## Color ramps
@@ -52,10 +52,10 @@ anything quantitative — it invents boundaries that aren't in the data.
 
 `add_legend(builtin=...)`:
 
-| Preset | Title |
-| --- | --- |
-| `nlcd` | NLCD Land Cover (20 classes, official color table) |
-| `esa_worldcover` | ESA WorldCover (11 classes) |
+| Preset           | Title                                              |
+| ---------------- | -------------------------------------------------- |
+| `nlcd`           | NLCD Land Cover (20 classes, official color table) |
+| `esa_worldcover` | ESA WorldCover (11 classes)                        |
 
 `esa`, `worldcover`, `esa_world_cover`, and `nlcd_land_cover` are accepted
 aliases.
@@ -76,18 +76,18 @@ widths then vary, so the legend must show the breaks.
 
 ## Data formats
 
-| Format | How it gets in |
-| --- | --- |
-| GeoJSON | Directly, inlined or by URL |
-| GeoParquet | DuckDB-WASM in the browser; imported as GeoJSON from a local file |
-| FlatGeobuf | Read in place, or imported as GeoJSON |
-| Shapefile (`.zip`) | Converted in-browser (`shpjs`, DuckDB fallback) |
-| GeoPackage, KML/KMZ, GPX, CSV, delimited text | Converted on import |
-| COG / GeoTIFF | `cog` layer, rendered on the GPU or through a tiler |
-| PMTiles, MBTiles | Tiled sources (MBTiles is desktop-only, via a local protocol) |
-| WMS, WMTS, WFS | OGC service layers |
-| ArcGIS FeatureServer / MapServer / ImageServer / VectorTileServer | Native support |
-| Zarr, LiDAR (COPC/LAZ), 3D Tiles, Gaussian splats | Through the bundled plugins |
+| Format                                                            | How it gets in                                                    |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------- |
+| GeoJSON                                                           | Directly, inlined or by URL                                       |
+| GeoParquet                                                        | DuckDB-WASM in the browser; imported as GeoJSON from a local file |
+| FlatGeobuf                                                        | Read in place, or imported as GeoJSON                             |
+| Shapefile (`.zip`)                                                | Converted in-browser (`shpjs`, DuckDB fallback)                   |
+| GeoPackage, KML/KMZ, GPX, CSV, delimited text                     | Converted on import                                               |
+| COG / GeoTIFF                                                     | `cog` layer, rendered on the GPU or through a tiler               |
+| PMTiles, MBTiles                                                  | Tiled sources (MBTiles is desktop-only, via a local protocol)     |
+| WMS, WMTS, WFS                                                    | OGC service layers                                                |
+| ArcGIS FeatureServer / MapServer / ImageServer / VectorTileServer | Native support                                                    |
+| Zarr, LiDAR (COPC/LAZ), 3D Tiles, Gaussian splats                 | Through the bundled plugins                                       |
 
 Everything renders from WGS84 lon/lat. Reproject before adding if your source is
 in a projected CRS.
@@ -97,16 +97,16 @@ in a projected CRS.
 The browser build is hosted at <https://web.geolibre.app/>. It runs entirely
 client-side.
 
-| Parameter | Example | Effect |
-| --- | --- | --- |
-| `url` | `?url=https://.../project.geolibre.json` | Load a project from a public URL |
-| `data` | `?data=https://.../places.geojson` | Load public GeoJSON/GeoParquet/PMTiles/COG directly |
-| `style` | `?style=https://.../sample.style.json` | Apply a style to the `data` layer |
-| `layout` | `?layout=viewer` | `viewer` (read-only chrome) or `compact` (icon-only) |
-| `maponly` | `?maponly` | Map only — no toolbar, panels, or status bar |
-| `toolbar` / `panels` | `?toolbar=none&panels=collapsed` | Trim individual chrome |
-| `theme` | `?theme=dark` | Force a color theme |
-| `locale` / `lang` | `?lang=zh` | Set the UI language |
+| Parameter            | Example                                  | Effect                                               |
+| -------------------- | ---------------------------------------- | ---------------------------------------------------- |
+| `url`                | `?url=https://.../project.geolibre.json` | Load a project from a public URL                     |
+| `data`               | `?data=https://.../places.geojson`       | Load public GeoJSON/GeoParquet/PMTiles/COG directly  |
+| `style`              | `?style=https://.../sample.style.json`   | Apply a style to the `data` layer                    |
+| `layout`             | `?layout=viewer`                         | `viewer` (read-only chrome) or `compact` (icon-only) |
+| `maponly`            | `?maponly`                               | Map only — no toolbar, panels, or status bar         |
+| `toolbar` / `panels` | `?toolbar=none&panels=collapsed`         | Trim individual chrome                               |
+| `theme`              | `?theme=dark`                            | Force a color theme                                  |
+| `locale` / `lang`    | `?lang=zh`                               | Set the UI language                                  |
 
 Combine freely: `?url=<project>&maponly&theme=dark` is a clean embed.
 

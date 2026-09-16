@@ -40,7 +40,7 @@ output-token cap, and per-client rate limit.
    `wrangler.jsonc` or, to keep the URL out of source control, with
    `npx wrangler secret put`. Neither is in the checked-in `wrangler.jsonc`,
    because both are deployment-specific; `/search` answers `503 Search is not
-   configured` until `SEARCH_MESSAGES_URL` *and* `SEARCH_MESSAGES_API_KEY` are
+configured` until `SEARCH_MESSAGES_URL` _and_ `SEARCH_MESSAGES_API_KEY` are
    both set.
 
    To enable the separate `/tavily` route for users who explicitly request
@@ -52,7 +52,7 @@ output-token cap, and per-client rate limit.
 
    The Worker can be deployed without either optional search secret. Chat remains
    available, and the corresponding search route returns `503 Search is not
-   configured` until its secret is added. All routes share one `AI_RATE_LIMITER`
+configured` until its secret is added. All routes share one `AI_RATE_LIMITER`
    budget per client, so the configured limit is what a single user may cost you
    in total rather than a separate allowance each for chat and search.
 
@@ -64,11 +64,11 @@ output-token cap, and per-client rate limit.
    which removes the Tavily dependency entirely. It returns the same
    Tavily-shaped response as `/tavily`, so a client changes only the path.
 
-   | Setting | Required | Meaning |
-   | --- | --- | --- |
-   | `SEARCH_MESSAGES_URL` | for `/search` | Base URL, e.g. `https://cli-proxy.example.org`. `/v1/messages` is appended. |
-   | `SEARCH_MESSAGES_API_KEY` | for `/search` | Bearer token for that endpoint. Store with `wrangler secret put`. |
-   | `SEARCH_MESSAGES_MODEL` | no | Defaults to `gpt-5.6-luna`. |
+   | Setting                   | Required      | Meaning                                                                     |
+   | ------------------------- | ------------- | --------------------------------------------------------------------------- |
+   | `SEARCH_MESSAGES_URL`     | for `/search` | Base URL, e.g. `https://cli-proxy.example.org`. `/v1/messages` is appended. |
+   | `SEARCH_MESSAGES_API_KEY` | for `/search` | Bearer token for that endpoint. Store with `wrangler secret put`.           |
+   | `SEARCH_MESSAGES_MODEL`   | no            | Defaults to `gpt-5.6-luna`.                                                 |
 
    `/search` is always GPT-native web search; `/tavily` is always Tavily. Both
    return `503 Search is not configured` when their settings are missing.
@@ -88,7 +88,7 @@ output-token cap, and per-client rate limit.
    hit's page text as opaque `encrypted_content`, so the model writes the
    per-source snippets that ground quantified figures; they are extracts it
    produces rather than verbatim provider content, and the cited URLs are
-   restricted to ones the search actually returned -- *when* the backend reports
+   restricted to ones the search actually returned -- _when_ the backend reports
    them. A gateway fronting a non-Anthropic model may return the
    `web_search_tool_result` blocks with an empty `content` array: the search ran,
    but its hits never arrive, so there is nothing to check the citations against

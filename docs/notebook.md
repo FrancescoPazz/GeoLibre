@@ -15,7 +15,7 @@ both the web and desktop builds, with a different Python runtime behind the same
   full CPython with the native geospatial stack (geopandas, rasterio, GDAL, …).
 
 This is distinct from the [`geolibre` Python package](python.md), which does the
-inverse — embedding the *whole GeoLibre app* inside a notebook cell.
+inverse — embedding the _whole GeoLibre app_ inside a notebook cell.
 
 ## Scripting the map from a cell
 
@@ -63,7 +63,7 @@ fails outright in either:
   the display transport with a `GeoLibreNotConnectedWarning`.
 - **A window took it but did not answer within 5s**, which a large
   `FeatureCollection` can do. You get a `GeoLibreTimeoutWarning`; the layer is
-  still being added, so it is deliberately *not* re-sent (that would add it
+  still being added, so it is deliberately _not_ re-sent (that would add it
   twice) — find it with `list_layers()`.
 
 The read-back calls have nothing to return in either situation, so they raise
@@ -81,11 +81,11 @@ The desktop app's JupyterLab server is a normal, token-authenticated Jupyter
 server, so you can attach any Jupyter client to it and keep your own editor —
 and the map commands above still work. Open the Notebook panel once (that is
 what starts the server), then use its **link button** in the panel header to copy
-the connection URL and paste it into your client (in VS Code: *Jupyter: Specify
-Jupyter Server for Connections* → *Existing*).
+the connection URL and paste it into your client (in VS Code: _Jupyter: Specify
+Jupyter Server for Connections_ → _Existing_).
 
 This works because commands travel over a **relay** on the Jupyter server rather
-than depending on how the notebook is being *displayed*:
+than depending on how the notebook is being _displayed_:
 
 - `backend/geolibre_server/geolibre_server/jupyter_relay.py` is a Jupyter Server
   extension (enabled from `jupyter_server_config.py`) exposing
@@ -149,7 +149,7 @@ Both `npm run dev` and `npm run build` run this automatically:
   is picked up.
 
 Both **skip with a warning** when `jupyter lite` is not installed, so a Node-only
-build still succeeds. Be aware of what that produces: the panel does *not* show a
+build still succeeds. Be aware of what that produces: the panel does _not_ show a
 "not built" message. Its iframe asks for `/jupyterlite/lab/index.html`, and
 anything that answers an unknown path with `index.html` — Tauri's asset
 resolver, or a static host with an SPA fallback such as

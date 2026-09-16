@@ -132,24 +132,24 @@ it unset, and PostGIS stays off until an operator lists the databases.
 
 ## Endpoints
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/algorithms` | List algorithms |
-| POST | `/run` | Run algorithm (501 placeholder) |
-| GET | `/conversion/status` | Conversion runtime availability |
-| POST | `/conversion/vector-to-geoparquet` | Vector → Hilbert-sorted GeoParquet |
-| POST | `/conversion/vector-to-flatgeobuf` | Vector → Hilbert-sorted FlatGeobuf |
-| POST | `/conversion/csv-to-geoparquet` | CSV (lon/lat) → GeoParquet |
-| POST | `/conversion/vector-to-pmtiles` | Vector → PMTiles (freestiler) |
-| POST | `/conversion/raster-to-cog` | Raster → Cloud Optimized GeoTIFF |
-| GET | `/conversion/jobs/{id}` | Conversion job status |
-| GET | `/sql/status` | Spatial SQL (SedonaDB) availability |
-| POST | `/sql/run` | Run Sedona spatial SQL over registered layers |
-| GET | `/ml/status` | Segmentation backend availability + models |
-| POST | `/ml/segment/text` | Text-prompt segmentation (SAM 3) |
-| POST | `/ml/segment/automatic` | Automatic mask generation |
-| POST | `/ml/segment/predict` | Box/point prompt segmentation |
+| Method | Path                               | Description                                   |
+| ------ | ---------------------------------- | --------------------------------------------- |
+| GET    | `/health`                          | Health check                                  |
+| GET    | `/algorithms`                      | List algorithms                               |
+| POST   | `/run`                             | Run algorithm (501 placeholder)               |
+| GET    | `/conversion/status`               | Conversion runtime availability               |
+| POST   | `/conversion/vector-to-geoparquet` | Vector → Hilbert-sorted GeoParquet            |
+| POST   | `/conversion/vector-to-flatgeobuf` | Vector → Hilbert-sorted FlatGeobuf            |
+| POST   | `/conversion/csv-to-geoparquet`    | CSV (lon/lat) → GeoParquet                    |
+| POST   | `/conversion/vector-to-pmtiles`    | Vector → PMTiles (freestiler)                 |
+| POST   | `/conversion/raster-to-cog`        | Raster → Cloud Optimized GeoTIFF              |
+| GET    | `/conversion/jobs/{id}`            | Conversion job status                         |
+| GET    | `/sql/status`                      | Spatial SQL (SedonaDB) availability           |
+| POST   | `/sql/run`                         | Run Sedona spatial SQL over registered layers |
+| GET    | `/ml/status`                       | Segmentation backend availability + models    |
+| POST   | `/ml/segment/text`                 | Text-prompt segmentation (SAM 3)              |
+| POST   | `/ml/segment/automatic`            | Automatic mask generation                     |
+| POST   | `/ml/segment/predict`              | Box/point prompt segmentation                 |
 
 ## AI segmentation runtime (SamGeo / SAM 3)
 
@@ -174,11 +174,11 @@ sidecar in a managed (uv) environment that includes the `ml` extra but not
 app with `GEOLIBRE_ML_SAMGEO_URL` set to an external `samgeo-api` (the spawned
 sidecar inherits the app's environment). Configuration:
 
-| Variable | Purpose |
-|----------|---------|
-| `GEOLIBRE_ML_SAMGEO_URL` | Proxy to an already-running `samgeo-api` (no child process is launched). |
-| `GEOLIBRE_ML_SAMGEO_CMD` | Command to launch `samgeo-api` on demand (default `samgeo-api`). |
-| `GEOLIBRE_ML_DEFAULT_MODEL` | Model the UI defaults to (default `sam3`). |
+| Variable                    | Purpose                                                                  |
+| --------------------------- | ------------------------------------------------------------------------ |
+| `GEOLIBRE_ML_SAMGEO_URL`    | Proxy to an already-running `samgeo-api` (no child process is launched). |
+| `GEOLIBRE_ML_SAMGEO_CMD`    | Command to launch `samgeo-api` on demand (default `samgeo-api`).         |
+| `GEOLIBRE_ML_DEFAULT_MODEL` | Model the UI defaults to (default `sam3`).                               |
 
 Each `/ml/segment/*` request takes a multipart `file` plus `model_version`
 (default `sam3`) and `output_format` (default `geojson`).

@@ -2,7 +2,7 @@
 
 GeoLibre ships to Fedora/RHEL users through [COPR](https://copr.fedorainfracloud.org/),
 the community build service that is to Fedora roughly what the AUR is to Arch.
-The `geolibre` package is a *binary* repackage: it unpacks the official
+The `geolibre` package is a _binary_ repackage: it unpacks the official
 Tauri-built `.rpm` attached to each GitHub release (it does not rebuild from
 source), adds an AppStream `metainfo.xml`, and renames the desktop entry to the
 `org.geolibre.desktop` app-id with proper menu categories.
