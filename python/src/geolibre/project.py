@@ -381,13 +381,13 @@ def build_empty_project(
         center: Optional ``[lng, lat]`` map center.
         zoom: Optional initial zoom level.
         basemap_url: Optional MapLibre style URL; defaults to the app default.
-        renderer: ``"maplibre"`` (default) or ``"cesium"``.
+        renderer: ``"maplibre"`` (default), ``"cesium"``, or ``"mapbox"``.
 
     Returns:
         A project dict ready to be assigned to the widget's ``project`` trait.
     """
-    if renderer not in {"maplibre", "cesium"}:
-        raise ValueError("renderer must be maplibre or cesium")
+    if renderer not in {"maplibre", "cesium", "mapbox"}:
+        raise ValueError("renderer must be maplibre, cesium, or mapbox")
     map_view = default_map_view()
     if center is not None:
         if len(center) != 2:
@@ -1690,6 +1690,99 @@ def cesium_ion_layer(
         metadata["altitudeOffset"] = altitude_offset
     layer["source"] = source
     layer["metadata"] = metadata
+    return layer
+
+
+CZML_SOURCE_KIND = "czml"
+"""``metadata.sourceKind`` of a layer that references a CZML dynamic scene."""
+
+
+def czml_layer(
+    name: str,
+    *,
+    url: str | None = None,
+    data: list[dict[str, Any]] | dict[str, Any] | None = None,
+    source_path: str | None = None,
+    **style: Any,
+) -> dict[str, Any]:
+    """Build a layer that loads a CZML (Cesium Language) dynamic 3D scene.
+
+    The shape matches ``createCzmlLayer`` in ``@geolibre/core``: a
+    ``3d-tiles`` layer marked external so the 2D map leaves it alone and badges
+    it "3D only". The globe renders dynamic orbits, vehicle paths, and time-varying
+    scenes from CZML packets with clock synchronization.
+
+    Args:
+        name: Layer display name.
+        url: URL endpoint serving the CZML document.
+        data: Inline parsed CZML document (packets array or packet object).
+        source_path: Optional local file path when loaded from disk.
+        **style: Style overrides merged into the default layer style.
+
+    Returns:
+        A layer dict for the project's ``layers`` array.
+
+    Raises:
+        ValueError: If neither ``url`` nor a non-empty ``data`` is provided.
+    """
+    if not url and not data:
+        raise ValueError("Either url or non-empty data must be provided for a CZML layer")
+    layer = _layer_base(name, "3d-tiles", **style)
+    source_id = layer["id"]
+    source: dict[str, Any] = {
+        "type": "3d-tiles",
+        "sourceId": source_id,
+    }
+    if url:
+        source["url"] = url
+    if data:
+        source["czmlData"] = data
+    if source_path:
+        source["sourcePath"] = source_path
+        layer["sourcePath"] = source_path
+
+    metadata: dict[str, Any] = {
+        "sourceKind": CZML_SOURCE_KIND,
+        "externalNativeLayer": True,
+        "identifiable": False,
+        "sourceId": source_id,
+        "nativeLayerIds": [source_id],
+    }
+    layer["source"] = source
+    layer["metadata"] = metadata
+    return layer
+
+
+def cesium_kml_layer(
+    name: str,
+    *,
+    url: str | None = None,
+    data: str | None = None,
+    source_path: str | None = None,
+    **style: Any,
+) -> dict[str, Any]:
+    """Build a native globe KML/KMZ layer preserving document styling.
+
+    Supply a URL, inline KML XML, or a KMZ data URL. Package local resources
+    inside KMZ archives so they remain available when sharing the project.
+    """
+    url = url.strip() if url else None
+    data = data.strip() if data else None
+    if not url and not data:
+        raise ValueError("Provide a KML/KMZ document or URL.")
+    layer = _layer_base(name, "3d-tiles", **style)
+    layer["source"] = {
+        "type": "3d-tiles",
+        "sourceId": layer["id"],
+        **({"kmlData": data} if data else {"url": url}),
+    }
+    if source_path:
+        layer["sourcePath"] = source_path
+    layer["metadata"] = {
+        "sourceKind": "cesium-kml",
+        "externalNativeLayer": True,
+        "identifiable": False,
+    }
     return layer
 
 

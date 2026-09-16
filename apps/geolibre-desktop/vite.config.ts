@@ -695,6 +695,7 @@ function manualChunks(id: string): string | undefined {
   // generic `maplibre-gl` rule below, which would fold it into the eager
   // `maplibre` chunk and force DuckDB into boot. Give it its own lazy chunk.
   if (id.includes("maplibre-gl-duckdb")) return "maplibre-duckdb";
+  if (id.includes("/mapbox-gl/")) return "mapbox";
   if (id.includes("maplibre-gl")) return "maplibre";
   // Cesium is large (~several MB) and only loads when the user opens the 3D
   // globe view; keep it in its own lazily-fetched chunk, off the boot graph.
@@ -1070,6 +1071,7 @@ function pwaPlugin(): Plugin[] {
     // MapLibre core (~13 MB) and its feature-plugin chunks. The map boots from
     // its first runtime fetch and is CacheFirst-cached thereafter.
     "**/maplibre-*",
+    "**/mapbox-*",
     "**/duckdb-*",
     // CesiumJS (~4.6 MB) for the 3D-globe view. Lazily imported only when a pane
     // switches to the globe, so it is CacheFirst-cached on first use rather than
@@ -1350,8 +1352,9 @@ export default defineConfig({
       // cog-tiler-wasm's mask-aware LERC decoder (lerc-decoder.js) reaches
       // these through dynamic import() the first time a LERC COG opens; they
       // are geotiff's own codec packages, listed here for the same
-      // discover-and-reload reason as above. (`lerc` itself is excluded below:
-      // it locates its .wasm via import.meta.url.)
+      // discover-and-reload reason as above. The raster loader supplies LERC's
+      // WASM URL explicitly, so its ESM decoder can also be pre-bundled.
+      "lerc",
       "pako",
       "zstddec",
       // Cesium (the 3D-globe view). Pre-bundle it up front so esbuild applies
@@ -1407,11 +1410,6 @@ export default defineConfig({
       // breaks that asset reference so the tiler stops rendering. Serve it
       // as-is. (Its plain-JS deps are pre-bundled via optimizeDeps.include.)
       "cog-tiler-wasm",
-      // lerc 4.x (cog-tiler-wasm's mask-aware LERC decoder) fetches
-      // lerc-wasm.wasm via `new URL(..., import.meta.url)`; pre-bundled, that
-      // resolves against the .vite/deps chunk and the request falls through to
-      // index.html ("expected magic word 00 61 73 6d, found 3c 21 64 6f").
-      "lerc",
       // h5wasm (local NetCDF/HDF5 reader) loads its libhdf5 .wasm via
       // `new URL(..., import.meta.url)`; esbuild pre-bundling mangles that
       // asset reference, so serve it as-is. Only reached through the lazy

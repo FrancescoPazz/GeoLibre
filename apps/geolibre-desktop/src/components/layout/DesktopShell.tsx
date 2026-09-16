@@ -1,5 +1,5 @@
 // @refresh reset
-import { uniqueLayerName, useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import { localFileName, uniqueLayerName, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import type { MapDiagnosticEvent, MapEngine } from "@geolibre/map";
 import {
@@ -144,6 +144,7 @@ import { useGlobalRasterIdentify } from "../../hooks/useGlobalRasterIdentify";
 import { useNetcdfIdentify } from "../../hooks/useNetcdfIdentify";
 import { useTerrainRestore } from "../../hooks/useTerrainRestore";
 import { useCogSpectralIdentify } from "../../hooks/useCogSpectralIdentify";
+import { useRasterViewportStretch } from "../../hooks/useRasterViewportStretch";
 import {
   useAutoCollapsedPanel,
   useReplaceLayersPanelId,
@@ -170,6 +171,7 @@ import { MapContextMenu } from "./MapContextMenu";
 import { KnowledgeCardPanel, type KnowledgePlace } from "./KnowledgeCardPanel";
 import { KnowledgeCardConsentDialog } from "./KnowledgeCardConsentDialog";
 import { MapGrid } from "./MapGrid";
+import { PrimaryMapboxCanvas } from "./PrimaryMapboxCanvas";
 import { PrimaryCesiumCanvas } from "./PrimaryCesiumCanvas";
 import { RemoteCursorsOverlay } from "./RemoteCursorsOverlay";
 import { useCommandBridge } from "../../hooks/useCommandBridge";
@@ -542,7 +544,7 @@ function hasDroppedFiles(event: DragEvent<HTMLElement>): boolean {
 }
 
 function fileNameFromPath(path: string): string {
-  return path.split(/[/\\]/).pop() ?? path;
+  return localFileName(path);
 }
 
 function layerNameFromPath(path: string): string {
@@ -988,6 +990,7 @@ export function DesktopShell({
   useRasterIdentify();
   useNetcdfIdentify(mapControllerRef, mapReadyGeneration);
   useCogSpectralIdentify(mapControllerRef, mapReadyGeneration);
+  useRasterViewportStretch(mapControllerRef, mapReadyGeneration);
   useTerrainRestore(mapControllerRef, mapReadyGeneration, projectGeneration);
   const [layerPanelWidth, setLayerPanelWidth] = useState(initialSidePanelWidth);
   const [stylePanelWidth, setStylePanelWidth] = useState(initialSidePanelWidth);
@@ -1329,6 +1332,25 @@ export function DesktopShell({
     // an empty GeoJSON layer until its loader is running again. Engine-neutral:
     // it follows the store's view, not a map instance.
     restoreRerPoiLayers(appAPI);
+    // VectorControl has a Cesium bridge and must restore on either engine.
+    restoreVectorLayers(appAPI);
+    if (engine.kind === "mapbox") {
+      restoreThreeDTilesLayers(appAPI);
+      void restoreLidarLayers(appAPI).catch(console.error);
+    }
+    // Same contract for the shared deck.gl overlay: re-attach it to the current
+    // map and re-render any deckgl-viz layers a restored project carries. It
+    // binds to either 2D engine (`getMap()` or `getMapboxMap()`), so it sits
+    // above the native-map gate below; on Cesium the plugin manager has
+    // already deactivated the plugin and this only clears its layers.
+    restoreDeckViz(appAPI, pluginManager.isActive(DECK_VIZ_PLUGIN_ID));
+    // The route animation owns native marker/trail layers, so rebind it to the
+    // (possibly new) map after a re-init/basemap swap without deriving
+    // open/closed state (project loads handle that via applyProjectState). It
+    // binds to either 2D engine through getStyleMap, so it sits above the
+    // native-map gate like the deck.gl overlay; on Cesium the plugin manager
+    // has already deactivated it and this only detaches the engine.
+    reattachRouteAnimation(appAPI);
     if (!engine.capabilities.nativeMapInstance) {
       void restoreLocalFileLayers();
       return;
@@ -1336,7 +1358,6 @@ export function DesktopShell({
     restoreThreeDTilesLayers(appAPI);
     restoreRasterLayers(appAPI);
     restorePlanetaryComputerLayers(appAPI);
-    restoreVectorLayers(appAPI);
     // Re-bind saved ArcGIS feature layers to the viewport. Without this a
     // reopened project's layer stays frozen on the extent it was saved with.
     restoreArcGISViewportLayers(appAPI);
@@ -1359,10 +1380,6 @@ export function DesktopShell({
       if (applyStacSearchLayerOrder(layerId, beforeId)) return;
       applyRasterLayerOrder(layerId, beforeId);
     });
-    // The route animation owns native marker/trail layers, so rebind it to the
-    // (possibly new) map after a re-init/basemap swap without deriving
-    // open/closed state (project loads handle that via applyProjectState).
-    reattachRouteAnimation(appAPI);
     // Rebind the directions tool to the (possibly new) map instance after a
     // map re-init, since restoreProjectState skips an already-active plugin.
     restoreDirections(appAPI, pluginManager.isActive(DIRECTIONS_PLUGIN_ID));
@@ -1375,9 +1392,6 @@ export function DesktopShell({
       pluginManager.deactivate(REVERSE_GEOCODE_PLUGIN_ID, appAPI);
     }
     restoreReverseGeocode(appAPI, pluginManager.isActive(REVERSE_GEOCODE_PLUGIN_ID));
-    // Same contract for the deck.gl overlay: re-attach it to the current map
-    // and re-render any deckgl-viz layers a restored project carries.
-    restoreDeckViz(appAPI, pluginManager.isActive(DECK_VIZ_PLUGIN_ID));
   }, [enforceViewerPlugins, externalPluginsReady, mapReadyGeneration, projectGeneration]);
 
   useEffect(() => {
@@ -1428,7 +1442,7 @@ export function DesktopShell({
     externalPluginsReady,
     projectUrlLoadState?.status === "loading" || dataUrlLoadState?.status === "loading",
     projectUrlLoadState?.error ?? dataUrlLoadState?.error ?? null,
-    cesiumPrimary,
+    primaryRenderer !== "maplibre",
   );
   const setObjectDetectionOpen = useAppStore((s) => s.setObjectDetectionOpen);
   const setSegmentEverythingOpen = useAppStore((s) => s.setSegmentEverythingOpen);
@@ -1445,7 +1459,7 @@ export function DesktopShell({
   // globe and the panel springs back the moment the user returns to 2D, long
   // after they meant to dismiss it (#2217 review).
   useEffect(() => {
-    if (!cesiumPrimary) return;
+    if (primaryRenderer === "maplibre") return;
     // Bump the readiness generation on the hand-off. It is no longer *reset*
     // (that is what left every consumer pointing at nothing on the globe), but
     // the reset did do one useful thing: it forced the generation-gated effects
@@ -1460,7 +1474,7 @@ export function DesktopShell({
     setBasemapExtractOpen(false);
     setObjectDetectionOpen(false);
     setSegmentEverythingOpen(false);
-  }, [cesiumPrimary, setObjectDetectionOpen, setSegmentEverythingOpen]);
+  }, [primaryRenderer, setObjectDetectionOpen, setSegmentEverythingOpen]);
 
   // Keep the on-map compass (reset pitch/bearing) control's tooltip translated.
   // Re-runs when the controller (re)initialises (mapReadyGeneration) and on
@@ -1507,6 +1521,8 @@ export function DesktopShell({
       // Frame ids for each time-animated overlay sequence (keyed by the loader's
       // group marker), so they can be gathered into one layer group afterward.
       const frameGroups = new Map<string, string[]>();
+      // The same for time-tagged KML placemark layers outside any Folder.
+      const placemarkFrameGroups = new Map<string, { name: string; ids: string[] }>();
       // KML Folder ancestry becomes nested GeoLibre groups. Prefix keys with
       // the source path so identically named folders from separate files do not
       // get combined when several files are imported in one batch.
@@ -1519,6 +1535,9 @@ export function DesktopShell({
       // whose placemarks are followed by an overlay or model is still
       // recognized as the last source imported.
       let lastSourcePath: string | null = null;
+      // Whether any time-tagged KML placemark layer was added, so the Time
+      // Slider opens even when every frame already sits in a KML Folder group.
+      let hasVectorTimeFrames = false;
       for (const layer of importedLayers) {
         if (layer.path) lastSourcePath = layer.path;
         if (isLoadedKmlSuperOverlay(layer)) {
@@ -1586,6 +1605,28 @@ export function DesktopShell({
           );
         }
         lastLayerId = addGeoJsonLayer(layerName, layer.data, layer.path);
+        // Time-tagged KML placemarks are Time Slider frames, animated through
+        // the same `metadata.timeSpan` visibility toggling as ground overlays.
+        if (layer.timeSpan) {
+          const frameId = lastLayerId;
+          // `addGeoJsonLayer` starts every layer with empty metadata.
+          useAppStore.getState().updateLayer(frameId, {
+            metadata: { timeSpan: layer.timeSpan },
+            ...(layer.visible === false ? { visible: false } : {}),
+          });
+          hasVectorTimeFrames = true;
+          // Frames outside any KML Folder are gathered into one group named
+          // after their file below; foldered frames already sit in their
+          // Folder groups.
+          if (layer.groupId && !layer.groupPath?.length) {
+            const group = placemarkFrameGroups.get(layer.groupId) ?? {
+              name: layerNameFromPath(layer.path),
+              ids: [],
+            };
+            group.ids.push(frameId);
+            placemarkFrameGroups.set(layer.groupId, group);
+          }
+        }
         if (layer.path) {
           const sourceIds = layerIdsBySource.get(layer.path) ?? [];
           sourceIds.push(lastLayerId);
@@ -1629,7 +1670,10 @@ export function DesktopShell({
             : t("kml.timeOverlayGroup");
         addLayerGroup(name, ids);
       });
-      const hasTimeAnimation = sequences.length > 0;
+      for (const { name, ids } of placemarkFrameGroups.values()) {
+        if (ids.length > 1) addLayerGroup(name, ids);
+      }
+      const hasTimeAnimation = sequences.length > 0 || hasVectorTimeFrames;
       // Auto-open the Time Slider so a time-animated overlay sequence can be
       // stepped through immediately, without the user hunting for the plugin.
       if (hasTimeAnimation && !isPluginActive(TIME_SLIDER_PLUGIN_ID)) {
@@ -2674,7 +2718,12 @@ export function DesktopShell({
                   where `PrimaryCesiumCanvas` explains the absence. Renderer-
                   neutral, store-driven overlays sit outside the branch and are
                   available under either engine. */}
-              {cesiumPrimary ? (
+              {primaryRenderer === "mapbox" ? (
+                <PrimaryMapboxCanvas
+                  engineRef={mapControllerRef}
+                  onEngineReady={handleMapControllerReady}
+                />
+              ) : cesiumPrimary ? (
                 <PrimaryCesiumCanvas
                   engineRef={mapControllerRef}
                   onEngineReady={handleMapControllerReady}
@@ -2803,7 +2852,7 @@ export function DesktopShell({
             displayName={t("shell.section.selectionPanels")}
           >
             <Suspense fallback={null}>
-              <SelectByExpressionDialog />
+              <SelectByExpressionDialog canEditLayer={collaboration.canEditLayer} />
             </Suspense>
             <Suspense fallback={null}>
               <SelectByLocationDialog />
