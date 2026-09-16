@@ -29,6 +29,28 @@ The entrypoint validates every setting at start and refuses to boot on a value
 that can never work (a colour that is not `#rrggbb`, a service that is not an
 http(s) URL), naming the variable.
 
+## Local `npm run dev` (no Docker)
+
+The Vite dev server serves this kit at the same URL prefixes as the container
+(`/init`, `/projects`, `/branding`). Point the app at those paths with `VITE_*`
+vars in `apps/geolibre-desktop/.env` or `.env.local` (restart `npm run dev`
+after editing):
+
+```bash
+# from the repo root
+printf '%s\n' \
+  'VITE_CATALOG_URLS=/init/catalogo-rapido.json' \
+  'VITE_START_PROJECT_URL=/projects/geoportale.geolibre.json' \
+  >> apps/geolibre-desktop/.env.local
+npm run dev
+```
+
+Then open `http://127.0.0.1:5173/init/catalogo-rapido.json` — you should see
+JSON, not the app shell. Use **`/init/catalogo-rapido.json`**, not a
+repo-relative path such as `deploy/emilia-romagna/init/...` (that URL does not
+exist under Vite). Mirror any other compose `GEOLIBRE_*` settings you need as
+`VITE_*` in the same file (Ion token, branding, geocoder, …).
+
 ## What each part configures
 
 | Setting                                                         | Feature                                                                                                                                                                                                                                                |

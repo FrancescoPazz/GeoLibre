@@ -11,6 +11,7 @@ import { bundledPlugins } from "./vite-plugins/bundled-plugins";
 import { copyCesiumAssets } from "./vite-plugins/copy-cesium-assets";
 import { copyRtlText } from "./vite-plugins/copy-rtl-text";
 import { copyVectorOps } from "./vite-plugins/copy-vector-ops";
+import { emiliaRomagnaKit } from "./vite-plugins/emilia-romagna-kit";
 import { proxyBinaryRequestGuarded } from "./vite-proxy-guard";
 
 const GEOAGENT_BROWSER_BUNDLE = "maplibre-gl-geoagent/dist/browser-";
@@ -1259,6 +1260,8 @@ export default defineConfig({
     duckdbWasmBundlesPlugin(),
     stripDuckDbWorkerSourcemapPlugin(),
     projectUrlQueryPlugin(),
+    // Same URL prefixes as deploy/emilia-romagna docker mounts, for local Catalog.
+    emiliaRomagnaKit(path.resolve(__dirname, "../../deploy/emilia-romagna")),
     bundledPlugins(path.resolve(__dirname, "public/plugins")),
     copyVectorOps(
       path.resolve(__dirname, "../../backend/geolibre_server/geolibre_server/vector_ops.py"),
