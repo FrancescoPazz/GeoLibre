@@ -32,24 +32,29 @@ http(s) URL), naming the variable.
 ## Local `npm run dev` (no Docker)
 
 The Vite dev server serves this kit at the same URL prefixes as the container
-(`/init`, `/projects`, `/branding`). Point the app at those paths with `VITE_*`
-vars in `apps/geolibre-desktop/.env` or `.env.local` (restart `npm run dev`
-after editing env or after dropping branding assets):
+(`/init`, `/projects`, `/branding`). Configure the app with the **same
+`GEOLIBRE_*` names as `docker-compose.yml`** in
+`apps/geolibre-desktop/.env` or `.env.local` — `vite.config.ts` bridges them
+to `VITE_*` the way the container entrypoint does. (`VITE_*` and bare names
+still work.) Restart `npm run dev` after editing env or after dropping
+branding assets.
 
 ```bash
-# from the repo root
+# from the repo root — minimal kit (or copy the GEOLIBRE_* block from
+# docker-compose.yml into apps/geolibre-desktop/.env.local as KEY=value lines)
 printf '%s\n' \
-  'VITE_CATALOG_URLS=/init/catalogo-rapido.json' \
-  'VITE_START_PROJECT_URL=/projects/geoportale.geolibre.json' \
-  'VITE_BRAND_NAME=Geoportale Emilia-Romagna' \
-  'VITE_BRAND_LOGO_URL=/branding/logo.svg' \
-  'VITE_BRAND_LOGO_LINK=https://geoportale.regione.emilia-romagna.it/' \
-  'VITE_BRAND_FAVICON_URL=/branding/favicon.png' \
-  'VITE_BRAND_ACCENT_COLOR=#519ac2' \
+  'GEOLIBRE_CATALOG_URLS=/init/catalogo-rapido.json' \
+  'GEOLIBRE_START_PROJECT_URL=/projects/geoportale.geolibre.json' \
+  'GEOLIBRE_BRAND_NAME=Geoportale Emilia-Romagna' \
+  'GEOLIBRE_BRAND_LOGO_URL=/branding/logo.svg' \
+  'GEOLIBRE_BRAND_LOGO_LINK=https://geoportale.regione.emilia-romagna.it/' \
+  'GEOLIBRE_BRAND_FAVICON_URL=/branding/favicon.png' \
+  'GEOLIBRE_BRAND_ACCENT_COLOR=#519ac2' \
   >> apps/geolibre-desktop/.env.local
 # Logo and favicon are not shipped; place them here so /branding/... resolves:
 #   deploy/emilia-romagna/branding/logo.svg
 #   deploy/emilia-romagna/branding/favicon.png
+# Fill secrets (Cesium, geocoder, microzonation, …) from this directory's `.env`.
 npm run dev
 ```
 
@@ -58,8 +63,10 @@ JSON, not the app shell. Use **`/init/catalogo-rapido.json`**, not a
 repo-relative path such as `deploy/emilia-romagna/init/...` (that URL does not
 exist under Vite). Name and accent apply from the env alone; logo and favicon
 need the files under `branding/` (then `http://127.0.0.1:5173/branding/logo.svg`
-works). Mirror any other compose `GEOLIBRE_*` settings you need as `VITE_*` in
-the same file (Ion token, geocoder, …).
+works).
+
+Docker-only settings (no Vite equivalent): `GEOLIBRE_DISABLE_SIDECAR`,
+`GEOPORTALE_PORT`, and the volume mounts.
 
 ## What each part configures
 

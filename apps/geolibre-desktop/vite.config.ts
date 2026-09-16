@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type { RollupLog, RollupOptions, WarningHandlerWithDefault } from "rollup";
+import type { LoggingFunction, RollupLog, RollupOptions } from "rollup";
 import { fileURLToPath } from "node:url";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
@@ -37,68 +37,61 @@ function resolveViteMode(): string {
   return process.env.NODE_ENV || "development";
 }
 
-// Vite only exposes `VITE_`-prefixed vars to the client, so the Google Maps key
-// is surfaced as `VITE_GOOGLE_MAPS_API_KEY`. Accept a bare `GOOGLE_MAPS_API_KEY`
-// too (handy for local shell/CI testing) and copy it into the prefixed name.
-// `loadEnv(mode, dir, "")` reads the app's `.env*` files with no prefix filter,
-// so a key placed in `apps/geolibre-desktop/.env.local` also works, not just a
-// real shell env var (process.env alone would miss the file).
 const CONFIG_DIR = path.dirname(fileURLToPath(import.meta.url));
+// `loadEnv(mode, dir, "")` reads the app's `.env*` files with no prefix filter,
+// so a key in `apps/geolibre-desktop/.env.local` is visible here (process.env
+// alone would miss the file).
 const FILE_ENV = loadEnv(resolveViteMode(), CONFIG_DIR, "");
 
-// A managed build can use the server-side AI proxy without embedding any
-// provider credential. Only its public endpoint and selected model enter the
-// client bundle.
+// ---------------------------------------------------------------------------
+// Deployment env bridge (Docker compose ↔ Vite `.env.local`)
+//
+// The container takes `GEOLIBRE_<NAME>` and the entrypoint publishes
+// `VITE_<NAME>` (see docker/entrypoint.sh). For `npm run dev`, the same
+// `GEOLIBRE_*` names — or bare `<NAME>` / `VITE_<NAME>` — in
+// apps/geolibre-desktop/.env.local are accepted here so a kit can be
+// configured once and used under both Docker and Vite.
+// ---------------------------------------------------------------------------
+
+/**
+ * First non-empty candidate, looking up shell env then the app's `.env*` files.
+ */
+function firstEnv(...names: string[]): string | undefined {
+  for (const name of names) {
+    const fromProcess = process.env[name];
+    if (fromProcess) return fromProcess;
+    const fromFile = FILE_ENV[name];
+    if (fromFile) return fromFile;
+  }
+  return undefined;
+}
+
+/**
+ * Surface a deployment setting as `VITE_<bareName>` (or an explicit viteName).
+ * Accepts, in order: already-set vite name, `GEOLIBRE_<bare>`, bare name, then
+ * the same three from `.env*` files.
+ */
+function bridgeDeploymentVar(bareName: string, viteName = `VITE_${bareName}`): void {
+  if (process.env[viteName]) return;
+  const value = firstEnv(viteName, `GEOLIBRE_${bareName}`, bareName);
+  if (value) process.env[viteName] = value;
+}
+
+// Managed AI proxy: only the public endpoint/model enter the client bundle.
 for (const name of ["GEOLIBRE_AI_URL", "GEOLIBRE_AI_MODEL"] as const) {
   const viteName = `VITE_${name}`;
   if (!process.env[viteName]) {
-    const value = process.env[name] || FILE_ENV[viteName] || FILE_ENV[name];
+    const value = firstEnv(viteName, name);
     if (value) process.env[viteName] = value;
   }
 }
-if (!process.env.VITE_GOOGLE_MAPS_API_KEY) {
-  const googleMapsApiKey =
-    process.env.GOOGLE_MAPS_API_KEY ||
-    FILE_ENV.VITE_GOOGLE_MAPS_API_KEY ||
-    FILE_ENV.GOOGLE_MAPS_API_KEY;
-  if (googleMapsApiKey) {
-    process.env.VITE_GOOGLE_MAPS_API_KEY = googleMapsApiKey;
-  }
-}
 
-// Cesium Ion token for the 3D-globe view: same bare→prefixed bridge as the
-// Google Maps key. A bare `CESIUM_TOKEN` (shell or .env file) is surfaced as
-// `VITE_CESIUM_TOKEN` so `import.meta.env` exposes it, and getCesiumIonToken()
-// then lets a runtime Settings override win over this build-time value.
-if (!process.env.VITE_CESIUM_TOKEN) {
-  const cesiumToken =
-    process.env.CESIUM_TOKEN || FILE_ENV.VITE_CESIUM_TOKEN || FILE_ENV.CESIUM_TOKEN;
-  if (cesiumToken) {
-    process.env.VITE_CESIUM_TOKEN = cesiumToken;
-  }
-}
+bridgeDeploymentVar("GOOGLE_MAPS_API_KEY", "VITE_GOOGLE_MAPS_API_KEY");
+bridgeDeploymentVar("CESIUM_TOKEN");
+bridgeDeploymentVar("CESIUM_TERRAIN_ASSET_ID");
+bridgeDeploymentVar("ELEVATION_MEAN_SEA_LEVEL");
 
-// The deployment's own Ion terrain asset, if it has one: the same bridge, so a
-// bare `CESIUM_TERRAIN_ASSET_ID` next to `CESIUM_TOKEN` reaches
-// getCesiumTerrainAssetId() and the globe loads that asset instead of World
-// Terrain. Not a credential — it is just an id — but it is only meaningful
-// with the token that owns the asset.
-// Whether elevations default to mean sea level (EGM96) rather than the
-// ellipsoid: same bridge, for deployments that set the bare name.
-if (!process.env.VITE_ELEVATION_MEAN_SEA_LEVEL) {
-  const msl =
-    process.env.ELEVATION_MEAN_SEA_LEVEL ||
-    FILE_ENV.VITE_ELEVATION_MEAN_SEA_LEVEL ||
-    FILE_ENV.ELEVATION_MEAN_SEA_LEVEL;
-  if (msl) {
-    process.env.VITE_ELEVATION_MEAN_SEA_LEVEL = msl;
-  }
-}
-
-// The deployment's feedback channel (a page or a mailto: address, with an
-// optional subject): same bridge. Not a secret; it is shown to every user.
-// The deployment's place-name service for the status bar (Where am I):
-// same bridge, same reasoning.
+// Application settings shared with docker-compose / entrypoint APP_SETTINGS.
 for (const key of [
   "FEEDBACK_URL",
   "FEEDBACK_SUBJECT",
@@ -117,6 +110,11 @@ for (const key of [
   "START_PROJECT_URL",
   "LOGIN_SERVICE_URL",
   "USER_PROFILES",
+  "GEOCODER_PROVIDER",
+  "GEOCODER_ENDPOINT",
+  "GEOCODER_REVERSE_ENDPOINT",
+  "GEOCODER_API_KEY",
+  "GEOCODER_EMAIL",
   "MICROZONATION_URL",
   "MICROZONATION_PROJECTS_LAYER",
   "MICROZONATION_TYPENAME",
@@ -127,22 +125,12 @@ for (const key of [
   "GLOBE_TRANSLUCENCY",
   "GLOBE_COLLISION_DETECTION",
   "RELATED_MAPS",
-]) {
-  if (!process.env[`VITE_${key}`]) {
-    const value = process.env[key] || FILE_ENV[`VITE_${key}`] || FILE_ENV[key];
-    if (value) process.env[`VITE_${key}`] = value;
-  }
+] as const) {
+  bridgeDeploymentVar(key);
 }
 
-if (!process.env.VITE_CESIUM_TERRAIN_ASSET_ID) {
-  const cesiumTerrainAssetId =
-    process.env.CESIUM_TERRAIN_ASSET_ID ||
-    FILE_ENV.VITE_CESIUM_TERRAIN_ASSET_ID ||
-    FILE_ENV.CESIUM_TERRAIN_ASSET_ID;
-  if (cesiumTerrainAssetId) {
-    process.env.VITE_CESIUM_TERRAIN_ASSET_ID = cesiumTerrainAssetId;
-  }
-}
+// Share host keeps "GEOLIBRE" in the VITE_ name the app reads.
+bridgeDeploymentVar("SHARE_URL", "VITE_GEOLIBRE_SHARE_URL");
 
 // Mapbox access token for the basemap control's Mapbox styles: same
 // bare→prefixed bridge as the Google Maps and Cesium keys. `MAPBOX_TOKEN` is the
@@ -150,8 +138,11 @@ if (!process.env.VITE_CESIUM_TERRAIN_ASSET_ID) {
 // file and surface it as `VITE_MAPBOX_ACCESS_TOKEN`; getMapboxAccessToken() then
 // lets a runtime Settings override win over this build-time value.
 if (!process.env.VITE_MAPBOX_ACCESS_TOKEN) {
-  const mapboxAccessToken =
-    process.env.MAPBOX_TOKEN || FILE_ENV.VITE_MAPBOX_ACCESS_TOKEN || FILE_ENV.MAPBOX_TOKEN;
+  const mapboxAccessToken = firstEnv(
+    "VITE_MAPBOX_ACCESS_TOKEN",
+    "MAPBOX_TOKEN",
+    "GEOLIBRE_MAPBOX_TOKEN",
+  );
   if (mapboxAccessToken) {
     process.env.VITE_MAPBOX_ACCESS_TOKEN = mapboxAccessToken;
   }
@@ -163,10 +154,11 @@ if (!process.env.VITE_MAPBOX_ACCESS_TOKEN) {
 // the prefixed name here; otherwise Vite ignores the unprefixed var and the
 // plugin falls back to its hardcoded DEFAULT_GEE_OAUTH_CLIENT_ID.
 if (!process.env.VITE_GEE_OAUTH_CLIENT_ID) {
-  const geeOauthClientId =
-    process.env.GEE_OAUTH_CLIENT_ID ||
-    FILE_ENV.VITE_GEE_OAUTH_CLIENT_ID ||
-    FILE_ENV.GEE_OAUTH_CLIENT_ID;
+  const geeOauthClientId = firstEnv(
+    "VITE_GEE_OAUTH_CLIENT_ID",
+    "GEE_OAUTH_CLIENT_ID",
+    "GEOLIBRE_GEE_OAUTH_CLIENT_ID",
+  );
   if (geeOauthClientId) {
     process.env.VITE_GEE_OAUTH_CLIENT_ID = geeOauthClientId;
   }
@@ -716,7 +708,7 @@ function manualChunks(id: string): string | undefined {
   return undefined;
 }
 
-function onwarn(warning: RollupLog, defaultHandler: WarningHandlerWithDefault): void {
+function onwarn(warning: RollupLog, defaultHandler: LoggingFunction): void {
   if (
     warning.code === "EVAL" &&
     typeof warning.id === "string" &&
