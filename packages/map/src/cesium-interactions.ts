@@ -5,8 +5,14 @@ import {
   useAppStore,
 } from "@geolibre/core";
 import type { Cartesian2, CesiumWidget } from "@cesium/engine";
+import type { Feature } from "geojson";
 import type { CesiumEngine } from "./cesium-engine";
-import { createHoverTooltipElement, createIdentifyPopupElement } from "./feature-popup";
+import {
+  createHoverTooltipElement,
+  createIdentifyPopupElement,
+  resolveIdentifyPopupFooter,
+  type IdentifyPopupExtras,
+} from "./feature-popup";
 
 /** Globe input uses the same popup field, expression and sanitization path as 2D. */
 export function installCesiumInteractions(
@@ -14,6 +20,7 @@ export function installCesiumInteractions(
   viewer: CesiumWidget,
   engine: CesiumEngine,
   closeLabel: () => string = () => "Close",
+  popupExtras: () => IdentifyPopupExtras | undefined = () => undefined,
 ): () => void {
   const handler = new C.ScreenSpaceEventHandler(viewer.canvas);
   const host = viewer.canvas.parentElement!;
@@ -116,17 +123,29 @@ export function installCesiumInteractions(
     );
     const content = document.createElement("div");
     let selected = false;
+    const pointer = engine.readPointerAtScreen(event.position);
+    const location = pointer
+      ? { lng: pointer.coordinates[0], lat: pointer.coordinates[1], alt: pointer.elevation }
+      : null;
     for (const hit of hits) {
       const layer = state.layers.find((item) => item.id === hit.layerId);
       if (!layer || !isPopupClickEnabled(layer.popup)) continue;
+      const feature: Feature | null = hit.geometry
+        ? { type: "Feature", properties: hit.properties, geometry: hit.geometry }
+        : null;
       content.append(
         createIdentifyPopupElement(layer.name, hit.properties, hit.featureId ?? undefined, {
           popup: layer.popup,
           fieldVisibility: layer.fieldVisibility,
-          feature: hit.geometry
-            ? { type: "Feature", properties: hit.properties, geometry: hit.geometry }
-            : null,
+          feature,
           zoom: engine.readView().zoom,
+          footer: resolveIdentifyPopupFooter(
+            popupExtras(),
+            location,
+            layer.id,
+            feature,
+            hit.featureId ?? undefined,
+          ),
         }),
       );
       if (!selected) {

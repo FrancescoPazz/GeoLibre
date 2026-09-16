@@ -1,3 +1,4 @@
+import { getRelatedMaps } from "@geolibre/core";
 import {
   Button,
   DropdownMenu,
@@ -5,6 +6,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@geolibre/ui";
 import {
@@ -15,6 +19,7 @@ import {
   Globe,
   Info,
   Keyboard,
+  Map as MapIcon,
   MessageSquare,
   RefreshCw,
   Search,
@@ -70,6 +75,8 @@ export function HelpMenu({
     if (viewer && (id === "help.commandPalette" || id === "help.keyboardShortcuts")) return false;
     return isMenuItemVisible(uiProfile, id);
   };
+  // Read once per render: the env does not change while the menu is open.
+  const relatedMaps = getRelatedMaps();
 
   return (
     <DropdownMenu>
@@ -120,7 +127,34 @@ export function HelpMenu({
             {t("toolbar.command.githubRepository")}
           </DropdownMenuItem>
         )}
-        {(show("help.website") || show("help.github")) &&
+        {/* The deployment's sister portals (RELATED_MAPS), each opening in a
+            new tab — the geoportal's "mappe correlate" list. */}
+        {show("help.relatedMaps") && relatedMaps.length > 0 && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <MapIcon className="h-3.5 w-3.5" />
+              {t("toolbar.command.relatedMaps")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="max-w-xs">
+              {relatedMaps.map((map) => (
+                <DropdownMenuItem
+                  key={map.url}
+                  title={map.description ?? map.url}
+                  onSelect={() => void openExternalLink(map.url)}
+                  className="flex-col items-start gap-0.5"
+                >
+                  <span>{map.title}</span>
+                  {map.description ? (
+                    <span className="line-clamp-2 text-xs text-muted-foreground">
+                      {map.description}
+                    </span>
+                  ) : null}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        )}
+        {(show("help.website") || show("help.github") || relatedMaps.length > 0) &&
           (show("help.diagnostics") ||
             show("help.feedback") ||
             show("help.checkForUpdates") ||

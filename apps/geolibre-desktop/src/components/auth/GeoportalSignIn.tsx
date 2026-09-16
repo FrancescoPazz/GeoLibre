@@ -15,7 +15,7 @@ import {
   Input,
   Label,
 } from "@geolibre/ui";
-import { LogIn, LogOut, UserRound } from "lucide-react";
+import { Eye, EyeOff, LogIn, LogOut, UserRound } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useGeoportalLoginConfig, useGeoportalSession } from "../../hooks/useGeoportalSession";
@@ -34,6 +34,7 @@ export function GeoportalSignIn() {
   const [open, setOpen] = useState(false);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -48,6 +49,7 @@ export function GeoportalSignIn() {
     setBusy(false);
     setError(null);
     setPassword("");
+    setShowPassword(false);
   };
 
   const submit = async (event: FormEvent) => {
@@ -152,14 +154,40 @@ export function GeoportalSignIn() {
             </div>
             <div className="space-y-1">
               <Label htmlFor="geoportal-password">{t("geoportalSignIn.password")}</Label>
-              <Input
-                id="geoportal-password"
-                type="password"
-                autoComplete="current-password"
-                disabled={busy}
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-              />
+              {/* An eye button reveals what was typed, since a long
+                  password mistyped once is the usual reason a sign-in fails. */}
+              <div className="relative">
+                <Input
+                  id="geoportal-password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  className="pe-9"
+                  disabled={busy}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="absolute end-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
+                  aria-label={
+                    showPassword
+                      ? t("geoportalSignIn.hidePassword")
+                      : t("geoportalSignIn.showPassword")
+                  }
+                  aria-pressed={showPassword}
+                  title={
+                    showPassword
+                      ? t("geoportalSignIn.hidePassword")
+                      : t("geoportalSignIn.showPassword")
+                  }
+                  disabled={busy}
+                  onClick={() => setShowPassword((value) => !value)}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+              </div>
             </div>
             {error ? (
               <p className="text-xs text-destructive" role="alert">

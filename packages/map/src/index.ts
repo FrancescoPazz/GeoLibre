@@ -1,4 +1,12 @@
 export {
+  createIdentifyPopupFooter,
+  formatPopupCoordinates,
+  resolveIdentifyPopupFooter,
+  type IdentifyPopupExtras,
+  type IdentifyPopupFooter,
+  type IdentifyPopupFooterLabels,
+} from "./feature-popup";
+export {
   MapCanvas,
   type MapCanvasIdentifyAllLabels,
   type MapCanvasProps,

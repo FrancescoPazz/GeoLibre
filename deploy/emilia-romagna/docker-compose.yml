@@ -60,6 +60,12 @@ services:
       GEOLIBRE_MICROZONATION_TYPENAME: "${GEOLIBRE_MICROZONATION_TYPENAME:-}"
       GEOLIBRE_MICROZONATION_DOCUMENTS_LAYER: "${GEOLIBRE_MICROZONATION_DOCUMENTS_LAYER:-}"
       GEOLIBRE_MICROZONATION_PLANS_URL: "${GEOLIBRE_MICROZONATION_PLANS_URL:-}"
+      # The globe's look and the sister portals (Help → Related maps); both
+      # optional — uncomment to set. See the README for the values.
+      # GEOLIBRE_GLOBE_TRANSLUCENCY: "0.5"
+      # GEOLIBRE_GLOBE_COLLISION_DETECTION: "0"
+      # GEOLIBRE_GLOBE_COLOR: "#1e2a3b"
+      # GEOLIBRE_RELATED_MAPS: '[{"title":"Geoportale Emilia-Romagna","url":"https://geoportale.regione.emilia-romagna.it/","description":"Il geoportale 2D della Regione"}]'
       # Keep projects on this instance only; no sidecar unless processing is wanted.
       GEOLIBRE_SHARE_URL: "off"
       GEOLIBRE_DISABLE_SIDECAR: "${GEOLIBRE_DISABLE_SIDECAR:-1}"

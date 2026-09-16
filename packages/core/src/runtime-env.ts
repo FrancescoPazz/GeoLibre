@@ -221,6 +221,103 @@ export function getElevationMeanSeaLevelDefault(env?: Record<string, string | un
   return raw === "1" || raw === "true" || raw === "yes";
 }
 
+/**
+ * How the 3D globe itself looks and behaves, apart from its imagery: the
+ * three settings the geoportal exposed as `cesiumGlobeColor`,
+ * `globeTranslucency` and `collisionDetection`. Each is optional; an unset
+ * one leaves Cesium's own default alone.
+ */
+export interface GlobeAppearance {
+  /** The globe's base colour (`#rrggbb`), seen where no imagery covers it. */
+  color?: string;
+  /**
+   * Front-face alpha of a see-through globe (0 < alpha < 1), so underground
+   * models and tunnels show; `1` (or unset) is an opaque globe.
+   */
+  translucency?: number;
+  /** Whether the camera is kept above the terrain (Cesium's default is on). */
+  collisionDetection?: boolean;
+}
+
+function parseGlobeTranslucency(raw: string | undefined): number | undefined {
+  const text = raw?.trim().toLowerCase();
+  if (!text) return undefined;
+  if (text === "1" || text === "true" || text === "yes") return 0.5;
+  if (text === "0" || text === "false" || text === "no") return 1;
+  const value = Number(text);
+  return Number.isFinite(value) && value >= 0 && value <= 1 ? value : undefined;
+}
+
+/**
+ * The deployment's defaults for the globe's appearance: `GLOBE_COLOR` (an
+ * `#rrggbb` colour), `GLOBE_TRANSLUCENCY` (`1`/`true` for a half-transparent
+ * globe, or an alpha between 0 and 1) and `GLOBE_COLLISION_DETECTION`
+ * (`1`/`0`), each also accepted with the `VITE_` prefix. The user can change
+ * all three in the terrain settings while the globe is up.
+ */
+export function getGlobeAppearanceDefaults(
+  env?: Record<string, string | undefined>,
+): GlobeAppearance {
+  const runtimeEnv = env ?? getRuntimeEnvironment();
+  const out: GlobeAppearance = {};
+  const color = (runtimeEnv.VITE_GLOBE_COLOR ?? runtimeEnv.GLOBE_COLOR)?.trim();
+  if (color && /^#[0-9a-fA-F]{6}$/.test(color)) out.color = color.toLowerCase();
+  const translucency = parseGlobeTranslucency(
+    runtimeEnv.VITE_GLOBE_TRANSLUCENCY ?? runtimeEnv.GLOBE_TRANSLUCENCY,
+  );
+  if (translucency !== undefined) out.translucency = translucency;
+  const collision = (
+    runtimeEnv.VITE_GLOBE_COLLISION_DETECTION ?? runtimeEnv.GLOBE_COLLISION_DETECTION
+  )
+    ?.trim()
+    .toLowerCase();
+  if (collision === "1" || collision === "true" || collision === "yes")
+    out.collisionDetection = true;
+  else if (collision === "0" || collision === "false" || collision === "no")
+    out.collisionDetection = false;
+  return out;
+}
+
+/** A sibling portal the deployment points its users to from Help → Related maps. */
+export interface RelatedMap {
+  title: string;
+  url: string;
+  description?: string;
+  imageUrl?: string;
+}
+
+/**
+ * The deployment's related maps: `RELATED_MAPS` (or `VITE_RELATED_MAPS`) as a
+ * JSON array of `{ title, url, description?, imageUrl? }` — the geoportal's
+ * `relatedMaps` list, which linked its sister portals. Entries without a
+ * title or an http(s) url are dropped; malformed JSON yields an empty list.
+ */
+export function getRelatedMaps(env?: Record<string, string | undefined>): RelatedMap[] {
+  const runtimeEnv = env ?? getRuntimeEnvironment();
+  const raw = (runtimeEnv.VITE_RELATED_MAPS ?? runtimeEnv.RELATED_MAPS)?.trim();
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const out: RelatedMap[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== "object") continue;
+    const { title, url, description, imageUrl } = entry as Record<string, unknown>;
+    if (typeof title !== "string" || !title.trim()) continue;
+    if (typeof url !== "string" || !/^https?:\/\//i.test(url.trim())) continue;
+    const map: RelatedMap = { title: title.trim(), url: url.trim() };
+    if (typeof description === "string" && description.trim()) map.description = description.trim();
+    if (typeof imageUrl === "string" && /^https?:\/\//i.test(imageUrl.trim()))
+      map.imageUrl = imageUrl.trim();
+    out.push(map);
+  }
+  return out;
+}
+
 /** Where Help → Give feedback goes: a web page or a pre-addressed e-mail. */
 export interface FeedbackTarget {
   kind: "web" | "mailto";

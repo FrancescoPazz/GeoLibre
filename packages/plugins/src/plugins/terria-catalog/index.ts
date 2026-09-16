@@ -72,6 +72,10 @@ export interface TerriaCatalogLabels {
   accessDenied: string;
   /** Badge on a restricted entry the user may not open. */
   locked: string;
+  /** The style picker on a WMS entry that lists the styles to choose from. */
+  style: string;
+  /** The panel checkbox: fly to an entry's extent when it is added. */
+  zoomOnAdd: string;
   add: string;
   remove: string;
   adding: (name: string) => string;
@@ -98,6 +102,8 @@ export const DEFAULT_TERRIA_CATALOG_LABELS: TerriaCatalogLabels = {
   signInRequired: "Sign in to open this entry.",
   accessDenied: "Your account may not open this entry.",
   locked: "Restricted entry",
+  style: "Style",
+  zoomOnAdd: "Zoom to an entry when it is added",
   add: "Add to map",
   remove: "Remove from map",
   adding: (name) => `Adding ${name}…`,
@@ -113,6 +119,8 @@ export const DEFAULT_TERRIA_CATALOG_LABELS: TerriaCatalogLabels = {
 /** Network and layer-adding seams, replaceable for tests. */
 export interface TerriaCatalogAdapters {
   fetchText: (url: string, signal?: AbortSignal) => Promise<string>;
+  /** POST a JSON body and read a JSON reply (the Google tile session). */
+  postJson: (url: string, body: unknown) => Promise<unknown>;
   addArcGis: typeof addArcGISLayer;
   fetchArcGisSublayers: typeof fetchArcGISMapServiceSublayers;
 }
@@ -125,6 +133,15 @@ const defaultAdapters: TerriaCatalogAdapters = {
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     return response.text();
+  },
+  postJson: async (url, body) => {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
   },
   addArcGis: addArcGISLayer,
   fetchArcGisSublayers: fetchArcGISMapServiceSublayers,
@@ -141,6 +158,8 @@ interface CatalogSource {
 
 export interface TerriaCatalogState {
   sources: Array<{ url: string; loaded: boolean; loading: boolean; error: string | null }>;
+  /** The panel checkbox: fly to an entry when it is added. */
+  zoomOnAdd: boolean;
   /** Catalog item ids currently on the map, with their layer ids. */
   added: Record<string, string>;
   busy: string[];
@@ -155,6 +174,12 @@ const expanded = new Set<string>();
 const busy = new Set<string>();
 let query = "";
 let status: string | null = null;
+/**
+ * Whether adding an entry also flies the map to its `rectangle` — the
+ * geoportal previewed an entry by zooming to it; here the map is the
+ * preview, so it is a choice in the panel, off by default.
+ */
+let zoomOnAdd = false;
 let unregisterPanel: (() => void) | null = null;
 let disposePanel: (() => void) | null = null;
 let rerender: (() => void) | null = null;
@@ -210,7 +235,15 @@ export function getTerriaCatalogState(): TerriaCatalogState {
     added,
     busy: [...busy],
     status,
+    zoomOnAdd,
   };
+}
+
+/** Fly to an entry's `rectangle` when it is added (the panel's checkbox). */
+export function setCatalogZoomOnAdd(enabled: boolean): void {
+  if (enabled === zoomOnAdd) return;
+  zoomOnAdd = enabled;
+  notify();
 }
 
 /** Catalog URLs the deployment names (`VITE_CATALOG_URLS` / `CATALOG_URLS`, comma or whitespace separated). */
@@ -317,6 +350,7 @@ export async function expandMapServerGroup(
       kind: "item",
       id: `${groupId}/${sub.id}`,
       name: sub.name,
+      styleNamesBeforeTitles: false,
       type: "esri-mapServer",
       supported: true,
       url: node.url,
@@ -373,7 +407,23 @@ async function arcgisSublayerIds(item: CatalogItem): Promise<string | undefined>
   return resolved.length ? resolved.join(",") : undefined;
 }
 
-async function addLayerFor(app: GeoLibreAppAPI, item: CatalogItem): Promise<string> {
+/** The WMS style an item is drawn with: the chosen one, else `styles`, else the first of `stylesToUse`. */
+export function catalogItemWmsStyle(item: CatalogItem, chosen?: string): string | undefined {
+  if (chosen && (!item.stylesToUse || item.stylesToUse.includes(chosen))) return chosen;
+  return item.styles ?? item.stylesToUse?.[0];
+}
+
+/** How the style picker labels a style: its title when known and wanted, else its name. */
+export function catalogItemStyleLabel(item: CatalogItem, style: string): string {
+  if (item.styleNamesBeforeTitles) return style;
+  return item.styleTitles?.[style] ?? style;
+}
+
+async function addLayerFor(
+  app: GeoLibreAppAPI,
+  item: CatalogItem,
+  options: { style?: string } = {},
+): Promise<string> {
   const common = {
     attribution: item.attribution,
     opacity: item.opacity,
@@ -385,7 +435,7 @@ async function addLayerFor(app: GeoLibreAppAPI, item: CatalogItem): Promise<stri
       const id = app.addWmsLayer?.(item.name, {
         url: item.url,
         layers: item.layers,
-        styles: item.styles,
+        styles: catalogItemWmsStyle(item, options.style),
         format: item.parameters?.format ?? item.parameters?.FORMAT,
         version: item.parameters?.version ?? item.parameters?.VERSION,
         transparent: true,
@@ -436,6 +486,32 @@ async function addLayerFor(app: GeoLibreAppAPI, item: CatalogItem): Promise<stri
       const options = rerPoiOptionsFromCatalogItem(item);
       if (!options) throw new Error("POI item without url");
       return addRerPoiLayer(app, options);
+    }
+    case "google-tile-maps": {
+      // Google's 2D Map Tiles API: a session token per map type, language
+      // and region, then plain XYZ tiles carrying the session and the key.
+      const google = item.googleTiles;
+      if (!google) throw new Error("Google tile item without key");
+      const session = (await adapters.postJson(
+        `https://tile.googleapis.com/v1/createSession?key=${encodeURIComponent(google.key)}`,
+        {
+          mapType: google.mapType,
+          language: google.language ?? "",
+          region: google.region ?? "",
+        },
+      )) as { session?: unknown } | null;
+      if (!session || typeof session.session !== "string" || !session.session)
+        throw new Error("Google tile session not granted");
+      const template =
+        `https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}` +
+        `?session=${encodeURIComponent(session.session)}&key=${encodeURIComponent(google.key)}`;
+      const id = app.addTileLayer?.(item.name, template, {
+        ...common,
+        attribution: item.attribution ?? "Google",
+        maxzoom: 22,
+      });
+      if (!id) throw new Error("addTileLayer unavailable");
+      return id;
     }
     case "open-street-map": {
       if (!item.url) throw new Error("Tile item without url");
@@ -496,14 +572,23 @@ export function popupFieldsForProfile(
 }
 
 /** What a catalog item asks of the layer beyond its data: style, popup, capabilities, metadata. */
-function configureLayerFromItem(layerId: string, item: CatalogItem, sourceUrl: string): void {
+function configureLayerFromItem(
+  layerId: string,
+  item: CatalogItem,
+  sourceUrl: string,
+  style?: string,
+): void {
   const store = useAppStore.getState();
   const layer = store.layers.find((l) => l.id === layerId);
   if (!layer) return;
   const patch: Partial<GeoLibreLayer> = {};
   const metadata: Record<string, unknown> = {
     ...layer.metadata,
-    [CATALOG_LAYER_METADATA_KEY]: { source: sourceUrl, item: item.id },
+    [CATALOG_LAYER_METADATA_KEY]: {
+      source: sourceUrl,
+      item: item.id,
+      ...(style ? { style } : {}),
+    },
   };
   if (item.useAuthentication) metadata[USE_AUTHENTICATION_METADATA_KEY] = true;
   if (item.queryableProperties)
@@ -641,8 +726,15 @@ function checkAccess(item: CatalogItem): boolean {
   return false;
 }
 
-/** Add the catalog item to the map as a layer tagged with its catalog id. */
-export async function addCatalogItem(sourceUrl: string, itemId: string): Promise<string | null> {
+/**
+ * Add the catalog item to the map as a layer tagged with its catalog id.
+ * `style` picks one of a WMS item's `stylesToUse` for this add.
+ */
+export async function addCatalogItem(
+  sourceUrl: string,
+  itemId: string,
+  options: { style?: string } = {},
+): Promise<string | null> {
   const app = appRef;
   const source = sourceOf(sourceUrl);
   const item = source ? findItem(source, itemId) : null;
@@ -654,9 +746,11 @@ export async function addCatalogItem(sourceUrl: string, itemId: string): Promise
   status = labels.adding(item.name);
   notify();
   try {
-    const layerId = await addLayerFor(app, item);
+    const layerId = await addLayerFor(app, item, options);
     if (!appRef) return null;
-    configureLayerFromItem(layerId, item, sourceUrl);
+    const style = item.type === "wms" ? catalogItemWmsStyle(item, options.style) : undefined;
+    configureLayerFromItem(layerId, item, sourceUrl, style);
+    if (zoomOnAdd && item.extent) app.fitBounds?.(item.extent);
     status = labels.added(item.name);
     return layerId;
   } catch (error) {
@@ -681,6 +775,49 @@ export function removeCatalogItem(sourceUrl: string, itemId: string): boolean {
 export async function toggleCatalogItem(sourceUrl: string, itemId: string): Promise<void> {
   if (removeCatalogItem(sourceUrl, itemId)) return;
   await addCatalogItem(sourceUrl, itemId);
+}
+
+/** The WMS style the added layer for this item was drawn with, or the item's default. */
+export function getCatalogItemStyle(sourceUrl: string, itemId: string): string | undefined {
+  const source = sourceOf(sourceUrl);
+  const item = source ? findItem(source, itemId) : null;
+  if (!item) return undefined;
+  const layer = addedLayers().get(`${sourceUrl}|${itemId}`);
+  const tag = layer?.metadata?.[CATALOG_LAYER_METADATA_KEY] as { style?: unknown } | undefined;
+  return catalogItemWmsStyle(item, typeof tag?.style === "string" ? tag.style : undefined);
+}
+
+/**
+ * Draw a WMS item with another of its `stylesToUse`: the layer is re-added
+ * with the style (its position in the list is kept) or, if the item is not
+ * on the map yet, added with it.
+ */
+export async function setCatalogItemStyle(
+  sourceUrl: string,
+  itemId: string,
+  style: string,
+): Promise<string | null> {
+  const source = sourceOf(sourceUrl);
+  const item = source ? findItem(source, itemId) : null;
+  if (!item || item.type !== "wms" || !item.stylesToUse?.includes(style)) return null;
+  const current = addedLayers().get(`${sourceUrl}|${itemId}`);
+  if (current) {
+    if (getCatalogItemStyle(sourceUrl, itemId) === style) return current.id;
+    const store = useAppStore.getState();
+    const index = store.layers.findIndex((l) => l.id === current.id);
+    const next = store.layers[index + 1];
+    store.removeLayer(current.id);
+    const id = await addCatalogItem(sourceUrl, itemId, { style });
+    if (id && next) {
+      // Back where the layer was: `addLayer` appended it at the end.
+      const layers = useAppStore.getState().layers;
+      const from = layers.findIndex((l) => l.id === id);
+      const to = layers.findIndex((l) => l.id === next.id);
+      if (from >= 0 && to >= 0 && from !== to) useAppStore.getState().moveLayer(id, to);
+    }
+    return id;
+  }
+  return addCatalogItem(sourceUrl, itemId, { style });
 }
 
 /** A catalog entry matched by the search box, with where it sits in the tree. */
@@ -773,6 +910,13 @@ const styles = {
     "border-radius:3px;padding:0 4px;",
   caret: "width:14px;display:inline-block;text-align:center;color:hsl(var(--muted-foreground));",
   check: "width:14px;display:inline-block;text-align:center;",
+  checkRow:
+    "display:flex;align-items:center;gap:6px;font-size:11px;color:hsl(var(--muted-foreground));" +
+    "cursor:pointer;user-select:none;",
+  stylePicker:
+    "margin-inline-start:auto;max-width:45%;font-size:11px;padding:1px 2px;" +
+    "border:1px solid hsl(var(--border));border-radius:4px;" +
+    "background:hsl(var(--background));color:hsl(var(--foreground));",
 } as const;
 
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -824,6 +968,27 @@ function renderItem(
       void toggleCatalogItem(source.url, item.id);
     });
     row.setAttribute("aria-label", `${isAdded ? labels.remove : labels.add}: ${item.name}`);
+  }
+  // A WMS item that lists the styles a user may pick from gets a picker on
+  // its row; changing it redraws the layer (or adds it) with that style.
+  if (item.supported && item.type === "wms" && (item.stylesToUse?.length ?? 0) > 1 && accessible) {
+    const picker = element("select", undefined, styles.stylePicker);
+    picker.title = labels.style;
+    picker.setAttribute("aria-label", `${labels.style}: ${item.name}`);
+    picker.dataset.catalogStylePicker = item.id;
+    const current = getCatalogItemStyle(source.url, item.id);
+    for (const name of item.stylesToUse ?? []) {
+      const option = element("option", catalogItemStyleLabel(item, name));
+      option.value = name;
+      option.selected = name === current;
+      picker.appendChild(option);
+    }
+    picker.addEventListener("click", (event) => event.stopPropagation());
+    picker.addEventListener("change", (event) => {
+      event.stopPropagation();
+      void setCatalogItemStyle(source.url, item.id, picker.value);
+    });
+    row.appendChild(picker);
   }
   list.appendChild(row);
 }
@@ -927,10 +1092,17 @@ function buildPanel(container: HTMLElement): () => void {
   searchInput.placeholder = labels.searchPlaceholder;
   searchInput.value = query;
   searchInput.addEventListener("input", () => setCatalogQuery(searchInput.value));
+  const zoomRow = element("label", undefined, styles.checkRow);
+  const zoomBox = element("input");
+  zoomBox.type = "checkbox";
+  zoomBox.checked = zoomOnAdd;
+  zoomBox.addEventListener("change", () => setCatalogZoomOnAdd(zoomBox.checked));
+  const zoomText = element("span", labels.zoomOnAdd);
+  zoomRow.append(zoomBox, zoomText);
   const statusLine = element("div", "", styles.status);
   statusLine.setAttribute("aria-live", "polite");
   const tree = element("div", undefined, styles.tree);
-  panel.append(hint, urlRow, searchInput, statusLine, tree);
+  panel.append(hint, urlRow, searchInput, zoomRow, statusLine, tree);
   container.appendChild(panel);
 
   const draw = () => {
@@ -938,6 +1110,8 @@ function buildPanel(container: HTMLElement): () => void {
     urlInput.placeholder = labels.urlPlaceholder;
     loadButton.textContent = labels.load;
     searchInput.placeholder = labels.searchPlaceholder;
+    zoomText.textContent = labels.zoomOnAdd;
+    zoomBox.checked = zoomOnAdd;
     statusLine.textContent = status ?? "";
     tree.innerHTML = "";
     const added = addedLayers();
@@ -993,8 +1167,8 @@ function buildPanel(container: HTMLElement): () => void {
 // --- Plugin ----------------------------------------------------------------
 
 export function getTerriaCatalogProjectState(): Record<string, unknown> | undefined {
-  if (sources.length === 0) return undefined;
-  return { sources: sources.map((s) => s.url) };
+  if (sources.length === 0 && !zoomOnAdd) return undefined;
+  return { sources: sources.map((s) => s.url), ...(zoomOnAdd ? { zoomOnAdd: true } : {}) };
 }
 
 export const terriaCatalogPlugin: GeoLibrePlugin = {
@@ -1054,7 +1228,11 @@ export const terriaCatalogPlugin: GeoLibrePlugin = {
   },
   getProjectState: () => getTerriaCatalogProjectState(),
   applyProjectState: (_app, state) => {
-    const raw = (state && typeof state === "object" ? state : {}) as { sources?: unknown };
+    const raw = (state && typeof state === "object" ? state : {}) as {
+      sources?: unknown;
+      zoomOnAdd?: unknown;
+    };
+    zoomOnAdd = raw.zoomOnAdd === true;
     if (!Array.isArray(raw.sources)) return false;
     for (const url of raw.sources) {
       if (typeof url === "string" && !sources.some((s) => s.url === resolveUrl(url))) {
@@ -1067,6 +1245,7 @@ export const terriaCatalogPlugin: GeoLibrePlugin = {
 
 /** Forget every loaded catalog (tests). */
 export function resetTerriaCatalog(): void {
+  zoomOnAdd = false;
   sources = [];
   expanded.clear();
   busy.clear();

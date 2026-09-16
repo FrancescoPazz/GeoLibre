@@ -1,4 +1,9 @@
-import { hasPathTraversal, useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import {
+  hasPathTraversal,
+  sameBaseLayerName,
+  useAppStore,
+  type GeoLibreLayer,
+} from "@geolibre/core";
 import {
   isAbsoluteLocalPath,
   isLoadedVectorLayer,
@@ -73,7 +78,9 @@ export async function restoreLocalFileLayers(): Promise<void> {
           // by the layer's display name, then fall back to the first entry.
           let match = loaded[0];
           if (loaded.length > 1) {
-            const named = loaded.find((entry) => entry.name === layer.name);
+            const named = loaded.find(
+              (entry) => entry.name !== undefined && sameBaseLayerName(entry.name, layer.name),
+            );
             if (named) {
               match = named;
             } else {

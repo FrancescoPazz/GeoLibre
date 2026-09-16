@@ -1,5 +1,6 @@
 import type { FeatureCollection } from "geojson";
 import { v4 as uuidv4 } from "uuid";
+import { uniqueLayerName } from "./layer-names";
 import { create } from "zustand";
 import { shallow } from "zustand/shallow";
 import { temporal } from "zundo";
@@ -702,6 +703,16 @@ export interface AppState {
    * style was applied, so callers can skip the confirmation on a no-op.
    */
   pasteLayerStyle: (id: string) => boolean;
+  /**
+   * Add a copy of the given layer right after it — same source, style,
+   * labels, filters and group, a new id and a name made distinct with
+   * {@link uniqueLayerName} (`Roads` → `Roads (2)`) — and select it. The one
+   * layer kind that cannot be copied is a plugin-owned native layer
+   * (`metadata.externalNativeLayer`), whose source lives in the plugin, not
+   * in the record. Returns the new layer's id, or `null` when nothing was
+   * copied.
+   */
+  duplicateLayer: (id: string) => string | null;
   /**
    * Replace a layer's persistent attribute joins and immediately re-derive its
    * joined columns (strip what the previous joins added, apply the new list).
@@ -1974,6 +1985,28 @@ export const useAppStore = create<AppState>()(
         // so the join-cascade branch is a no-op.
         get().updateLayer(id, patch);
         return true;
+      },
+
+      duplicateLayer: (id) => {
+        const s = get();
+        const index = s.layers.findIndex((l) => l.id === id);
+        if (index < 0) return null;
+        const source = s.layers[index];
+        if (source.metadata?.externalNativeLayer === true) return null;
+        // A deep copy: the two records must not share the feature array or
+        // the style object, or an edit on one would show up on the other.
+        const copy: GeoLibreLayer = structuredClone(source);
+        copy.id = uuidv4();
+        copy.name = uniqueLayerName(
+          source.name,
+          s.layers.map((l) => l.name),
+        );
+        delete copy.beforeId;
+        // Right after the original in the list (which is draw order), so the
+        // copy sits where the user is looking.
+        const next = s.layers[index + 1];
+        get().addLayer(copy, next ? next.id : null);
+        return copy.id;
       },
 
       reorderLayer: (id, direction) =>

@@ -2,18 +2,24 @@ import {
   DRAW_MODES,
   SAMPLING_STEP_DISABLED,
   SAMPLING_STEP_SERIES,
+  addMeasure3dPath,
   buildChartGeometry,
   clearMeasure3d,
   closeMeasure3dPanel,
+  exportMeasure3dProfileCsv,
   exportMeasure3dSummary,
   formatDegrees,
   formatMeters,
   formatSquareMeters,
   getMeasure3dSnapshot,
+  removeMeasure3dPath,
   saveMeasure3dAsLayer,
+  setMeasure3dActivePath,
+  setMeasure3dCircleRadius,
   setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,
   setMeasure3dMode,
+  setMeasure3dNotes,
   setMeasure3dOptions,
   setMeasure3dSamplingStep,
   subscribeMeasure3d,
@@ -25,10 +31,13 @@ import { Button } from "@geolibre/ui";
 import {
   Circle,
   Eraser,
+  FileSpreadsheet,
   FileText,
   Layers,
   MapPin,
+  Minus,
   Pentagon,
+  Plus,
   Ruler,
   Spline,
   TriangleAlert,
@@ -117,8 +126,10 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
     handle.addEventListener("pointercancel", handleUp);
   };
 
-  const { mode, options, geometry, measures, bound, sampling } = state;
+  const { mode, options, geometry, measures, bound, sampling, pathCount, activePath, notes } =
+    state;
   const hasFigure = geometry.points.length > 0;
+  const isPath = mode === "line" || mode === "polygon";
   const hint = !bound
     ? t("toolbar.measure3d.unavailable")
     : hasFigure
@@ -219,14 +230,62 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
           </label>
         </div>
 
+        {isPath && (
+          <div className="flex items-center gap-1.5 text-xs" data-testid="measure-3d-paths">
+            <label className="flex items-center gap-1.5">
+              <span className="text-muted-foreground">{t("toolbar.measure3d.paths.label")}</span>
+              <select
+                className="h-6 rounded border border-border bg-background px-1 text-xs"
+                value={activePath}
+                aria-label={t("toolbar.measure3d.paths.label")}
+                onChange={(event) => setMeasure3dActivePath(Number(event.target.value))}
+              >
+                {Array.from({ length: pathCount }, (_, i) => (
+                  <option key={i} value={i}>
+                    {t("toolbar.measure3d.paths.option", { n: i + 1 })}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-6 w-6"
+              aria-label={t("toolbar.measure3d.paths.add")}
+              title={t("toolbar.measure3d.paths.addTooltip")}
+              disabled={!hasFigure}
+              onClick={() => addMeasure3dPath()}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-6 w-6"
+              aria-label={t("toolbar.measure3d.paths.remove")}
+              title={t("toolbar.measure3d.paths.removeTooltip")}
+              disabled={pathCount <= 1 && !hasFigure}
+              onClick={() => removeMeasure3dPath()}
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </Button>
+            {state.sourceName && (
+              <span className="ms-auto truncate text-muted-foreground" title={state.sourceName}>
+                {t("toolbar.measure3d.paths.loadedFrom", { name: state.sourceName })}
+              </span>
+            )}
+          </div>
+        )}
+
         {hasFigure && (
           <div className="space-y-1" data-testid="measure-3d-result">
             <Row label={t("toolbar.measure3d.vertices")} value={String(geometry.points.length)} />
             {mode === "circle" && measures.circleRadiusMeters !== null && (
               <>
-                <Row
+                <RadiusRow
                   label={t("toolbar.measure3d.radius")}
-                  value={formatMeters(measures.circleRadiusMeters)}
+                  inputLabel={t("toolbar.measure3d.radiusInput")}
+                  meters={measures.circleRadiusMeters}
                 />
                 <Row
                   label={t("toolbar.measure3d.perimeter")}
@@ -274,6 +333,20 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
         )}
 
         {hasFigure && (
+          <label className="block space-y-1 text-xs">
+            <span className="text-muted-foreground">{t("toolbar.measure3d.notes")}</span>
+            <textarea
+              className="min-h-[3rem] w-full resize-y rounded border border-border bg-background px-2 py-1 text-xs"
+              value={notes}
+              placeholder={t("toolbar.measure3d.notesPlaceholder")}
+              rows={2}
+              onChange={(event) => setMeasure3dNotes(event.target.value)}
+              data-testid="measure-3d-notes"
+            />
+          </label>
+        )}
+
+        {hasFigure && (
           <div className="flex flex-wrap gap-2 border-t border-border pt-2">
             <Button
               variant="outline"
@@ -309,6 +382,25 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
               <FileText className="h-3.5 w-3.5" />
               {t("toolbar.measure3d.exportSummary")}
             </Button>
+            {state.profile && state.profile.samples.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                title={t("toolbar.measure3d.exportProfileCsvTooltip")}
+                disabled={sampling}
+                onClick={() =>
+                  exportMeasure3dProfileCsv(
+                    t("toolbar.measure3d.layerName", {
+                      mode: t(`toolbar.measure3d.modes.${mode}` as const),
+                    }),
+                  )
+                }
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                {t("toolbar.measure3d.exportProfileCsv")}
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -517,6 +609,59 @@ function ProfileChart({ profile, hover }: { profile: TerrainProfile; hover: numb
           ? `${formatMeters(hovered.distanceM)} · ${hovered.alt.toFixed(1)} m`
           : t("toolbar.measure3d.profile.hoverHint")}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The circle's radius as a number the user can type: the edge vertex moves
+ * to match on Enter or blur; the readout shows the geodesic value meanwhile.
+ */
+function RadiusRow({
+  label,
+  inputLabel,
+  meters,
+}: {
+  label: string;
+  inputLabel: string;
+  meters: number;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = () => {
+    if (draft === null) return;
+    const value = Number(draft);
+    if (Number.isFinite(value) && value > 0) setMeasure3dCircleRadius(value);
+    setDraft(null);
+  };
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="flex items-baseline gap-1 tabular-nums text-foreground">
+        <input
+          type="number"
+          min={0}
+          step="any"
+          inputMode="decimal"
+          className="h-6 w-24 rounded border border-border bg-background px-1 text-end text-xs tabular-nums"
+          aria-label={inputLabel}
+          value={draft ?? meters.toFixed(2)}
+          onFocus={() => setDraft(meters.toFixed(2))}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+              (event.target as HTMLInputElement).blur();
+            } else if (event.key === "Escape") {
+              setDraft(null);
+              (event.target as HTMLInputElement).blur();
+            }
+          }}
+          data-testid="measure-3d-radius"
+        />
+        <span>m</span>
+      </span>
     </div>
   );
 }

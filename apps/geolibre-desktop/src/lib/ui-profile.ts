@@ -676,6 +676,12 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     tier: "advanced",
   },
   {
+    id: "controls.viewshedArea",
+    menuId: "controls",
+    labelKey: "toolbar.item.viewshedArea",
+    tier: "advanced",
+  },
+  {
     id: "controls.globeClipping",
     menuId: "controls",
     labelKey: "toolbar.item.globeClipping",
@@ -858,6 +864,12 @@ export const MENU_ITEM_CATALOG: readonly MenuItemCatalogEntry[] = [
     id: "help.github",
     menuId: "help",
     labelKey: "toolbar.command.githubRepository",
+    tier: "basic",
+  },
+  {
+    id: "help.relatedMaps",
+    menuId: "help",
+    labelKey: "toolbar.command.relatedMaps",
     tier: "basic",
   },
   {

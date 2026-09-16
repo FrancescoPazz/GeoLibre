@@ -410,7 +410,29 @@ def flag(name, value):
     return value
 
 
+def flag_or_fraction(name, value):
+    if value.lower() in ("0", "1", "true", "false", "yes", "no"):
+        return value
+    try:
+        number = float(value)
+    except ValueError:
+        number = -1
+    if not 0 <= number <= 1:
+        raise SystemExit(f"ERROR: {name} must be 1/0, true/false, or a number from 0 to 1.")
+    return value
+
+
 def plain(name, value):
+    return value
+
+
+def json_array(name, value):
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        raise SystemExit(f"ERROR: {name} must be a JSON array.")
+    if not isinstance(parsed, list):
+        raise SystemExit(f"ERROR: {name} must be a JSON array.")
     return value
 
 
@@ -463,6 +485,10 @@ APP_SETTINGS = (
     ("MICROZONATION_DOCUMENTS_LAYER", plain),
     ("MICROZONATION_OUTPUT_FORMAT", plain),
     ("MICROZONATION_PLANS_URL", http_url),
+    ("GLOBE_COLOR", hex_color),
+    ("GLOBE_TRANSLUCENCY", flag_or_fraction),
+    ("GLOBE_COLLISION_DETECTION", flag),
+    ("RELATED_MAPS", json_array),
 )
 for name, check in APP_SETTINGS:
     value = os.environ.get(f"GEOLIBRE_{name}", "").strip()
@@ -516,7 +542,7 @@ fi
 # Application settings passed through to the app. Names only: the Ion token
 # and the geocoder key are credentials as far as the log is concerned.
 APP_SETTINGS_SET=""
-for name in CESIUM_TOKEN CESIUM_TERRAIN_ASSET_ID ELEVATION_MEAN_SEA_LEVEL GEOCODER_PROVIDER GEOCODER_ENDPOINT GEOCODER_REVERSE_ENDPOINT GEOCODER_API_KEY GEOCODER_EMAIL FEEDBACK_URL FEEDBACK_SUBJECT WHERE_AM_I_URL WHERE_AM_I_ACCURATE_URL WHERE_AM_I_ID_FIELD WHERE_AM_I_FIELD WHERE_AM_I_DETAIL_FIELD COORDS_CONVERTER_URL BRAND_NAME BRAND_LOGO_URL BRAND_LOGO_LINK BRAND_FAVICON_URL BRAND_ACCENT_COLOR CATALOG_URLS START_PROJECT_URL LOGIN_SERVICE_URL USER_PROFILES MICROZONATION_URL MICROZONATION_PROJECTS_LAYER MICROZONATION_TYPENAME MICROZONATION_DOCUMENTS_LAYER MICROZONATION_OUTPUT_FORMAT MICROZONATION_PLANS_URL; do
+for name in CESIUM_TOKEN CESIUM_TERRAIN_ASSET_ID ELEVATION_MEAN_SEA_LEVEL GEOCODER_PROVIDER GEOCODER_ENDPOINT GEOCODER_REVERSE_ENDPOINT GEOCODER_API_KEY GEOCODER_EMAIL FEEDBACK_URL FEEDBACK_SUBJECT WHERE_AM_I_URL WHERE_AM_I_ACCURATE_URL WHERE_AM_I_ID_FIELD WHERE_AM_I_FIELD WHERE_AM_I_DETAIL_FIELD COORDS_CONVERTER_URL BRAND_NAME BRAND_LOGO_URL BRAND_LOGO_LINK BRAND_FAVICON_URL BRAND_ACCENT_COLOR CATALOG_URLS START_PROJECT_URL LOGIN_SERVICE_URL USER_PROFILES MICROZONATION_URL MICROZONATION_PROJECTS_LAYER MICROZONATION_TYPENAME MICROZONATION_DOCUMENTS_LAYER MICROZONATION_OUTPUT_FORMAT MICROZONATION_PLANS_URL GLOBE_COLOR GLOBE_TRANSLUCENCY GLOBE_COLLISION_DETECTION RELATED_MAPS; do
   eval "value=\${GEOLIBRE_${name}:-}"
   if [ -n "$(trim "$value")" ]; then
     APP_SETTINGS_SET="$APP_SETTINGS_SET $name"

@@ -180,6 +180,7 @@ export function ControlsMenu({
     show("controls.measure3d") ||
     show("controls.playPath") ||
     show("controls.lineOfSight") ||
+    show("controls.viewshedArea") ||
     show("controls.globeClipping") ||
     show("controls.elevationBands") ||
     (show("controls.coordsConverter") && coordsConverterConfigured) ||
@@ -308,6 +309,15 @@ export function ControlsMenu({
             >
               {t("toolbar.item.lineOfSight")}
               {panels.lineOfSight.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.viewshedArea") && (
+            <DropdownMenuItem
+              title={t("toolbar.item.viewshedAreaTooltip")}
+              onSelect={panels.viewshedArea.toggle}
+            >
+              {t("toolbar.item.viewshedArea")}
+              {panels.viewshedArea.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.globeClipping") && (

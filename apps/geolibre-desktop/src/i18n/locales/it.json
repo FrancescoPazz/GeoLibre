@@ -1705,6 +1705,13 @@
     "pixelTimeSeriesMode": {
       "start": "Serie temporale dei pixel"
     },
+    "identifyPopup": {
+      "copyCoordinates": "Copia le coordinate",
+      "copied": "Copiato",
+      "download": "Scarica elemento",
+      "height": "h",
+      "heightSeaLevel": "h (s.l.m.)"
+    },
     "identifyAll": {
       "title": "Risultati identificati ({{count}})",
       "resultCount_one": "{{count}} risultato",
@@ -1748,6 +1755,15 @@
     "sourceErrorProjection": "Il rilievo COG supporta solo DEM in EPSG:3857 ed EPSG:4326.",
     "sourceErrorDetail": "Impossibile aprire il DEM COG. ({{detail}})",
     "reset": "Ripristina",
+    "globe": {
+      "title": "Globo 3D",
+      "translucency": "Globo trasparente",
+      "translucencyAlpha": "Opacità del globo",
+      "collision": "Tieni la camera sopra il terreno",
+      "collisionHint": "Disattivato, la camera può scendere sotto la superficie: è il modo per guardare gallerie e sondaggi sotto un globo trasparente.",
+      "color": "Colore del globo",
+      "colorHint": "Visibile dove nessuna immagine copre il globo."
+    },
     "done": "Fine"
   },
   "pixelTimeSeries": {
@@ -2384,7 +2400,21 @@
       "area": "Area",
       "angle": "Angolo",
       "radius": "Raggio",
-      "segments": "Segmenti"
+      "segments": "Segmenti",
+      "paths": {
+        "label": "Percorso",
+        "option": "Percorso {{n}}",
+        "add": "Aggiungi un percorso",
+        "addTooltip": "Inizia un altro percorso; quello attuale resta sul globo dietro di esso.",
+        "remove": "Rimuovi questo percorso",
+        "removeTooltip": "Elimina il percorso in modifica (un percorso solo viene invece svuotato).",
+        "loadedFrom": "Caricato da {{name}}"
+      },
+      "notes": "Note",
+      "notesPlaceholder": "Una nota per questo percorso: finisce nel riepilogo e nel layer salvato.",
+      "radiusInput": "Raggio in metri",
+      "exportProfileCsv": "CSV del profilo",
+      "exportProfileCsvTooltip": "Scarica i campioni del terreno del profilo altimetrico come CSV: posizione, quota e distanza dall'inizio di ogni campione."
     },
     "playPath": {
       "title": "Play Path",
@@ -2404,6 +2434,25 @@
       "autoStep": "Passo automatico",
       "step": "Passo",
       "verticesOnly": "Solo vertici"
+    },
+    "viewshedArea": {
+      "title": "Area visibile",
+      "close": "Chiudi",
+      "clear": "Cancella osservatore",
+      "unavailable": "Lo strumento area visibile richiede il globo 3D. Aprine uno accanto alla mappa da Vista → Vista divisa e il suo interruttore globo 3D, oppure rendilo la mappa da Vista → Motore di rendering → Cesium 3D.",
+      "clickObserver": "Clicca il punto di osservazione sul globo.",
+      "moveObserver": "Trascina l'osservatore, o clicca altrove per spostarlo.",
+      "observerHeight": "Altezza osservatore",
+      "radius": "Raggio",
+      "meters": "m",
+      "opacity": "Opacità",
+      "computing": "Lettura del terreno…",
+      "noTerrain": "Il globo non ha un terreno da osservare: attiva il terreno 3D e l'area visibile compare.",
+      "failed": "Impossibile leggere il terreno di quest'area.",
+      "visibleShare": "Terreno visibile",
+      "cellSize": "Cella della griglia",
+      "observer": "Osservatore",
+      "caveat": "Linea di vista sul solo terreno caricato: edifici e alberi non sono nel modello e la curvatura terrestre non è applicata."
     },
     "lineOfSight": {
       "title": "Linea di vista",
@@ -2695,6 +2744,7 @@
       "githubRepository": "Repository GitHub",
       "diagnostics": "Diagnostica",
       "giveFeedback": "Invia feedback",
+      "relatedMaps": "Mappe correlate",
       "checkForUpdates": "Controlla aggiornamenti",
       "about": "Informazioni",
       "togglePlugin": "Attiva/disattiva {{name}}",
@@ -3063,6 +3113,8 @@
       "flightSimulatorTooltip": "Vola sul terreno con i comandi da tastiera, come un simulatore di volo.",
       "lineOfSight": "Linea di vista",
       "lineOfSightTooltip": "Clicca un osservatore e un bersaglio sul globo 3D per vedere se il terreno blocca la visuale tra i due.",
+      "viewshedArea": "Area visibile",
+      "viewshedAreaTooltip": "Clicca un osservatore sul globo 3D e vedi il terreno visibile da lì entro un raggio, colorato sul terreno.",
       "globeClipping": "Ritaglio del globo",
       "globeClippingTooltip": "Apre un buco nel terreno attorno a un layer 3D Tiles o GeoJSON per vedere cosa c'è sotto la superficie.",
       "elevationBands": "Fasce altimetriche",
@@ -3821,7 +3873,9 @@
     "home": "Vai alla vista iniziale del catalogo",
     "signInRequired": "Accedi per aprire questa voce.",
     "accessDenied": "Il tuo account non può aprire questa voce.",
-    "locked": "Voce riservata"
+    "locked": "Voce riservata",
+    "style": "Stile",
+    "zoomOnAdd": "Zoom su una voce quando viene aggiunta"
   },
   "guides": {
     "title": "Guide",
@@ -3946,6 +4000,8 @@
     "description": "Le credenziali vengono verificate sul map server del geoportale e conservate solo per questa sessione: i layer protetti vengono richiesti con esse e un ricaricamento della pagina ti disconnette.",
     "username": "Nome utente",
     "password": "Password",
+    "showPassword": "Mostra la password",
+    "hidePassword": "Nascondi la password",
     "missingCredentials": "Inserisci nome utente e password.",
     "invalidCredentials": "Nome utente o password non corretti.",
     "connectionError": "Impossibile raggiungere il servizio di accesso.",
@@ -7630,6 +7686,10 @@
     "showLayer": "Mostra layer",
     "editingGeometry": "Modifica della geometria",
     "rename": "Rinomina",
+    "duplicateLayer": "Duplica layer",
+    "useAsMeasurePath": "Usa come percorso di Misure 3D",
+    "useAsMeasurePathTooltip": "Carica le linee (o i poligoni, o i punti) di questo layer in Misure 3D come percorsi: profilo del terreno, riepilogo e Play Path inclusi.",
+    "useAsMeasurePathNoPath": "Questo layer non ha linee, poligoni o punti da usare come percorso.",
     "materializeToEditable": "Materializza in layer modificabile",
     "finishEditingGeometry": "Termina la modifica della geometria",
     "editGeometry": "Modifica geometria",
@@ -7982,6 +8042,7 @@
       "routeAnimationPanel": "Pannello di animazione del percorso",
       "flightSimulatorPanel": "Pannello del simulatore di volo",
       "lineOfSightPanel": "Pannello linea di vista",
+      "viewshedAreaPanel": "Pannello area visibile",
       "globeClippingPanel": "Pannello ritaglio del globo",
       "elevationBandsPanel": "Pannello fasce altimetriche",
       "coordsConverterPanel": "Pannello conversione coordinate",

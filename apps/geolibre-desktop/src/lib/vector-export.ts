@@ -7,7 +7,7 @@ import { type BinaryVectorExportFormat, exportBinaryVectorLayer } from "./vector
 
 export { KmlCoordinateError, kmlExportErrorMessage } from "./vector-export-errors";
 
-type TextVectorExportFormat = "geojson" | "csv" | "kml" | "polyline";
+type TextVectorExportFormat = "geojson" | "csv" | "kml" | "gpx" | "polyline";
 
 export type VectorExportFormat = TextVectorExportFormat | BinaryVectorExportFormat;
 
@@ -38,6 +38,12 @@ const TEXT_EXPORT_FORMATS: Record<
     label: "KML",
     mimeType: "application/vnd.google-earth.kml+xml",
   },
+  gpx: {
+    extension: "gpx",
+    filterExtensions: ["gpx"],
+    label: "GPX",
+    mimeType: "application/gpx+xml",
+  },
   polyline: {
     extension: "polyline",
     filterExtensions: ["polyline", "txt"],
@@ -62,6 +68,22 @@ export function sanitizeExportFileName(name: string): string {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
   return sanitized || "layer";
+}
+
+/**
+ * The download name for one feature of a layer: `<layer>_<id>` — unless the
+ * layer name already ends in that id (a layer named after the feature it
+ * was made from), in which case the id is not repeated; and a layer name
+ * that still carries a file extension (`tracks.gpx`) loses it first, so the
+ * export is `tracks_12.geojson`, not `tracks.gpx_12.geojson`.
+ */
+export function featureExportFileStem(layerName: string, featureId?: string | number): string {
+  const base = (layerName.replace(/\.[A-Za-z0-9]{1,8}$/, "") || layerName).replace(/[-_]+$/, "");
+  const stem = base || "feature";
+  if (featureId === undefined || featureId === null || featureId === "") return stem;
+  const id = sanitizeExportFileName(String(featureId));
+  if (!id || stem === id || stem.endsWith(`_${id}`) || stem.endsWith(`-${id}`)) return stem;
+  return `${stem}_${id}`;
 }
 
 function csvCell(value: unknown): string {
@@ -289,6 +311,8 @@ async function textExportContent(
       return geojsonToCsv(geojson);
     case "kml":
       return (await import("./kml-writer")).writeKml(geojson, documentName);
+    case "gpx":
+      return (await import("./gpx-writer")).writeGpx(geojson, documentName);
     case "polyline":
       return geojsonToPolylineText(geojson, precision);
   }
@@ -354,7 +378,13 @@ export async function exportVectorLayer(
   documentName = baseName,
   precision = 5,
 ): Promise<string | null> {
-  if (format === "geojson" || format === "csv" || format === "kml" || format === "polyline") {
+  if (
+    format === "geojson" ||
+    format === "csv" ||
+    format === "kml" ||
+    format === "gpx" ||
+    format === "polyline"
+  ) {
     return exportTextLayer(format, geojson, baseName, documentName, precision);
   }
   return exportBinaryLayer(format, geojson, baseName, documentName);

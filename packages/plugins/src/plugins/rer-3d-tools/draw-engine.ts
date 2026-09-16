@@ -16,11 +16,13 @@ import {
   geodesicInterpolate,
   geodesicMeters,
   insertTolerance,
+  nearestPathPoint,
   nearestSegment,
   verticesCentroid,
   type DrawGeometry,
   type DrawMeasures,
   type DrawMode,
+  type PathHit,
 } from "./draw-geometry";
 import {
   fromLngLatAlt,
@@ -53,6 +55,10 @@ const VERTEX_COLOR = "#0ea5e9";
 const FIRST_VERTEX_COLOR = "#f59e0b";
 const LINE_COLOR = "#0ea5e9";
 const FILL_ALPHA = 0.25;
+/** The other paths of a multi-path measurement: the same blue, thinner and dimmer. */
+const BACKGROUND_LINE_ALPHA = 0.45;
+/** How close, in screen pixels, the pointer has to be to a path to hover it. */
+export const HOVER_TOLERANCE_PIXELS = 10;
 const LABEL_FILL = "#ffffff";
 const LABEL_OUTLINE = "#0f172a";
 const LABEL_FONT = "13px sans-serif";
@@ -83,6 +89,12 @@ export class CesiumDrawing {
   private entities: Entity[] = [];
   /** The hover marker (a profile sample under the pointer), kept apart from the figure. */
   private marker: Entity | null = null;
+  /** The inactive paths of a multi-path measurement, drawn but not editable. */
+  private background: DrawGeometry[] = [];
+  private backgroundEntities: Entity[] = [];
+  /** Where along the figure the pointer last was, so hover fires only on change. */
+  private lastHover: PathHit | null = null;
+  private onHover: ((hit: PathHit | null) => void) | null = null;
   private readonly handler: ScreenSpaceEventHandler;
   private readonly previousCursor: string;
   private destroyed = false;
@@ -144,6 +156,23 @@ export class CesiumDrawing {
   setOptions(patch: Partial<DrawOptions>): void {
     this.options = { ...this.options, ...patch };
     this.redraw();
+    this.redrawBackground();
+  }
+
+  /**
+   * Be told when the pointer moves along the figure (a line or polygon with
+   * two or more vertices): the segment and fraction under it, or `null` once
+   * it leaves. Fires only on change.
+   */
+  setHoverListener(listener: ((hit: PathHit | null) => void) | null): void {
+    this.onHover = listener;
+    this.lastHover = null;
+  }
+
+  /** The other paths of a multi-path measurement, shown thin and dim behind the active one. */
+  setBackgroundFigures(figures: DrawGeometry[]): void {
+    this.background = figures.map((g) => ({ ...g, points: g.points.map((p) => ({ ...p })) }));
+    this.redrawBackground();
   }
 
   /** Replace the figure (a project restore, or an edit from the panel). */
@@ -174,6 +203,7 @@ export class CesiumDrawing {
     const { viewer } = this.handle;
     if (!viewer.isDestroyed()) {
       this.removeEntities();
+      this.removeBackgroundEntities();
       this.setMarker(null);
       viewer.canvas.style.cursor = this.previousCursor;
       this.handle.requestRender();
@@ -231,7 +261,36 @@ export class CesiumDrawing {
       if (!ground) return;
       this.preview = ground;
       this.redraw();
+      return;
     }
+    this.trackHover(position);
+  }
+
+  /** Report the point of the figure under the pointer, if any, when it changes. */
+  private trackHover(position: Cartesian2): void {
+    if (!this.onHover) return;
+    let hit: PathHit | null = null;
+    if ((this.mode === "line" || this.mode === "polygon") && this.points.length >= 2) {
+      const ground = this.ground(position);
+      if (ground) {
+        hit = nearestPathPoint(
+          this.handle.Cesium,
+          this.points,
+          fromLngLatAlt(this.handle.Cesium, ground),
+          Math.max(1, this.metersPerPixel() * HOVER_TOLERANCE_PIXELS),
+          this.mode === "polygon" && this.closed,
+        );
+      }
+    }
+    const previous = this.lastHover;
+    if (
+      (hit === null && previous === null) ||
+      (hit && previous && hit.segment === previous.segment && hit.t === previous.t)
+    ) {
+      return;
+    }
+    this.lastHover = hit;
+    this.onHover(hit);
   }
 
   private onLeftUp(): void {
@@ -352,6 +411,40 @@ export class CesiumDrawing {
     const { viewer } = this.handle;
     if (!viewer.isDestroyed()) for (const entity of this.entities) viewer.entities.remove(entity);
     this.entities = [];
+  }
+
+  private removeBackgroundEntities(): void {
+    const { viewer } = this.handle;
+    if (!viewer.isDestroyed())
+      for (const entity of this.backgroundEntities) viewer.entities.remove(entity);
+    this.backgroundEntities = [];
+  }
+
+  /** The inactive paths: one thin, dim line each (a closed polygon as its ring), no vertices or labels. */
+  private redrawBackground(): void {
+    this.removeBackgroundEntities();
+    const { Cesium: C, viewer } = this.handle;
+    if (viewer.isDestroyed()) return;
+    this.background.forEach((figure, index) => {
+      if (figure.mode === "point" || figure.mode === "circle" || figure.mode === "angle") return;
+      if (figure.points.length < 2) return;
+      const ring =
+        figure.mode === "polygon" && figure.closed
+          ? [...figure.points, figure.points[0]]
+          : figure.points;
+      this.backgroundEntities.push(
+        viewer.entities.add({
+          id: `${ID}-background-${index}`,
+          polyline: {
+            positions: ring.map((p) => fromLngLatAlt(C, p)),
+            width: 2,
+            clampToGround: this.options.clampToGround,
+            material: C.Color.fromCssColorString(LINE_COLOR).withAlpha(BACKGROUND_LINE_ALPHA),
+          },
+        }),
+      );
+    });
+    this.handle.requestRender();
   }
 
   private redraw(): void {

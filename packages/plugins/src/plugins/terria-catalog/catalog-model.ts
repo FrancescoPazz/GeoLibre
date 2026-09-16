@@ -20,6 +20,7 @@ export const SUPPORTED_CATALOG_ITEM_TYPES = [
   "open-street-map",
   "3d-tiles",
   "rer-poi",
+  "google-tile-maps",
 ] as const;
 
 export type SupportedCatalogItemType = (typeof SUPPORTED_CATALOG_ITEM_TYPES)[number];
@@ -98,11 +99,35 @@ export interface CatalogItem extends CatalogAccess {
   /** Extra request parameters (`parameters` on a WMS item), e.g. a format. */
   parameters?: Record<string, string>;
   styles?: string;
+  /**
+   * TerriaJS `stylesToUse` on a WMS item: the styles a user may pick from,
+   * by name, the first being the one requested when `styles` is unset. One
+   * entry fixes the style; two or more put a style picker on the row.
+   */
+  stylesToUse?: string[];
+  /**
+   * TerriaJS `styleSelectableDimensionsUseNameBeforeTitle`: label the styles
+   * in the picker by their WMS name rather than their title.
+   */
+  styleNamesBeforeTitles: boolean;
+  /**
+   * The titles the service advertises for its styles, when the file carries
+   * them (`availableStyles` on a WMS item: per layer, `{ name, title }`).
+   */
+  styleTitles?: Record<string, string>;
   tileSize?: number;
   /** The file listed this item in its initial workbench. */
   inWorkbench: boolean;
+  /** TerriaJS `rectangle` (`{ west, south, east, north }`): the item's extent, as `[w, s, e, n]`. */
+  extent?: [number, number, number, number];
   /** A Cesium Ion asset (`3d-tiles` items). */
   ionAssetId?: number;
+  /**
+   * A Google Map Tiles API basemap (`google-tile-maps` items): the API key,
+   * the map type (`roadmap`, `satellite`, `terrain`), and the optional
+   * language and region the session is created for.
+   */
+  googleTiles?: { key: string; mapType: string; language?: string; region?: string };
   /** The item's features are not to be exported (`disableExport`). */
   disableExport: boolean;
   /** Cluster the points (`clustering`, boolean or `{ enabled }`). */
@@ -140,6 +165,51 @@ const num = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
 /** Strip TerriaJS markdown/HTML `info` sections down to plain text for a tooltip. */
+/** `stylesToUse`: an array of style names; blanks and repeats dropped, nothing → undefined. */
+function stylesToUseOf(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const names: string[] = [];
+  for (const entry of raw) {
+    const name = typeof entry === "string" ? entry.trim() : "";
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names.length > 0 ? names : undefined;
+}
+
+/**
+ * `availableStyles`: `[{ layerName, styles: [{ name, title }] }]` as TerriaJS
+ * caches it from GetCapabilities — flattened to name → title.
+ */
+function styleTitlesOf(raw: unknown): Record<string, string> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const titles: Record<string, string> = {};
+  for (const perLayer of raw) {
+    const list = (perLayer as { styles?: unknown } | null)?.styles;
+    if (!Array.isArray(list)) continue;
+    for (const style of list) {
+      const { name, title } = (style ?? {}) as { name?: unknown; title?: unknown };
+      if (typeof name === "string" && typeof title === "string" && title.trim())
+        titles[name] = title.trim();
+    }
+  }
+  return Object.keys(titles).length > 0 ? titles : undefined;
+}
+
+/** A TerriaJS `rectangle` as `[west, south, east, north]`, or nothing when any edge is missing or out of range. */
+function extentOf(raw: unknown): [number, number, number, number] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const west = num(r.west);
+  const south = num(r.south);
+  const east = num(r.east);
+  const north = num(r.north);
+  if (west === undefined || south === undefined || east === undefined || north === undefined)
+    return undefined;
+  if (Math.abs(south) > 90 || Math.abs(north) > 90 || south >= north || west >= east)
+    return undefined;
+  return [west, south, east, north];
+}
+
 function descriptionOf(raw: Record<string, unknown>): string | undefined {
   const direct = str(raw.description);
   if (direct) return direct;
@@ -286,6 +356,9 @@ const KNOWN_ITEM_KEYS = new Set([
   "opacity",
   "parameters",
   "styles",
+  "stylesToUse",
+  "styleSelectableDimensionsUseNameBeforeTitle",
+  "availableStyles",
   "tileWidth",
   "tileHeight",
   "isOpen",
@@ -295,6 +368,11 @@ const KNOWN_ITEM_KEYS = new Set([
   "hideWhenUnauthorized",
   "useAuthentication",
   "ionAssetId",
+  "rectangle",
+  "key",
+  "mapType",
+  "language",
+  "region",
   "disableExport",
   "clustering",
   "nameOfCatalogItemSearchField",
@@ -352,10 +430,23 @@ function parseNode(
     opacity: num(r.opacity),
     parameters: parametersOf(r.parameters),
     styles: str(r.styles),
+    stylesToUse: stylesToUseOf(r.stylesToUse),
+    styleNamesBeforeTitles: r.styleSelectableDimensionsUseNameBeforeTitle === true,
+    styleTitles: styleTitlesOf(r.availableStyles),
     tileSize: tileWidth,
     inWorkbench: workbench.has(id),
+    extent: extentOf(r.rectangle),
     ...access,
     ionAssetId: num(r.ionAssetId),
+    googleTiles:
+      type === "google-tile-maps" && str(r.key)
+        ? {
+            key: str(r.key) as string,
+            mapType: str(r.mapType) ?? "roadmap",
+            language: str(r.language),
+            region: str(r.region),
+          }
+        : undefined,
     disableExport: r.disableExport === true,
     clustering:
       r.clustering === true ||

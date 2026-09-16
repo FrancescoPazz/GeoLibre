@@ -295,6 +295,156 @@ export function nearestSegment(
   return best;
 }
 
+/** Where along a path the pointer is: the segment and the fraction along it. */
+export interface PathHit {
+  /** Index of the segment (vertex `segment` → `segment + 1`, wrapping for a closed ring). */
+  segment: number;
+  /** 0–1 along that segment. */
+  t: number;
+  /** Distance from the pointer's ground position to the path, in metres. */
+  meters: number;
+}
+
+/**
+ * How far below the surface the straight chord between two surface points
+ * `chordMeters` apart sags at its middle: `L² / 8R`. A pointer is always on
+ * the surface, so a hover halfway along a long segment is this far from the
+ * chord even when it is right on the line.
+ */
+export function chordSagMeters(C: CesiumNs, chordMeters: number): number {
+  return (chordMeters * chordMeters) / (8 * C.Ellipsoid.WGS84.maximumRadius);
+}
+
+/**
+ * The point of `points` nearest to `p`, when it lies within `toleranceMeters`
+ * (plus the segment's chord sag) — what the hover tooltip and the profile
+ * marker follow as the pointer moves along a drawn path. Unlike
+ * {@link nearestSegment}, the ends of a segment count: the hover over a
+ * vertex is the vertex.
+ */
+export function nearestPathPoint(
+  C: CesiumNs,
+  points: LngLatAlt[],
+  p: Cartesian3,
+  toleranceMeters: number,
+  closed = false,
+): PathHit | null {
+  if (points.length < 2) return null;
+  const cart = points.map((q) => C.Cartesian3.fromDegrees(q.lng, q.lat, q.alt));
+  const segments = closed ? cart.length : cart.length - 1;
+  let best: PathHit | null = null;
+  for (let i = 0; i < segments; i += 1) {
+    const a = cart[i];
+    const b = cart[(i + 1) % cart.length];
+    const { meters, t } = pointToSegment(C, p, a, b);
+    if (meters > toleranceMeters + chordSagMeters(C, C.Cartesian3.distance(a, b))) continue;
+    if (!best || meters < best.meters) best = { segment: i, t, meters };
+  }
+  return best;
+}
+
+/** GeoJSON positions as ground positions; a missing or non-finite height is 0. */
+export function positionsToLngLatAlt(coordinates: unknown): LngLatAlt[] {
+  if (!Array.isArray(coordinates)) return [];
+  const out: LngLatAlt[] = [];
+  for (const c of coordinates) {
+    if (!Array.isArray(c) || c.length < 2) continue;
+    const [lng, lat, alt] = c as unknown[];
+    if (typeof lng !== "number" || typeof lat !== "number") continue;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat) || Math.abs(lat) > 90) continue;
+    out.push({ lng, lat, alt: typeof alt === "number" && Number.isFinite(alt) ? alt : 0 });
+  }
+  return out;
+}
+
+/** Keep at most `max` of `points`, evenly, always the first and the last. */
+export function decimatePoints(points: LngLatAlt[], max: number): LngLatAlt[] {
+  if (max < 2 || points.length <= max) return points;
+  const out: LngLatAlt[] = [];
+  const last = points.length - 1;
+  for (let i = 0; i < max; i += 1) out.push(points[Math.round((i * last) / (max - 1))]);
+  return out;
+}
+
+/** The most vertices a figure loaded from a layer keeps (a GPX track can carry tens of thousands). */
+export const MAX_LOADED_PATH_VERTICES = 500;
+
+/**
+ * The figures a set of GeoJSON features make: every line (each part of a
+ * MultiLineString on its own) as an open path; failing lines, every polygon's
+ * outer ring as a closed one; failing polygons, all the points as one
+ * points figure. Long lines are thinned to {@link MAX_LOADED_PATH_VERTICES}.
+ * Empty when the features hold nothing usable.
+ */
+export function figuresFromFeatures(
+  features: ReadonlyArray<{ geometry?: unknown } | null | undefined>,
+): DrawGeometry[] {
+  const lines: LngLatAlt[][] = [];
+  const rings: LngLatAlt[][] = [];
+  const points: LngLatAlt[] = [];
+  const visit = (geometry: unknown): void => {
+    if (!geometry || typeof geometry !== "object") return;
+    const g = geometry as { type?: unknown; coordinates?: unknown; geometries?: unknown };
+    switch (g.type) {
+      case "LineString":
+        lines.push(positionsToLngLatAlt(g.coordinates));
+        break;
+      case "MultiLineString":
+        if (Array.isArray(g.coordinates))
+          for (const part of g.coordinates) lines.push(positionsToLngLatAlt(part));
+        break;
+      case "Polygon":
+        if (Array.isArray(g.coordinates)) rings.push(positionsToLngLatAlt(g.coordinates[0]));
+        break;
+      case "MultiPolygon":
+        if (Array.isArray(g.coordinates))
+          for (const poly of g.coordinates)
+            if (Array.isArray(poly)) rings.push(positionsToLngLatAlt(poly[0]));
+        break;
+      case "Point":
+        points.push(...positionsToLngLatAlt([g.coordinates]));
+        break;
+      case "MultiPoint":
+        points.push(...positionsToLngLatAlt(g.coordinates));
+        break;
+      case "GeometryCollection":
+        if (Array.isArray(g.geometries)) for (const child of g.geometries) visit(child);
+        break;
+      default:
+        break;
+    }
+  };
+  for (const feature of features) visit(feature?.geometry);
+
+  const usableLines = lines.filter((l) => l.length >= 2);
+  if (usableLines.length > 0) {
+    return usableLines.map((l) => ({
+      mode: "line" as const,
+      points: decimatePoints(l, MAX_LOADED_PATH_VERTICES),
+      closed: false,
+    }));
+  }
+  const usableRings = rings
+    .map((r) => {
+      const first = r[0];
+      const last = r[r.length - 1];
+      // GeoJSON repeats the first position to close a ring; the figure closes itself.
+      return first && last && r.length > 3 && first.lng === last.lng && first.lat === last.lat
+        ? r.slice(0, -1)
+        : r;
+    })
+    .filter((r) => r.length >= 3);
+  if (usableRings.length > 0) {
+    return usableRings.map((r) => ({
+      mode: "polygon" as const,
+      points: decimatePoints(r, MAX_LOADED_PATH_VERTICES),
+      closed: true,
+    }));
+  }
+  if (points.length > 0) return [{ mode: "point", points, closed: false }];
+  return [];
+}
+
 /**
  * How close a click has to land to a segment to insert a vertex into it: the
  * historical one-per-mille of the segment's length, widened to a few screen

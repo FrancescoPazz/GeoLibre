@@ -6,7 +6,13 @@ import {
   angleDegrees,
   circleRing,
   circleSegmentCount,
+  chordSagMeters,
   computeMeasures,
+  decimatePoints,
+  figuresFromFeatures,
+  MAX_LOADED_PATH_VERTICES,
+  nearestPathPoint,
+  positionsToLngLatAlt,
   formatDegrees,
   formatMeters,
   formatSquareMeters,
@@ -292,5 +298,142 @@ describe("formatting and centroid", () => {
   it("puts the area label at the mean of the vertices", () => {
     assert.deepEqual(verticesCentroid([P(0, 0, 0), P(2, 4, 100)]), P(1, 2, 50));
     assert.equal(verticesCentroid([]), null);
+  });
+});
+
+describe("paths from features", () => {
+  it("reads positions with or without a height, dropping the malformed", () => {
+    assert.deepEqual(positionsToLngLatAlt([[1, 2], [3, 4, 5], [6], "x", [1, 91]]), [
+      P(1, 2, 0),
+      P(3, 4, 5),
+    ]);
+    assert.deepEqual(positionsToLngLatAlt(null), []);
+  });
+
+  it("thins a long line evenly, keeping both ends", () => {
+    const pts = Array.from({ length: 1001 }, (_, i) => P(i, 0, i));
+    const thinned = decimatePoints(pts, 5);
+    assert.deepEqual(
+      thinned.map((p) => p.lng),
+      [0, 250, 500, 750, 1000],
+    );
+    assert.equal(decimatePoints(pts, 2000), pts, "short enough is returned as is");
+    assert.equal(
+      figuresFromFeatures([
+        { geometry: { type: "LineString", coordinates: pts.map((p) => [p.lng, p.lat]) } },
+      ])[0].points.length,
+      MAX_LOADED_PATH_VERTICES,
+    );
+  });
+
+  it("prefers lines, then polygon rings, then points, and walks collections", () => {
+    const figures = figuresFromFeatures([
+      { geometry: { type: "Point", coordinates: [0, 0] } },
+      {
+        geometry: {
+          type: "GeometryCollection",
+          geometries: [
+            {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [0, 0],
+                  [1, 0],
+                  [1, 1],
+                  [0, 0],
+                ],
+              ],
+            },
+            {
+              type: "LineString",
+              coordinates: [
+                [0, 0],
+                [1, 1],
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+    assert.equal(figures.length, 1);
+    assert.equal(figures[0].mode, "line");
+    const polys = figuresFromFeatures([
+      {
+        geometry: {
+          type: "MultiPolygon",
+          coordinates: [
+            [
+              [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 0],
+              ],
+            ],
+            [
+              [
+                [2, 2],
+                [3, 2],
+              ],
+            ],
+          ],
+        },
+      },
+    ]);
+    assert.equal(polys.length, 1, "a two-point ring is no polygon");
+    assert.deepEqual(polys[0], {
+      mode: "polygon",
+      closed: true,
+      points: [P(0, 0), P(1, 0), P(1, 1)],
+    });
+    const pts = figuresFromFeatures([
+      { geometry: { type: "Point", coordinates: [0, 0] } },
+      { geometry: { type: "MultiPoint", coordinates: [[1, 1]] } },
+    ]);
+    assert.deepEqual(pts, [{ mode: "point", closed: false, points: [P(0, 0), P(1, 1)] }]);
+    assert.deepEqual(figuresFromFeatures([null, undefined, { geometry: { type: "Odd" } }]), []);
+  });
+
+  it("finds the point of a path under the pointer within a tolerance, ends included", () => {
+    // ~1.1 km segments: the chord sags ~2 cm, so the tolerance is what counts.
+    const path = [P(0, 0), P(0.01, 0), P(0.01, 0.01)];
+    const on = Cesium.Cartesian3.fromDegrees(0.005, 0.0001);
+    const hit = nearestPathPoint(Cesium, path, on, 50);
+    assert.ok(hit);
+    assert.equal(hit.segment, 0);
+    assert.ok(Math.abs(hit.t - 0.5) < 0.01);
+    assert.ok(hit.meters > 10 && hit.meters < 12, `${hit.meters} m off the line`);
+    assert.equal(nearestPathPoint(Cesium, path, on, 5), null, "outside the tolerance");
+    const atVertex = nearestPathPoint(Cesium, path, Cesium.Cartesian3.fromDegrees(0.01, 0), 50);
+    assert.ok(
+      atVertex && (atVertex.t === 1 || atVertex.t === 0),
+      "a vertex is an end of a segment",
+    );
+    // Closed ring: the closing segment counts too.
+    const closing = nearestPathPoint(
+      Cesium,
+      path,
+      Cesium.Cartesian3.fromDegrees(0.005, 0.005),
+      50,
+      true,
+    );
+    assert.equal(closing?.segment, 2);
+    assert.equal(nearestPathPoint(Cesium, [P(0, 0)], on, 50), null);
+  });
+
+  it("allows for the chord's sag on a long segment", () => {
+    // 111 km along the equator: the chord runs ~240 m below the surface at
+    // its middle, so a pointer right on the line is that far from it.
+    const path = [P(0, 0), P(1, 0)];
+    const middle = Cesium.Cartesian3.fromDegrees(0.5, 0);
+    assert.ok(Math.abs(chordSagMeters(Cesium, 111_319) - 242) < 2);
+    const hit = nearestPathPoint(Cesium, path, middle, 10);
+    assert.ok(hit, "the sag is added to the tolerance");
+    assert.ok(Math.abs(hit.t - 0.5) < 0.001);
+    assert.equal(
+      nearestPathPoint(Cesium, path, Cesium.Cartesian3.fromDegrees(0.5, 0.01), 10),
+      null,
+      "but a kilometre to the side is still off the path",
+    );
   });
 });

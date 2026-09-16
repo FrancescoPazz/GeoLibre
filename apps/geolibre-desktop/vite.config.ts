@@ -122,6 +122,10 @@ for (const key of [
   "MICROZONATION_DOCUMENTS_LAYER",
   "MICROZONATION_OUTPUT_FORMAT",
   "MICROZONATION_PLANS_URL",
+  "GLOBE_COLOR",
+  "GLOBE_TRANSLUCENCY",
+  "GLOBE_COLLISION_DETECTION",
+  "RELATED_MAPS",
 ]) {
   if (!process.env[`VITE_${key}`]) {
     const value = process.env[key] || FILE_ENV[`VITE_${key}`] || FILE_ENV[key];

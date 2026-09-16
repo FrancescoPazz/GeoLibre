@@ -1692,6 +1692,13 @@
   "map": {
     "boundsRestricted": "Bounds locked",
     "boundsRestrictedTooltip": "Map bounds are restricted. You can change this in Settings.",
+    "identifyPopup": {
+      "copyCoordinates": "Copy the coordinates",
+      "copied": "Copied",
+      "download": "Download feature",
+      "height": "h",
+      "heightSeaLevel": "h (m.s.l.)"
+    },
     "identifyAll": {
       "title": "Identified results ({{count}})",
       "resultCount_one": "{{count}} result",
@@ -1764,6 +1771,15 @@
     "sourceErrorProjection": "COG terrain supports EPSG:3857 and EPSG:4326 DEMs only.",
     "sourceErrorDetail": "Could not open the COG DEM. ({{detail}})",
     "reset": "Reset",
+    "globe": {
+      "title": "3D globe",
+      "translucency": "See-through globe",
+      "translucencyAlpha": "Globe opacity",
+      "collision": "Keep the camera above the terrain",
+      "collisionHint": "Off, the camera can go below the surface — the way to look at tunnels and boreholes under a see-through globe.",
+      "color": "Globe colour",
+      "colorHint": "Seen where no imagery covers the globe."
+    },
     "done": "Done"
   },
   "pixelTimeSeries": {
@@ -2402,7 +2418,21 @@
       "area": "Area",
       "angle": "Angle",
       "radius": "Radius",
-      "segments": "Segments"
+      "segments": "Segments",
+      "paths": {
+        "label": "Path",
+        "option": "Path {{n}}",
+        "add": "Add a path",
+        "addTooltip": "Start another path; the current one stays on the globe behind it.",
+        "remove": "Remove this path",
+        "removeTooltip": "Drop the path being edited (a lone path is emptied instead).",
+        "loadedFrom": "Loaded from {{name}}"
+      },
+      "notes": "Notes",
+      "notesPlaceholder": "A note for this path: it goes into the summary and the saved layer.",
+      "radiusInput": "Radius in metres",
+      "exportProfileCsv": "Profile CSV",
+      "exportProfileCsvTooltip": "Download the terrain samples of the elevation profile as CSV: position, height and distance from the start of each sample."
     },
     "playPath": {
       "title": "Play Path",
@@ -2422,6 +2452,25 @@
       "autoStep": "Auto step",
       "step": "Step",
       "verticesOnly": "Vertices only"
+    },
+    "viewshedArea": {
+      "title": "Viewshed area",
+      "close": "Close",
+      "clear": "Clear observer",
+      "unavailable": "The viewshed area tool needs the 3D globe. Open one beside the map with View → Split View and its 3D globe toggle, or make it the map with View → Rendering engine → Cesium 3D.",
+      "clickObserver": "Click the observer point on the globe.",
+      "moveObserver": "Drag the observer, or click elsewhere to move it.",
+      "observerHeight": "Observer height",
+      "radius": "Radius",
+      "meters": "m",
+      "opacity": "Opacity",
+      "computing": "Reading the terrain…",
+      "noTerrain": "The globe has no terrain to look over: enable 3D terrain, then the visible area appears.",
+      "failed": "The terrain could not be read for this area.",
+      "visibleShare": "Visible ground",
+      "cellSize": "Grid cell",
+      "observer": "Observer",
+      "caveat": "Line of sight over the loaded terrain only: buildings and trees are not in the model, and Earth curvature is not applied."
     },
     "lineOfSight": {
       "title": "Line of Sight",
@@ -2713,6 +2762,7 @@
       "githubRepository": "GitHub repository",
       "diagnostics": "Diagnostics",
       "giveFeedback": "Give Feedback",
+      "relatedMaps": "Related maps",
       "checkForUpdates": "Check for Updates",
       "about": "About",
       "togglePlugin": "Toggle {{name}}",
@@ -3082,6 +3132,8 @@
       "flightSimulatorTooltip": "Fly over the terrain with keyboard controls, like a flight simulator.",
       "lineOfSight": "Line of Sight",
       "lineOfSightTooltip": "Click an observer and a target on the 3D globe to see whether terrain blocks the view between them.",
+      "viewshedArea": "Viewshed area",
+      "viewshedAreaTooltip": "Click an observer on the 3D globe and see the ground visible from there within a radius, tinted on the terrain.",
       "globeClipping": "Globe clipping",
       "globeClippingTooltip": "Cut a hole in the terrain around a 3D Tiles or GeoJSON layer to see what lies beneath the surface.",
       "elevationBands": "Elevation bands",
@@ -3904,7 +3956,9 @@
     "home": "Go to the catalog's home view",
     "signInRequired": "Sign in to open this entry.",
     "accessDenied": "Your account may not open this entry.",
-    "locked": "Restricted entry"
+    "locked": "Restricted entry",
+    "style": "Style",
+    "zoomOnAdd": "Zoom to an entry when it is added"
   },
   "guides": {
     "title": "Guides",
@@ -4029,6 +4083,8 @@
     "description": "Your credentials are checked against the geoportal's map server and kept only for this session: the protected layers are asked with them, and a reload signs you out.",
     "username": "Username",
     "password": "Password",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
     "missingCredentials": "Enter a username and a password.",
     "invalidCredentials": "The username or password is not right.",
     "connectionError": "The sign-in service could not be reached.",
@@ -7713,6 +7769,10 @@
     "showLayer": "Show layer",
     "editingGeometry": "Editing geometry",
     "rename": "Rename",
+    "duplicateLayer": "Duplicate layer",
+    "useAsMeasurePath": "Use as 3D measure path",
+    "useAsMeasurePathTooltip": "Load this layer's lines (or polygons, or points) into 3D Measure as its paths — terrain profile, summary and Play Path included.",
+    "useAsMeasurePathNoPath": "This layer has no line, polygon or point to use as a path.",
     "materializeToEditable": "Materialize to editable layer",
     "finishEditingGeometry": "Finish editing geometry",
     "editGeometry": "Edit geometry",
@@ -8066,6 +8126,7 @@
       "routeAnimationPanel": "Route animation panel",
       "flightSimulatorPanel": "Flight simulator panel",
       "lineOfSightPanel": "Line of sight panel",
+      "viewshedAreaPanel": "Viewshed area panel",
       "globeClippingPanel": "Globe clipping panel",
       "elevationBandsPanel": "Elevation bands panel",
       "coordsConverterPanel": "Coordinate converter panel",

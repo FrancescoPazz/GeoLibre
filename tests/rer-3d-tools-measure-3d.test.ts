@@ -30,6 +30,15 @@ import {
   measure3dSummary,
   exportMeasure3dSummary,
   PROFILE_SAMPLING_DEBOUNCE_MS,
+  addMeasure3dPath,
+  removeMeasure3dPath,
+  setMeasure3dActivePath,
+  setMeasure3dNotes,
+  setMeasure3dCircleRadius,
+  loadMeasure3dPathFromFeatures,
+  getMeasure3dPaths,
+  measure3dProfileCsv,
+  exportMeasure3dProfileCsv,
 } from "../packages/plugins/src/plugins/rer-3d-tools/measure-3d";
 import { SAMPLING_STEP_SERIES } from "../packages/plugins/src/plugins/rer-3d-tools/terrain-profile";
 import { rer3dToolsPlugin } from "../packages/plugins/src/plugins/rer-3d-tools";
@@ -723,5 +732,355 @@ describe("measure-3d save and summary", () => {
     assert.equal(exportMeasure3dSummary("Percorso 1"), true);
     assert.equal(files[0].filename, "Percorso_1_summary.txt");
     assert.equal(files[0].content, text);
+  });
+});
+
+describe("measure-3d multiple paths", () => {
+  beforeEach(() => {
+    restoreMeasure3d(mapLessApp, undefined);
+  });
+
+  it("adds an empty path, keeps the first behind it, and switches back", async () => {
+    const globe = makeGlobe({ terrain: () => 100 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    const firstProfile = getMeasure3dSnapshot().profile;
+    assert.ok(firstProfile);
+    addMeasure3dPath();
+    let s = getMeasure3dSnapshot();
+    assert.equal(s.pathCount, 2);
+    assert.equal(s.activePath, 1);
+    assert.equal(s.geometry.points.length, 0);
+    assert.equal(s.profile, null);
+    assert.ok(globe.ids().includes("geolibre-draw-background-0"), "the first path is drawn behind");
+    assert.ok(
+      !globe.ids().some((id) => id.startsWith("geolibre-draw-vertex-")),
+      "no editable vertices",
+    );
+    globe.click(C);
+    globe.click(D);
+    setMeasure3dActivePath(0);
+    s = getMeasure3dSnapshot();
+    assert.equal(s.activePath, 0);
+    assert.equal(s.geometry.points.length, 2);
+    assert.equal(s.profile, firstProfile, "the stored profile comes back without a resample");
+    assert.deepEqual(
+      globe.ids().filter((id) => id.includes("background")),
+      ["geolibre-draw-background-0"],
+      "the second path is now the one behind",
+    );
+    assert.equal(globe.ids().filter((id) => id.startsWith("geolibre-draw-vertex-")).length, 2);
+  });
+
+  it("removes the active path and clears a lone one", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    addMeasure3dPath();
+    globe.click(C);
+    removeMeasure3dPath();
+    let s = getMeasure3dSnapshot();
+    assert.equal(s.pathCount, 1);
+    assert.equal(s.activePath, 0);
+    assert.equal(s.geometry.points.length, 2, "the first path is the one left");
+    assert.ok(!globe.ids().some((id) => id.includes("background")));
+    removeMeasure3dPath();
+    s = getMeasure3dSnapshot();
+    assert.equal(s.pathCount, 1);
+    assert.equal(s.geometry.points.length, 0, "a lone path is emptied, not removed");
+  });
+
+  it("switching mode discards every path", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    addMeasure3dPath();
+    setMeasure3dMode("polygon");
+    const s = getMeasure3dSnapshot();
+    assert.equal(s.pathCount, 1);
+    assert.equal(s.mode, "polygon");
+    assert.deepEqual(globe.ids(), []);
+  });
+
+  it("round-trips the paths, the active one and the notes through project state", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    setMeasure3dNotes("first");
+    addMeasure3dPath();
+    globe.click(C);
+    globe.click(D);
+    const state = getMeasure3dProjectState();
+    assert.ok(state);
+    assert.equal((state.paths as unknown[]).length, 2);
+    assert.equal(state.activePath, 1);
+    assert.deepEqual(
+      state.points,
+      getMeasure3dSnapshot().geometry.points,
+      "the active path at the top level too",
+    );
+    restoreMeasure3d(mapLessApp, undefined);
+    assert.equal(getMeasure3dSnapshot().pathCount, 1);
+    const fresh = makeGlobe();
+    restoreMeasure3d(globeApp(fresh), state);
+    const s = getMeasure3dSnapshot();
+    assert.equal(s.pathCount, 2);
+    assert.equal(s.activePath, 1);
+    assert.equal(s.geometry.points.length, 2);
+    assert.equal(getMeasure3dPaths()[0].notes, "first");
+    assert.ok(fresh.ids().includes("geolibre-draw-background-0"));
+  });
+
+  it("reads a file from before multi-path measurements", () => {
+    const globe = makeGlobe();
+    restoreMeasure3d(globeApp(globe), { open: true, mode: "line", points: [A, B], closed: false });
+    const s = getMeasure3dSnapshot();
+    assert.equal(s.pathCount, 1);
+    assert.equal(s.geometry.points.length, 2);
+  });
+
+  it("saves every path in one layer, each tagged with its number", () => {
+    const globe = makeGlobe();
+    type Props = { properties: Record<string, unknown> };
+    const layers: Array<{ name: string; features: Props[] }> = [];
+    const app = {
+      getMap: () => null,
+      getCesiumScene: () => globe.handle,
+      addGeoJsonLayer: (name: string, data: { features: Props[] }) => {
+        layers.push({ name, features: data.features });
+        return "layer-1";
+      },
+    } as unknown as GeoLibreAppAPI;
+    openMeasure3dPanel(app);
+    globe.click(A);
+    globe.click(B);
+    addMeasure3dPath();
+    globe.click(C);
+    globe.click(D);
+    assert.equal(saveMeasure3dAsLayer("Paths"), "layer-1");
+    const numbers = new Set(layers[0].features.map((f) => f.properties.path));
+    assert.deepEqual([...numbers].sort(), [1, 2]);
+    assert.ok(measure3dSummary("Paths")?.endsWith("path: 2 of 2"));
+  });
+});
+
+describe("measure-3d notes, radius, hover and profile CSV", () => {
+  beforeEach(() => {
+    restoreMeasure3d(mapLessApp, undefined);
+  });
+
+  it("carries a note into the summary and the saved layer", () => {
+    const globe = makeGlobe();
+    const props: Record<string, unknown>[] = [];
+    const app = {
+      getMap: () => null,
+      getCesiumScene: () => globe.handle,
+      addGeoJsonLayer: (
+        _n: string,
+        data: { features: Array<{ properties: Record<string, unknown> }> },
+      ) => {
+        props.push(...data.features.map((f) => f.properties));
+        return "l";
+      },
+    } as unknown as GeoLibreAppAPI;
+    openMeasure3dPanel(app);
+    globe.click(A);
+    globe.click(B);
+    setMeasure3dNotes("  ridge walk\nsecond line ");
+    assert.equal(getMeasure3dSnapshot().notes, "  ridge walk\nsecond line ");
+    assert.ok(measure3dSummary("x")?.includes("notes: ridge walk / second line"));
+    saveMeasure3dAsLayer("x");
+    assert.equal(props.find((p) => p.feature === "figure")?.notes, "ridge walk\nsecond line");
+    setMeasure3dNotes("");
+    assert.ok(!measure3dSummary("x")?.includes("notes:"));
+  });
+
+  it("sets a circle's radius by number along the centre–edge geodesic", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    setMeasure3dMode("circle");
+    globe.click(A);
+    setMeasure3dCircleRadius(250);
+    let s = getMeasure3dSnapshot();
+    assert.equal(s.geometry.points.length, 2);
+    assert.ok(Math.abs((s.measures.circleRadiusMeters ?? 0) - 250) < 0.01);
+    assert.ok(s.geometry.points[1].lng > A.lng, "due east when there was no edge");
+    // A third click restarts at a new centre, a fourth sets its edge northward.
+    globe.click(A);
+    globe.click(P(A.lng, A.lat + 0.001));
+    setMeasure3dCircleRadius(1000);
+    s = getMeasure3dSnapshot();
+    assert.ok(Math.abs((s.measures.circleRadiusMeters ?? 0) - 1000) < 0.01);
+    assert.ok(Math.abs(s.geometry.points[1].lng - A.lng) < 1e-9, "kept the northward direction");
+    setMeasure3dCircleRadius(-5);
+    assert.ok(Math.abs((getMeasure3dSnapshot().measures.circleRadiusMeters ?? 0) - 1000) < 0.01);
+  });
+
+  it("follows the pointer along the path onto the profile, and clears when it leaves", async () => {
+    const globe = makeGlobe({ terrain: () => 100, metersPerPixel: 1 });
+    openMeasure3dPanel(globeApp(globe));
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    const s0 = getMeasure3dSnapshot();
+    assert.ok(s0.profile);
+    globe.move(P((A.lng + B.lng) / 2, A.lat));
+    const s1 = getMeasure3dSnapshot();
+    assert.ok(s1.hoverSample !== null, "the midpoint hovers a sample");
+    const last = s1.profile!.samples.length - 1;
+    assert.ok(Math.abs(s1.hoverSample! - last / 2) <= 1);
+    assert.ok(globe.ids().includes("geolibre-draw-marker"));
+    globe.move(P(A.lng, A.lat + 0.01));
+    assert.equal(getMeasure3dSnapshot().hoverSample, null, "far from the path clears the hover");
+    assert.ok(!globe.ids().includes("geolibre-draw-marker"));
+  });
+
+  it("downloads the profile samples as CSV through the host", async () => {
+    const globe = makeGlobe({ terrain: () => 321 });
+    const files: Array<{ filename: string; content: string }> = [];
+    const app = {
+      getMap: () => null,
+      getCesiumScene: () => globe.handle,
+      exportTextFile: (filename: string, content: string) => files.push({ filename, content }),
+    } as unknown as GeoLibreAppAPI;
+    openMeasure3dPanel(app);
+    assert.equal(measure3dProfileCsv(), null);
+    assert.equal(exportMeasure3dProfileCsv("x"), false);
+    globe.click(A);
+    globe.click(B);
+    await settle();
+    const csv = measure3dProfileCsv();
+    assert.ok(csv);
+    const lines = csv.split("\n");
+    assert.equal(lines[0], "sample,vertex,lng,lat,alt_m,distance_m");
+    assert.equal(lines.length - 1, getMeasure3dSnapshot().profile!.samples.length);
+    assert.ok(lines[1].startsWith("1,1,"), "the first sample is vertex 1");
+    assert.equal(lines[lines.length - 1].split(",")[1], "2", "the last sample is vertex 2");
+    assert.ok(lines[1].includes(",321.00,0.00"));
+    assert.equal(exportMeasure3dProfileCsv("Percorso 1"), true);
+    assert.equal(files[0].filename, "Percorso_1_profile.csv");
+  });
+});
+
+describe("measure-3d from a layer's features", () => {
+  beforeEach(() => {
+    restoreMeasure3d(mapLessApp, undefined);
+  });
+
+  const line = (coords: number[][]) => ({
+    type: "Feature",
+    geometry: { type: "LineString", coordinates: coords },
+    properties: {},
+  });
+
+  it("loads each line as a path, opens the panel and samples the first", async () => {
+    const globe = makeGlobe({ terrain: () => 50 });
+    const n = loadMeasure3dPathFromFeatures(
+      globeApp(globe),
+      [
+        line([
+          [A.lng, A.lat, 12],
+          [B.lng, B.lat],
+        ]),
+        {
+          type: "Feature",
+          geometry: {
+            type: "MultiLineString",
+            coordinates: [
+              [
+                [C.lng, C.lat],
+                [D.lng, D.lat],
+              ],
+              [[A.lng, A.lat]],
+            ],
+          },
+          properties: {},
+        },
+      ],
+      { sourceName: "track.gpx" },
+    );
+    assert.equal(n, 2, "a one-point part is not a path");
+    const s = getMeasure3dSnapshot();
+    assert.equal(s.open, true);
+    assert.equal(s.mode, "line");
+    assert.equal(s.pathCount, 2);
+    assert.equal(s.activePath, 0);
+    assert.equal(s.sourceName, "track.gpx");
+    assert.deepEqual(s.geometry.points[0], { lng: A.lng, lat: A.lat, alt: 12 });
+    assert.equal(s.geometry.points[1].alt, 0);
+    assert.ok(globe.ids().includes("geolibre-draw-background-0"), "the second path sits behind");
+    await settle();
+    assert.ok(getMeasure3dSnapshot().profile, "the loaded path was sampled");
+  });
+
+  it("replaces a drawn figure of another mode, and falls back to polygons then points", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    setMeasure3dMode("circle");
+    globe.click(A);
+    globe.click(B);
+    const ring = [
+      [A.lng, A.lat],
+      [B.lng, B.lat],
+      [C.lng, C.lat],
+      [A.lng, A.lat],
+    ];
+    assert.equal(
+      loadMeasure3dPathFromFeatures(globeApp(globe), [
+        { type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: {} },
+      ]),
+      1,
+    );
+    let s = getMeasure3dSnapshot();
+    assert.equal(s.mode, "polygon");
+    assert.equal(s.geometry.closed, true);
+    assert.equal(s.geometry.points.length, 3, "the closing position is dropped");
+    assert.ok(s.measures.areaSqm! > 0);
+    assert.equal(
+      loadMeasure3dPathFromFeatures(globeApp(globe), [
+        {
+          type: "Feature",
+          geometry: {
+            type: "MultiPoint",
+            coordinates: [
+              [A.lng, A.lat],
+              [B.lng, B.lat],
+            ],
+          },
+          properties: {},
+        },
+      ]),
+      1,
+    );
+    s = getMeasure3dSnapshot();
+    assert.equal(s.mode, "point");
+    assert.equal(s.geometry.points.length, 2);
+    assert.equal(loadMeasure3dPathFromFeatures(globeApp(globe), [{ geometry: null }]), 0);
+    assert.equal(getMeasure3dSnapshot().mode, "point", "nothing usable leaves the tool as it was");
+  });
+
+  it("loads while the 2D map is primary and draws once the globe mounts", () => {
+    assert.equal(
+      loadMeasure3dPathFromFeatures(mapLessApp, [
+        line([
+          [A.lng, A.lat],
+          [B.lng, B.lat],
+        ]),
+      ]),
+      1,
+    );
+    let s = getMeasure3dSnapshot();
+    assert.equal(s.open, true);
+    assert.equal(s.bound, false);
+    assert.equal(s.geometry.points.length, 2);
+    const globe = makeGlobe();
+    reattachMeasure3d(globeApp(globe));
+    s = getMeasure3dSnapshot();
+    assert.equal(s.bound, true);
+    assert.equal(globe.ids().filter((id) => id.startsWith("geolibre-draw-vertex-")).length, 2);
   });
 });

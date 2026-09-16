@@ -30,14 +30,20 @@ import {
   reattachPlayPath,
   restorePlayPath,
 } from "./play-path";
+import {
+  closeViewshedAreaPanel,
+  getViewshedAreaProjectState,
+  reattachViewshedArea,
+  restoreViewshedArea,
+} from "./viewshed-area";
 
 /**
  * 3D tools for the Cesium globe.
  *
  * One plugin, declared for both engines, that gathers the terrain-aware tools
  * a 3D geoportal needs: 3D measuring (line, polygon, points, angle, circle)
- * with terrain-sampled profiles, line of sight, path fly-through, globe
- * clipping and elevation colouring. They are Cesium-native
+ * with terrain-sampled profiles, line of sight, the visible area from a
+ * point, path fly-through, globe clipping and elevation colouring. They are Cesium-native
  * (entities, `globe.pick`, terrain sampling through `getCesiumScene()`)
  * because none of the 2D drawing or measuring plugins run on the globe;
  * declaring `maplibre` too keeps the panels reachable — with a hint — while
@@ -55,6 +61,7 @@ export function reattachRer3dTools(app: GeoLibreAppAPI): void {
   reattachMeasure3d(app);
   reattachPlayPath(app);
   reattachLineOfSight(app);
+  reattachViewshedArea(app);
   reattachGlobeClipping(app);
   reattachElevationBands(app);
 }
@@ -70,6 +77,7 @@ export const rer3dToolsPlugin: GeoLibrePlugin = {
     closePlayPathPanel(app);
     closeMeasure3dPanel(app);
     closeLineOfSightPanel(app);
+    closeViewshedAreaPanel(app);
     closeGlobeClippingPanel(app);
     closeElevationBandsPanel(app);
   },
@@ -80,15 +88,24 @@ export const rer3dToolsPlugin: GeoLibrePlugin = {
     const measure = getMeasure3dProjectState();
     const playPath = getPlayPathProjectState();
     const lineOfSight = getLineOfSightProjectState();
+    const viewshedArea = getViewshedAreaProjectState();
     const globeClipping = getGlobeClippingProjectState();
     const elevationBands = getElevationBandsProjectState();
-    if (!measure && !playPath && !lineOfSight && !globeClipping && !elevationBands) {
+    if (
+      !measure &&
+      !playPath &&
+      !lineOfSight &&
+      !viewshedArea &&
+      !globeClipping &&
+      !elevationBands
+    ) {
       return undefined;
     }
     return {
       ...(measure ? { measure } : {}),
       ...(playPath ? { playPath } : {}),
       ...(lineOfSight ? { lineOfSight } : {}),
+      ...(viewshedArea ? { viewshedArea } : {}),
       ...(globeClipping ? { globeClipping } : {}),
       ...(elevationBands ? { elevationBands } : {}),
     };
@@ -99,9 +116,10 @@ export const rer3dToolsPlugin: GeoLibrePlugin = {
     const measure = restoreMeasure3d(app, raw.measure);
     const playPath = restorePlayPath(app, raw.playPath);
     const lineOfSight = restoreLineOfSight(app, raw.lineOfSight);
+    const viewshedArea = restoreViewshedArea(app, raw.viewshedArea);
     const globeClipping = restoreGlobeClipping(app, raw.globeClipping);
     const elevationBands = restoreElevationBands(app, raw.elevationBands);
-    return measure || playPath || lineOfSight || globeClipping || elevationBands;
+    return measure || playPath || lineOfSight || viewshedArea || globeClipping || elevationBands;
   },
 };
 
@@ -141,22 +159,31 @@ export {
   DRAW_MODES,
   MEASURE_3D_TOOL_ID,
   PROFILE_SAMPLING_DEBOUNCE_MS,
+  addMeasure3dPath,
   clearMeasure3d,
   closeMeasure3dPanel,
+  exportMeasure3dProfileCsv,
   exportMeasure3dSummary,
+  getMeasure3dPaths,
   getMeasure3dProjectState,
   getMeasure3dSnapshot,
   isMeasure3dPanelVisible,
+  loadMeasure3dPathFromFeatures,
+  measure3dProfileCsv,
   measure3dSummary,
+  removeMeasure3dPath,
   normalizeDrawOptions,
   openMeasure3dPanel,
   saveMeasure3dAsLayer,
   reattachMeasure3d,
   restoreMeasure3d,
+  setMeasure3dActivePath,
+  setMeasure3dCircleRadius,
   setMeasure3dGeoid,
   setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,
   setMeasure3dMode,
+  setMeasure3dNotes,
   setMeasure3dOptions,
   setMeasure3dSamplingStep,
   subscribeMeasure3d,
@@ -211,10 +238,13 @@ export {
 } from "./play-path";
 export {
   buildMeasureFeatureCollection,
+  buildMultiPathFeatureCollection,
   measureFileStem,
+  measureProfileCsv,
   measureSummaryKind,
   measureSummaryProperties,
   measureSummaryText,
+  type MeasurePath,
   pathBearingDegrees,
   type MeasureSummaryKind,
 } from "./measure-export";
@@ -273,15 +303,26 @@ export {
   type ElevationBand,
   type ElevationBandsState,
 } from "./elevation-bands";
-export { CesiumDrawing, DEFAULT_DRAW_OPTIONS, type DrawOptions } from "./draw-engine";
+export {
+  CesiumDrawing,
+  DEFAULT_DRAW_OPTIONS,
+  HOVER_TOLERANCE_PIXELS,
+  type DrawOptions,
+} from "./draw-engine";
 export {
   INSERT_TOLERANCE_PIXELS,
   INSERT_TOLERANCE_RATIO,
   angleArc,
   angleDegrees,
   circleRing,
+  chordSagMeters,
   circleSegmentCount,
   computeMeasures,
+  decimatePoints,
+  figuresFromFeatures,
+  MAX_LOADED_PATH_VERTICES,
+  nearestPathPoint,
+  positionsToLngLatAlt,
   formatDegrees,
   formatMeters,
   formatSquareMeters,
@@ -294,5 +335,45 @@ export {
   verticesCentroid,
   type DrawGeometry,
   type DrawMeasures,
+  type PathHit,
   type DrawMode,
 } from "./draw-geometry";
+
+export {
+  DEFAULT_VIEWSHED_AREA_SETTINGS,
+  VIEWSHED_AREA_DEBOUNCE_MS,
+  VIEWSHED_AREA_HEIGHT_MAX,
+  VIEWSHED_AREA_HEIGHT_MIN,
+  VIEWSHED_AREA_RADIUS_MAX,
+  VIEWSHED_AREA_RADIUS_MIN,
+  VIEWSHED_AREA_TOOL_ID,
+  clearViewshedArea,
+  closeViewshedAreaPanel,
+  getViewshedAreaProjectState,
+  getViewshedAreaSnapshot,
+  isViewshedAreaPanelVisible,
+  normalizeViewshedAreaSettings,
+  openViewshedAreaPanel,
+  reattachViewshedArea,
+  restoreViewshedArea,
+  setViewshedAreaSettings,
+  subscribeViewshedArea,
+  type ViewshedAreaPhase,
+  type ViewshedAreaSettings,
+  type ViewshedAreaState,
+  type ViewshedAreaStatus,
+} from "./viewshed-area";
+export {
+  DEFAULT_MAX_CELLS_PER_SIDE,
+  VISIBILITY_HIDDEN,
+  VISIBILITY_NO_DATA,
+  VISIBILITY_VISIBLE,
+  computeViewshed,
+  gridCartographics,
+  gridExtent,
+  gridLayout,
+  rasterizeVisibility,
+  sampleTerrainVisibilityGrid,
+  visibleFraction,
+  type TerrainVisibilityGrid,
+} from "./viewshed-area-geometry";

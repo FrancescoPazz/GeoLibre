@@ -2,8 +2,11 @@ import {
   createHoverTooltipElement,
   createIdentifyPopupElement,
   createIdentifyPopupRows,
+  resolveIdentifyPopupFooter,
+  type IdentifyPopupExtras,
 } from "./feature-popup";
 import {
+  sampleMapTerrainPoint,
   applyGroupEffects,
   applyMatchedSelection,
   createPointerElevationResolver,
@@ -111,6 +114,8 @@ export interface MapCanvasProps {
   canUseRemoteElevation?: () => boolean;
   /** Localized labels for the grouped, all-layer Identify popup. */
   identifyAllLabels?: MapCanvasIdentifyAllLabels;
+  /** The identify popup's footer — clicked coordinate, height, feature download (see `IdentifyPopupExtras`). */
+  identifyPopupExtras?: IdentifyPopupExtras;
   /** Reads app-owned raster layers for the grouped, all-layer Identify popup. */
   identifyRasterLayerAt?: MapCanvasRasterIdentify;
 }
@@ -141,6 +146,20 @@ export type MapCanvasRasterIdentify = (
   lngLat: [number, number],
   options: { signal: AbortSignal },
 ) => Promise<MapCanvasRasterIdentifyResult | null>;
+
+/** The store's own copy of a feature, when the layer keeps its features inline. */
+function storedFeature(
+  layer: GeoLibreLayer,
+  featureId: string | number | undefined,
+): Feature | null {
+  if (featureId === undefined || !layer.geojson?.features) return null;
+  const wanted = String(featureId);
+  return (
+    layer.geojson.features.find(
+      (f, index) => String(f.id ?? f.properties?.id ?? index) === wanted,
+    ) ?? null
+  );
+}
 
 const DEFAULT_IDENTIFY_ALL_LABELS: MapCanvasIdentifyAllLabels = {
   title: (count) => `Identified results (${count})`,
@@ -1121,6 +1140,7 @@ export const MapCanvas = memo(function MapCanvas({
   onControllerReady,
   canUseRemoteElevation,
   identifyAllLabels = DEFAULT_IDENTIFY_ALL_LABELS,
+  identifyPopupExtras,
   identifyRasterLayerAt,
 }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2034,6 +2054,13 @@ export const MapCanvas = memo(function MapCanvas({
         identifyPopup.current?.remove();
         identifyPopup.current = null;
       };
+      // Where the click landed, with the ground height when 3D terrain is on
+      // (in true metres — the exaggeration divided back out).
+      const clickLocation = () => ({
+        lng: event.lngLat.lng,
+        lat: event.lngLat.lat,
+        alt: sampleMapTerrainPoint(map, [event.lngLat.lng, event.lngLat.lat]),
+      });
       const showIdentifyPopup = (content: HTMLElement) => {
         identifyPopup.current?.remove();
         identifyPopup.current = new maplibregl.Popup({
@@ -2161,6 +2188,15 @@ export const MapCanvas = memo(function MapCanvas({
             popup: layer.popup,
             fieldVisibility: layer.fieldVisibility,
             zoom: map.getZoom(),
+            // A DuckDB (tiles-mode) layer keeps its features in the engine,
+            // so the download has nothing to carry: coordinates only.
+            footer: resolveIdentifyPopupFooter(
+              identifyPopupExtras,
+              clickLocation(),
+              layer.id,
+              null,
+              result.featureId,
+            ),
           }),
         );
         return;
@@ -2189,6 +2225,19 @@ export const MapCanvas = memo(function MapCanvas({
           fieldVisibility: layer.fieldVisibility,
           feature,
           zoom: map.getZoom(),
+          footer: resolveIdentifyPopupFooter(
+            identifyPopupExtras,
+            clickLocation(),
+            layer.id,
+            // The rendered feature is a tile slice; the store's own copy, when
+            // the layer holds one, is what a download should carry.
+            storedFeature(layer, featureId ?? feature.id) ?? {
+              type: "Feature",
+              geometry: feature.geometry,
+              properties: feature.properties ?? {},
+            },
+            featureId ?? feature.id,
+          ),
         }),
       );
     };
@@ -2209,6 +2258,7 @@ export const MapCanvas = memo(function MapCanvas({
   }, [
     identifyAllLabels,
     identifyLayerId,
+    identifyPopupExtras,
     identifyRasterLayerAt,
     layers,
     selectFeature,

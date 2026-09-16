@@ -6,7 +6,9 @@ import { DEFAULT_LAYER_STYLE, useAppStore, type GeoLibreLayer } from "@geolibre/
 import {
   CATALOG_LAYER_METADATA_KEY,
   addCatalogItem,
+  catalogItemStyleLabel,
   catalogItems,
+  getCatalogItemStyle,
   deploymentCatalogUrls,
   expandMapServerGroup,
   filterCatalog,
@@ -20,6 +22,8 @@ import {
   removeCatalogItem,
   resetTerriaCatalog,
   searchCatalogItems,
+  setCatalogItemStyle,
+  setCatalogZoomOnAdd,
   setTerriaCatalogAdapters,
   stripJsonComments,
   terriaCatalogPlugin,
@@ -487,7 +491,11 @@ describe("terria catalog plugin", () => {
         ],
       ],
     );
-    assert.equal(searchCatalogItems("dbtr").length, 5, "matches across groups, the group itself excluded");
+    assert.equal(
+      searchCatalogItems("dbtr").length,
+      5,
+      "matches across groups, the group itself excluded",
+    );
     assert.equal(searchCatalogItems("dbtr", 2).length, 2, "capped");
     assert.equal(searchCatalogItems("  ").length, 0);
     assert.ok(
@@ -513,5 +521,234 @@ describe("terria catalog plugin", () => {
     await flush();
     assert.equal(getTerriaCatalogState().sources[0]?.loaded, true);
     assert.equal(terriaCatalogPlugin.applyProjectState?.(host.app, "junk"), false);
+  });
+});
+
+describe("WMS styles to use", () => {
+  const STYLED_URL = "https://geoportal.example.org/init/styled.json";
+  const STYLED_INIT = JSON.stringify({
+    catalog: [
+      {
+        id: "styled",
+        name: "Styled WMS",
+        type: "wms",
+        url: "https://example.org/wms",
+        layers: "roads",
+        stylesToUse: ["classic", " dark ", "classic", ""],
+        availableStyles: [{ layerName: "roads", styles: [{ name: "dark", title: "Dark roads" }] }],
+      },
+      {
+        id: "fixed",
+        name: "Fixed WMS",
+        type: "wms",
+        url: "https://example.org/wms",
+        layers: "rivers",
+        styles: "blue",
+        stylesToUse: ["blue", "green"],
+        styleSelectableDimensionsUseNameBeforeTitle: true,
+        availableStyles: [{ layerName: "rivers", styles: [{ name: "blue", title: "Blue" }] }],
+      },
+    ],
+  });
+
+  function styledHost() {
+    const host = fakeHost();
+    setTerriaCatalogAdapters({
+      fetchText: async (url) => {
+        if (url === STYLED_URL) return STYLED_INIT;
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    });
+    return host;
+  }
+
+  it("parses the traits: names deduplicated and trimmed, titles flattened", () => {
+    const items = catalogItems(parseTerriaCatalogText(STYLED_INIT).roots);
+    const styled = items.find((i) => i.id === "styled");
+    assert.deepEqual(styled?.stylesToUse, ["classic", "dark"]);
+    assert.equal(styled?.styleNamesBeforeTitles, false);
+    assert.deepEqual(styled?.styleTitles, { dark: "Dark roads" });
+    assert.equal(catalogItemStyleLabel(styled!, "dark"), "Dark roads");
+    assert.equal(catalogItemStyleLabel(styled!, "classic"), "classic");
+    const fixed = items.find((i) => i.id === "fixed");
+    assert.equal(fixed?.styleNamesBeforeTitles, true);
+    assert.equal(catalogItemStyleLabel(fixed!, "blue"), "blue", "names before titles");
+    const plain = catalogItems(parseTerriaCatalogText(RER_INIT).roots).find(
+      (i) => i.id === "DexQu5",
+    );
+    assert.equal(plain?.stylesToUse, undefined);
+  });
+
+  it("requests the first style to use unless the item fixes one", async () => {
+    const host = styledHost();
+    terriaCatalogPlugin.activate(host.app);
+    await loadCatalog(STYLED_URL);
+    assert.ok(await addCatalogItem(STYLED_URL, "styled"));
+    assert.equal(host.added[0].options?.styles, "classic");
+    assert.equal(getCatalogItemStyle(STYLED_URL, "styled"), "classic");
+    assert.ok(await addCatalogItem(STYLED_URL, "fixed"));
+    assert.equal(host.added[1].options?.styles, "blue");
+  });
+
+  it("redraws an added item with another listed style, in place, and refuses an unlisted one", async () => {
+    const host = styledHost();
+    useAppStore.getState().addLayer({
+      id: "top",
+      name: "Top",
+      type: "geojson",
+      source: {},
+      visible: true,
+      opacity: 1,
+      style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
+    });
+    terriaCatalogPlugin.activate(host.app);
+    await loadCatalog(STYLED_URL);
+    const first = await addCatalogItem(STYLED_URL, "styled");
+    useAppStore.getState().addLayer({
+      id: "above",
+      name: "Above",
+      type: "geojson",
+      source: {},
+      visible: true,
+      opacity: 1,
+      style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
+    });
+    assert.equal(
+      await setCatalogItemStyle(STYLED_URL, "styled", "classic"),
+      first,
+      "same style, same layer",
+    );
+    const second = await setCatalogItemStyle(STYLED_URL, "styled", "dark");
+    assert.ok(second && second !== first);
+    assert.equal(host.added.at(-1)?.options?.styles, "dark");
+    assert.deepEqual(
+      useAppStore.getState().layers.map((l) => l.id),
+      ["top", second, "above"],
+      "the redrawn layer keeps its place",
+    );
+    assert.equal(getCatalogItemStyle(STYLED_URL, "styled"), "dark");
+    const tag = useAppStore.getState().layers[1].metadata[CATALOG_LAYER_METADATA_KEY] as {
+      style?: string;
+    };
+    assert.equal(tag.style, "dark");
+    assert.equal(await setCatalogItemStyle(STYLED_URL, "styled", "neon"), null);
+    // Not yet on the map: the style picks the style it is added with.
+    assert.ok(await setCatalogItemStyle(STYLED_URL, "fixed", "green"));
+    assert.equal(host.added.at(-1)?.options?.styles, "green");
+  });
+});
+
+describe("Google tile maps items", () => {
+  const GOOGLE_URL = "https://geoportal.example.org/init/google.json";
+  const GOOGLE_INIT = JSON.stringify({
+    catalog: [
+      {
+        id: "gsat",
+        name: "Google satellite",
+        type: "google-tile-maps",
+        key: "k&ey",
+        mapType: "satellite",
+        language: "it",
+        region: "IT",
+      },
+      { id: "nokey", name: "No key", type: "google-tile-maps" },
+    ],
+  });
+
+  it("parses the key, map type, language and region", () => {
+    const items = catalogItems(parseTerriaCatalogText(GOOGLE_INIT).roots);
+    assert.deepEqual(items.find((i) => i.id === "gsat")?.googleTiles, {
+      key: "k&ey",
+      mapType: "satellite",
+      language: "it",
+      region: "IT",
+    });
+    assert.equal(items.find((i) => i.id === "nokey")?.googleTiles, undefined);
+    assert.ok(items.every((i) => i.supported));
+  });
+
+  it("creates a session and adds the 2D tiles carrying it", async () => {
+    const host = fakeHost();
+    const posts: Array<{ url: string; body: unknown }> = [];
+    setTerriaCatalogAdapters({
+      fetchText: async (url) => {
+        if (url === GOOGLE_URL) return GOOGLE_INIT;
+        throw new Error(`unexpected fetch ${url}`);
+      },
+      postJson: async (url, body) => {
+        posts.push({ url, body });
+        return { session: "s/1", expiry: "999" };
+      },
+    });
+    terriaCatalogPlugin.activate(host.app);
+    await loadCatalog(GOOGLE_URL);
+    assert.ok(await addCatalogItem(GOOGLE_URL, "gsat"));
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].url, "https://tile.googleapis.com/v1/createSession?key=k%26ey");
+    assert.deepEqual(posts[0].body, { mapType: "satellite", language: "it", region: "IT" });
+    const tiles = host.added.find((a) => a.kind === "xyz");
+    assert.ok(tiles);
+    assert.equal(
+      tiles.url,
+      "https://tile.googleapis.com/v1/2dtiles/{z}/{x}/{y}?session=s%2F1&key=k%26ey",
+    );
+    assert.equal(tiles.options?.attribution, "Google");
+    assert.equal(tiles.options?.maxzoom, 22);
+    assert.equal(await addCatalogItem(GOOGLE_URL, "nokey"), null, "no key, no layer");
+    assert.ok(getTerriaCatalogState().status.includes("No key"));
+  });
+});
+
+describe("zoom to an entry when it is added", () => {
+  const BOXED_URL = "https://geoportal.example.org/init/boxed.json";
+  const BOXED_INIT = JSON.stringify({
+    catalog: [
+      {
+        id: "boxed",
+        name: "Boxed",
+        type: "open-street-map",
+        url: "https://tiles.example.org/{z}/{x}/{y}.png",
+        rectangle: { west: 9.2, south: 43.7, east: 12.8, north: 45.1 },
+      },
+      {
+        id: "bad",
+        name: "Bad box",
+        type: "open-street-map",
+        url: "https://tiles.example.org/{z}/{x}/{y}.png",
+        rectangle: { west: 12, south: 44, east: 11, north: 45 },
+      },
+    ],
+  });
+
+  it("parses a sane rectangle and drops an inside-out one", () => {
+    const items = catalogItems(parseTerriaCatalogText(BOXED_INIT).roots);
+    assert.deepEqual(items.find((i) => i.id === "boxed")?.extent, [9.2, 43.7, 12.8, 45.1]);
+    assert.equal(items.find((i) => i.id === "bad")?.extent, undefined);
+  });
+
+  it("flies to the extent only when the panel asks, and keeps the choice in the project", async () => {
+    const host = fakeHost();
+    setTerriaCatalogAdapters({
+      fetchText: async (url) => {
+        if (url === BOXED_URL) return BOXED_INIT;
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    });
+    terriaCatalogPlugin.activate(host.app);
+    await loadCatalog(BOXED_URL);
+    assert.equal(getTerriaCatalogState().zoomOnAdd, false);
+    assert.ok(await addCatalogItem(BOXED_URL, "boxed"));
+    assert.equal(host.fitted.length, 0, "off by default");
+    removeCatalogItem(BOXED_URL, "boxed");
+    setCatalogZoomOnAdd(true);
+    assert.ok(await addCatalogItem(BOXED_URL, "boxed"));
+    assert.deepEqual(host.fitted, [[9.2, 43.7, 12.8, 45.1]]);
+    assert.equal(getTerriaCatalogProjectState()?.zoomOnAdd, true);
+    resetTerriaCatalog();
+    assert.equal(getTerriaCatalogState().zoomOnAdd, false);
+    terriaCatalogPlugin.applyProjectState?.(host.app, { sources: [], zoomOnAdd: true });
+    assert.equal(getTerriaCatalogState().zoomOnAdd, true);
   });
 });

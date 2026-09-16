@@ -34,6 +34,7 @@ export * from "./layer-library";
 export * from "./layer-defaults";
 export * from "./layer-style-clipboard";
 export * from "./layer-groups";
+export * from "./layer-names";
 export * from "./pixel-format";
 export * from "./print-layout-config";
 export { createSampleStoryMap } from "./storymap-sample";
@@ -202,6 +203,10 @@ export {
   getCesiumTerrainAssetId,
   getElevationMeanSeaLevelDefault,
   getFeedbackTarget,
+  getGlobeAppearanceDefaults,
+  getRelatedMaps,
+  type RelatedMap,
+  type GlobeAppearance,
   type FeedbackTarget,
   getGoogleMapsApiKey,
   getMapboxAccessToken,

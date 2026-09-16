@@ -754,6 +754,22 @@ ELEVATION_MEAN_SEA_LEVEL=1
 
 `ELEVATION_MEAN_SEA_LEVEL` (or `VITE_ELEVATION_MEAN_SEA_LEVEL`) follows the same build/deployment/runtime rules as the other variables above.
 
+### Globe look
+
+The globe's own look — apart from its imagery — has three deployment defaults, each also changeable by the user in the terrain settings dialog while the globe is the map:
+
+```env
+GLOBE_COLOR=#1e2a3b            # base colour where no imagery covers the globe (#rrggbb)
+GLOBE_TRANSLUCENCY=0.5         # 1/true for a half-transparent globe, or an alpha from 0 to 1
+GLOBE_COLLISION_DETECTION=0    # 1/0: keep the camera above the terrain (Cesium's default is on)
+```
+
+A see-through globe is how tunnels, boreholes and other underground models are looked at from above; setting it also frees the camera to go below the surface. `GLOBE_COLOR`, `GLOBE_TRANSLUCENCY` and `GLOBE_COLLISION_DETECTION` (or their `VITE_` forms) follow the same build/deployment/runtime rules as the other variables above.
+
+### Related maps
+
+**Help → Related maps** lists a deployment's sister portals when `RELATED_MAPS` (or `VITE_RELATED_MAPS`) holds a JSON array of `{ "title", "url", "description"?, "imageUrl"? }` entries; each opens in a new tab. Entries without a title or an http(s) URL are dropped.
+
 ### Feedback channel
 
 **Help → Give feedback** opens the GeoLibre issue tracker by default. A deployment can point it at its own page, or at an e-mail address so the message lands in the mail client already addressed:

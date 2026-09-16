@@ -1,4 +1,9 @@
-import { CesiumCanvas, type CesiumWidgetControlLabels, type MapEngine } from "@geolibre/map";
+import {
+  CesiumCanvas,
+  type CesiumWidgetControlLabels,
+  type IdentifyPopupExtras,
+  type MapEngine,
+} from "@geolibre/map";
 import { useMemo, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useCesiumIonToken, useCesiumTerrainAssetId } from "../../hooks/useCesiumIonToken";
@@ -13,6 +18,8 @@ export interface PrimaryCesiumCanvasProps {
   engineRef: RefObject<MapEngine | null>;
   /** Called once the engine is live, to re-arm anything keyed to map readiness. */
   onEngineReady: () => void;
+  /** The identify popup's footer (coordinate, height, download), from the shell. */
+  identifyPopupExtras?: IdentifyPopupExtras;
 }
 
 /**
@@ -30,7 +37,11 @@ export interface PrimaryCesiumCanvasProps {
  * mounted beside it, and the menus gate those on `engine.capabilities` rather
  * than on the renderer's name.
  */
-export function PrimaryCesiumCanvas({ engineRef, onEngineReady }: PrimaryCesiumCanvasProps) {
+export function PrimaryCesiumCanvas({
+  engineRef,
+  onEngineReady,
+  identifyPopupExtras,
+}: PrimaryCesiumCanvasProps) {
   const { t } = useTranslation();
   const ionToken = useCesiumIonToken();
   const terrainAssetId = useCesiumTerrainAssetId();
@@ -72,6 +83,7 @@ export function PrimaryCesiumCanvas({ engineRef, onEngineReady }: PrimaryCesiumC
         onEngineReady={onEngineReady}
         controlLabels={controlLabels}
         popupCloseLabel={t("common.close")}
+        identifyPopupExtras={identifyPopupExtras}
       />
       {/* The globe works without an Ion token — it draws the project basemap —
           so say what a token would add rather than hiding the view. Bottom-end

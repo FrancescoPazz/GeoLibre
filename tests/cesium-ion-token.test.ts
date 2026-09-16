@@ -4,6 +4,8 @@ import {
   getCesiumIonToken,
   getCesiumTerrainAssetId,
   getElevationMeanSeaLevelDefault,
+  getGlobeAppearanceDefaults,
+  getRelatedMaps,
   getFeedbackTarget,
 } from "@geolibre/core";
 
@@ -140,5 +142,74 @@ describe("getElevationMeanSeaLevelDefault", () => {
       true,
     );
     assert.equal(getElevationMeanSeaLevelDefault({ ELEVATION_MEAN_SEA_LEVEL: "yes" }), true);
+  });
+});
+
+describe("getGlobeAppearanceDefaults", () => {
+  it("is empty when nothing is set, so Cesium keeps its own defaults", () => {
+    assert.deepEqual(getGlobeAppearanceDefaults({}), {});
+  });
+
+  it("reads a colour, a translucency flag or alpha, and a collision flag", () => {
+    assert.deepEqual(
+      getGlobeAppearanceDefaults({
+        GLOBE_COLOR: "#1E2A3B",
+        GLOBE_TRANSLUCENCY: "true",
+        GLOBE_COLLISION_DETECTION: "0",
+      }),
+      { color: "#1e2a3b", translucency: 0.5, collisionDetection: false },
+    );
+    assert.deepEqual(getGlobeAppearanceDefaults({ VITE_GLOBE_TRANSLUCENCY: "0.3" }), {
+      translucency: 0.3,
+    });
+    assert.deepEqual(getGlobeAppearanceDefaults({ GLOBE_TRANSLUCENCY: "no" }), {
+      translucency: 1,
+    });
+    assert.deepEqual(getGlobeAppearanceDefaults({ VITE_GLOBE_COLLISION_DETECTION: "yes" }), {
+      collisionDetection: true,
+    });
+  });
+
+  it("ignores a colour that is not #rrggbb, an alpha out of range, and junk", () => {
+    assert.deepEqual(
+      getGlobeAppearanceDefaults({
+        GLOBE_COLOR: "blue",
+        GLOBE_TRANSLUCENCY: "7",
+        GLOBE_COLLISION_DETECTION: "maybe",
+      }),
+      {},
+    );
+  });
+});
+
+describe("getRelatedMaps", () => {
+  it("reads the JSON list, keeping only titled entries with an http(s) url", () => {
+    const raw = JSON.stringify([
+      {
+        title: " Portale A ",
+        url: "https://a.example/",
+        description: " Sister portal ",
+        imageUrl: "https://a.example/a.png",
+      },
+      { title: "No url", url: "ftp://x" },
+      { url: "https://b.example/" },
+      { title: "B", url: "http://b.example", imageUrl: "data:image/png;base64,xx" },
+      "junk",
+    ]);
+    assert.deepEqual(getRelatedMaps({ RELATED_MAPS: raw }), [
+      {
+        title: "Portale A",
+        url: "https://a.example/",
+        description: "Sister portal",
+        imageUrl: "https://a.example/a.png",
+      },
+      { title: "B", url: "http://b.example" },
+    ]);
+  });
+
+  it("is empty when unset, malformed, or not an array", () => {
+    assert.deepEqual(getRelatedMaps({}), []);
+    assert.deepEqual(getRelatedMaps({ VITE_RELATED_MAPS: "{not json" }), []);
+    assert.deepEqual(getRelatedMaps({ RELATED_MAPS: "{}" }), []);
   });
 });

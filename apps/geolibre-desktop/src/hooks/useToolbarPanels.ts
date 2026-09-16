@@ -9,6 +9,7 @@ import {
   closeSearchPlacesPanel,
   closeFlightSimulatorPanel,
   closeLineOfSightPanel,
+  closeViewshedAreaPanel,
   closeMeasure3dPanel,
   closePlayPathPanel,
   closeElevationBandsPanel,
@@ -27,6 +28,7 @@ import {
   isSearchPlacesPanelVisible,
   isFlightSimulatorPanelVisible,
   isLineOfSightPanelVisible,
+  isViewshedAreaPanelVisible,
   isMeasure3dPanelVisible,
   isPlayPathPanelVisible,
   isElevationBandsPanelVisible,
@@ -44,6 +46,7 @@ import {
   openSearchPlacesPanel,
   openFlightSimulatorPanel,
   openLineOfSightPanel,
+  openViewshedAreaPanel,
   openMeasure3dPanel,
   openPlayPathPanel,
   openElevationBandsPanel,
@@ -62,6 +65,7 @@ import {
   subscribeSearchPlacesPanel,
   subscribeFlightSimulatorPanel,
   subscribeLineOfSight,
+  subscribeViewshedArea,
   subscribeMeasure3d,
   subscribePlayPath,
   subscribeElevationBands,
@@ -107,6 +111,7 @@ export interface ToolbarPanels {
   routeAnimation: ToolbarPanel;
   flightSimulator: ToolbarPanel;
   lineOfSight: ToolbarPanel;
+  viewshedArea: ToolbarPanel;
   measure3d: ToolbarPanel;
   playPath: ToolbarPanel;
   globeClipping: ToolbarPanel;
@@ -159,6 +164,11 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeLineOfSight,
     isLineOfSightPanelVisible,
     isLineOfSightPanelVisible,
+  );
+  const viewshedAreaVisible = useSyncExternalStore(
+    subscribeViewshedArea,
+    isViewshedAreaPanelVisible,
+    isViewshedAreaPanelVisible,
   );
   const measure3dVisible = useSyncExternalStore(
     subscribeMeasure3d,
@@ -300,6 +310,16 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
           return;
         }
         openLineOfSightPanel(appApi);
+      },
+    },
+    viewshedArea: {
+      visible: viewshedAreaVisible,
+      toggle: () => {
+        if (viewshedAreaVisible) {
+          closeViewshedAreaPanel(appApi);
+          return;
+        }
+        openViewshedAreaPanel(appApi);
       },
     },
     measure3d: {

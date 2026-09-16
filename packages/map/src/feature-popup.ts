@@ -25,6 +25,152 @@ export interface IdentifyPopupOptions {
   feature?: Feature | null;
   /** Map zoom for `["zoom"]` in the title/body expressions. */
   zoom?: number;
+  /** The footer with the clicked position and the feature's download, when the host wants one. */
+  footer?: IdentifyPopupFooter;
+}
+
+/** Translated labels for the popup footer. */
+export interface IdentifyPopupFooterLabels {
+  /** Tooltip of the copy button. */
+  copyCoordinates: string;
+  /** What the button says for a moment after a copy. */
+  copied: string;
+  /** The download button. */
+  download: string;
+  /** Prefix of the height readout (`h` in "h 54 m"), on the ellipsoid. */
+  height: string;
+  /** Prefix of the height readout when it is referred to mean sea level. */
+  heightSeaLevel: string;
+}
+
+/**
+ * What the host supplies for the footer: where the click landed (with the
+ * ground height there when the engine knows it), the labels, and the
+ * feature's download. The footer itself is the geoportal's: the clicked
+ * coordinate with a copy button, and a per-feature download.
+ */
+export interface IdentifyPopupFooter {
+  location?: {
+    lng: number;
+    lat: number;
+    /** Ground height at the click, in metres; `null`/absent when unknown. */
+    alt?: number | null;
+    /** Whether `alt` is above mean sea level rather than the ellipsoid. */
+    seaLevel?: boolean;
+  };
+  labels: IdentifyPopupFooterLabels;
+  /** Save the feature; absent when the layer may not be exported. */
+  onDownload?: () => void;
+}
+
+/**
+ * What the host hands the map for every identify popup: the labels, how to
+ * refer a ground height to sea level (`null` when the geoid has no value
+ * there yet), and the download — resolved per popup by the map.
+ */
+export interface IdentifyPopupExtras {
+  labels: IdentifyPopupFooterLabels;
+  /** Turn an ellipsoidal/terrain height into the one to show, or `null` to show none. */
+  adjustHeight?: (
+    lng: number,
+    lat: number,
+    alt: number,
+  ) => { alt: number; seaLevel: boolean } | null;
+  /** Save one feature of a layer; absent or returning `false` hides the button. */
+  downloadFeature?: (layerId: string, feature: Feature, featureId?: string | number) => boolean;
+}
+
+/** `44.49512, 11.34256` — the text the copy button puts on the clipboard. */
+export function formatPopupCoordinates(lng: number, lat: number, alt?: number | null): string {
+  const base = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  return typeof alt === "number" && Number.isFinite(alt) ? `${base}, ${alt.toFixed(1)} m` : base;
+}
+
+/** The footer row: the coordinate (copyable) and the feature's download. */
+export function createIdentifyPopupFooter(footer: IdentifyPopupFooter): HTMLElement | null {
+  const { location, labels, onDownload } = footer;
+  if (!location && !onDownload) return null;
+  const row = document.createElement("div");
+  row.className =
+    "geolibre-identify-popup-footer mt-2 flex flex-wrap items-center gap-2 border-t pt-2 text-[11px]";
+  if (location) {
+    const text = document.createElement("span");
+    text.className = "font-mono tabular-nums text-muted-foreground";
+    const alt =
+      typeof location.alt === "number" && Number.isFinite(location.alt) ? location.alt : null;
+    text.textContent =
+      formatPopupCoordinates(location.lng, location.lat) +
+      (alt !== null
+        ? ` · ${location.seaLevel ? labels.heightSeaLevel : labels.height} ${alt.toFixed(1)} m`
+        : "");
+    row.appendChild(text);
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.className =
+      "geolibre-identify-popup-copy rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent";
+    copy.textContent = "⧉";
+    copy.title = labels.copyCoordinates;
+    copy.setAttribute("aria-label", labels.copyCoordinates);
+    copy.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const value = formatPopupCoordinates(location.lng, location.lat, alt);
+      const done = () => {
+        copy.textContent = labels.copied;
+        window.setTimeout(() => {
+          copy.textContent = "⧉";
+        }, 1200);
+      };
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(value).then(done, () => {});
+      }
+    });
+    row.appendChild(copy);
+  }
+  if (onDownload) {
+    const download = document.createElement("button");
+    download.type = "button";
+    download.className =
+      "geolibre-identify-popup-download ms-auto rounded border border-border px-1.5 py-0.5 text-[11px] hover:bg-accent";
+    download.textContent = labels.download;
+    download.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onDownload();
+    });
+    row.appendChild(download);
+  }
+  return row;
+}
+
+/**
+ * The footer for one identified feature, from what the host supplied: the
+ * click's ground height referred to sea level when wanted, and the download
+ * when the layer allows it.
+ */
+export function resolveIdentifyPopupFooter(
+  extras: IdentifyPopupExtras | undefined,
+  location: { lng: number; lat: number; alt: number | null } | null,
+  layerId: string,
+  feature: Feature | null,
+  featureId?: string | number,
+): IdentifyPopupFooter | undefined {
+  if (!extras) return undefined;
+  let where: IdentifyPopupFooter["location"];
+  if (location) {
+    where = { lng: location.lng, lat: location.lat };
+    if (location.alt !== null && Number.isFinite(location.alt)) {
+      const adjusted = extras.adjustHeight
+        ? extras.adjustHeight(location.lng, location.lat, location.alt)
+        : { alt: location.alt, seaLevel: false };
+      if (adjusted) {
+        where.alt = adjusted.alt;
+        where.seaLevel = adjusted.seaLevel;
+      }
+    }
+  }
+  const download = extras.downloadFeature;
+  const onDownload =
+    download && feature ? () => void download(layerId, feature, featureId) : undefined;
+  return { location: where, labels: extras.labels, onDownload };
 }
 
 /**
@@ -119,6 +265,11 @@ export function createIdentifyPopupElement(
   root.appendChild(title);
 
   root.appendChild(createIdentifyPopupRows(properties, featureId, options));
+
+  if (options.footer) {
+    const footer = createIdentifyPopupFooter(options.footer);
+    if (footer) root.appendChild(footer);
+  }
 
   return root;
 }

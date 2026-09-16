@@ -391,6 +391,8 @@ export function TopToolbar({
       signInRequired: t("terriaCatalog.signInRequired"),
       accessDenied: t("terriaCatalog.accessDenied"),
       locked: t("terriaCatalog.locked"),
+      style: t("terriaCatalog.style"),
+      zoomOnAdd: t("terriaCatalog.zoomOnAdd"),
       add: t("terriaCatalog.add"),
       remove: t("terriaCatalog.remove"),
       adding: (name) => t("terriaCatalog.adding", { name }),

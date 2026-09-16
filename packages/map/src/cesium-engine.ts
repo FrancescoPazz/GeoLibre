@@ -1,6 +1,7 @@
 import {
   useAppStore,
   type GeoLibreLayer,
+  type GlobeAppearance,
   type MapPreferences,
   type MapProjection,
   type MapViewState,
@@ -171,6 +172,8 @@ export interface CesiumEngineOptions {
    * and whether per-pane visibility overrides apply — see `CesiumCanvas`.
    */
   viewId?: string;
+  /** The globe's initial look (`getGlobeAppearanceDefaults()` in `@geolibre/core`). */
+  globeAppearance?: GlobeAppearance;
 }
 
 /**
@@ -324,6 +327,7 @@ export class CesiumEngine implements MapEngine {
       onTilesetFields: publishTilesetFields,
     });
     this.terrainExaggeration = viewer.scene.verticalExaggeration ?? 1;
+    if (options.globeAppearance) this.setGlobeAppearance(options.globeAppearance);
     this.installInputTracking();
     this.installTerrainCorrection();
     this.installCameraPublisher();
@@ -1135,6 +1139,50 @@ export class CesiumEngine implements MapEngine {
   }
 
   setTerrainLabel(_label: string): void {}
+
+  // ------------------------------------------------------------ globe look
+
+  /** The globe's base colour, translucency and camera collision as set now. */
+  getGlobeAppearance(): GlobeAppearance {
+    const viewer = this.live();
+    if (!viewer) return {};
+    const { scene } = viewer;
+    const globe = scene.globe;
+    const translucency = globe.translucency.enabled ? globe.translucency.frontFaceAlpha : 1;
+    return {
+      color: globe.baseColor.toCssHexString().slice(0, 7),
+      translucency: typeof translucency === "number" ? translucency : 1,
+      collisionDetection: scene.screenSpaceCameraController.enableCollisionDetection,
+    };
+  }
+
+  /**
+   * Change the globe's look: a base colour (`#rrggbb`), a front-face alpha
+   * (below 1 the globe becomes see-through, so underground models show —
+   * with the camera free to go below the surface, as collision detection
+   * would otherwise stop it there), and whether the camera collides with
+   * the terrain. Each field is optional; the others are left as they are.
+   */
+  setGlobeAppearance(patch: GlobeAppearance): void {
+    const viewer = this.live();
+    if (!viewer) return;
+    const { scene } = viewer;
+    const globe = scene.globe;
+    if (patch.color && /^#[0-9a-fA-F]{6}$/.test(patch.color)) {
+      globe.baseColor = this.Cesium.Color.fromCssColorString(patch.color);
+    }
+    if (typeof patch.translucency === "number" && Number.isFinite(patch.translucency)) {
+      const alpha = Math.min(1, Math.max(0, patch.translucency));
+      globe.translucency.enabled = alpha < 1;
+      globe.translucency.frontFaceAlpha = alpha < 1 ? alpha : 1;
+      // A see-through globe is for looking under the surface: let the camera go there.
+      if (alpha < 1) scene.screenSpaceCameraController.enableCollisionDetection = false;
+    }
+    if (typeof patch.collisionDetection === "boolean") {
+      scene.screenSpaceCameraController.enableCollisionDetection = patch.collisionDetection;
+    }
+    scene.requestRender();
+  }
 
   // ------------------------------------------------------------------- escape
 

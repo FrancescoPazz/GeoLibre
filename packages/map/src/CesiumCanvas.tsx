@@ -2,6 +2,7 @@ import {
   applyGroupEffects,
   availableCesiumBasemap,
   basemapToCesiumImagery,
+  getGlobeAppearanceDefaults,
   sameCesiumImagery,
   useAppStore,
   type CesiumBasemapImagery,
@@ -13,6 +14,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { applyBasemapAppearance, applyBasemapImagery, getStadiaApiKey } from "./cesium-basemap";
 import { isSameView } from "./cesium-camera";
 import { installCesiumInteractions } from "./cesium-interactions";
+import type { IdentifyPopupExtras } from "./feature-popup";
 import { CesiumEngine } from "./cesium-engine";
 import type { BuiltInMapControl, MapEngine } from "./map-engine";
 import { CesiumControlHost, setPrimaryCesiumControlHost } from "./cesium-control-host";
@@ -121,6 +123,8 @@ export interface CesiumCanvasProps {
   controlLabels?: CesiumWidgetControlLabels;
   /** Translated accessible label for the Identify popup close button. */
   popupCloseLabel?: string;
+  /** The identify popup's footer (see `IdentifyPopupExtras`); pushed in like the close label. */
+  identifyPopupExtras?: IdentifyPopupExtras;
 }
 
 /**
@@ -168,6 +172,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   onEngineReady,
   controlLabels,
   popupCloseLabel,
+  identifyPopupExtras,
 }: CesiumCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<CesiumWidget | null>(null);
@@ -201,6 +206,8 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   onEngineReadyRef.current = onEngineReady;
   const popupCloseLabelRef = useRef(popupCloseLabel);
   popupCloseLabelRef.current = popupCloseLabel;
+  const identifyPopupExtrasRef = useRef(identifyPopupExtras);
+  identifyPopupExtrasRef.current = identifyPopupExtras;
   const controlLabelsRef = useRef(controlLabels);
   controlLabelsRef.current = controlLabels;
 
@@ -396,6 +403,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
         // constructed before the terrain await below so its listeners are armed
         // for the whole mount, exactly as the hand-rolled versions were.
         const engine = new CesiumEngine(Cesium, viewer, {
+          globeAppearance: getGlobeAppearanceDefaults(),
           viewId: viewIdRef.current,
           worldTerrainAvailable: Boolean(token),
           terrainIonAssetId: terrainAssetIdRef.current,
@@ -488,6 +496,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
             viewer,
             engine,
             () => popupCloseLabelRef.current ?? "Close",
+            () => identifyPopupExtrasRef.current,
           );
 
         // Publish the engine only for the primary globe — see `engineRef`. A

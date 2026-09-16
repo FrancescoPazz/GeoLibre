@@ -1,5 +1,6 @@
 import type {
   GeoLibreLayer,
+  GlobeAppearance,
   MapPreferences,
   MapProjection,
   MapRendererKind,
@@ -196,6 +197,13 @@ export interface MapEngine {
   setTerrainCogSource(source: string | Blob | null, band?: number): Promise<boolean>;
   /** Translated tooltip for the on-map terrain control. */
   setTerrainLabel(label: string): void;
+  /**
+   * The 3D globe's own look — base colour, translucency, camera collision —
+   * for engines that draw a globe (see `GlobeAppearance` in `@geolibre/core`).
+   * Absent on the 2D engine.
+   */
+  getGlobeAppearance?(): GlobeAppearance;
+  setGlobeAppearance?(patch: GlobeAppearance): void;
 
   // ------------------------------------------------------------------- escape
 

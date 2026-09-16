@@ -1,4 +1,4 @@
-import { useAppStore } from "@geolibre/core";
+import { useAppStore, type GlobeAppearance } from "@geolibre/core";
 import {
   CogDemError,
   DEFAULT_TERRAIN_EXAGGERATION,
@@ -65,6 +65,9 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
   // Committed (parsed/clamped) on blur or Enter; kept in sync when the value
   // changes elsewhere (slider, dialog open, reset).
   const [draft, setDraft] = useState(String(DEFAULT_EXAGGERATION));
+  // The globe's own look (base colour, translucency, camera collision): read
+  // from the engine on open, `null` while the map is not a 3D globe.
+  const [globeLook, setGlobeLook] = useState<GlobeAppearance | null>(null);
   const layers = useAppStore((state) => state.layers);
   const rasterLayerOptions = useMemo(() => terrainRasterLayerOptions(layers), [layers]);
   useEffect(() => setDraft(String(exaggeration)), [exaggeration]);
@@ -93,6 +96,7 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
       // clears the flag again; a second request racing it is settled by the
       // controller, which reports the superseded one as not applied.
       setSourceLoading(null);
+      setGlobeLook(mapControllerRef.current?.getGlobeAppearance?.() ?? null);
       setOpen(true);
     };
     // Close if the terrain control is removed (e.g. hidden from the Controls
@@ -105,6 +109,13 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
       window.removeEventListener(TERRAIN_SETTINGS_CLOSE_EVENT, handleClose);
     };
   }, [mapControllerRef, rasterLayerOptions]);
+
+  const applyGlobeLook = (patch: GlobeAppearance) => {
+    const engine = mapControllerRef.current;
+    if (!engine?.setGlobeAppearance || !engine.getGlobeAppearance) return;
+    engine.setGlobeAppearance(patch);
+    setGlobeLook(engine.getGlobeAppearance());
+  };
 
   // Coalesce the live map update to one per animation frame so a fast slider
   // drag (Radix fires onValueChange on every 0.1 step) doesn't spray dozens of
@@ -353,6 +364,61 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
               </Button>
             </div>
           </div>
+          {globeLook ? (
+            <div className="space-y-2 border-t border-border pt-3" data-testid="globe-look">
+              <p className="text-sm font-medium">{t("terrainSettings.globe.title")}</p>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={(globeLook.translucency ?? 1) < 1}
+                  onChange={(event) =>
+                    applyGlobeLook({ translucency: event.target.checked ? 0.5 : 1 })
+                  }
+                />
+                {t("terrainSettings.globe.translucency")}
+              </label>
+              {(globeLook.translucency ?? 1) < 1 ? (
+                <div className="flex items-center gap-3 ps-6">
+                  <Slider
+                    aria-label={t("terrainSettings.globe.translucencyAlpha")}
+                    min={0.05}
+                    max={0.95}
+                    step={0.05}
+                    value={[globeLook.translucency ?? 0.5]}
+                    onValueChange={([value]) => applyGlobeLook({ translucency: value })}
+                    className="flex-1"
+                  />
+                  <span className="w-10 text-end text-xs tabular-nums">
+                    {Math.round((globeLook.translucency ?? 0.5) * 100)}%
+                  </span>
+                </div>
+              ) : null}
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={globeLook.collisionDetection !== false}
+                  onChange={(event) => applyGlobeLook({ collisionDetection: event.target.checked })}
+                />
+                {t("terrainSettings.globe.collision")}
+              </label>
+              <p className="text-muted-foreground text-xs">
+                {t("terrainSettings.globe.collisionHint")}
+              </p>
+              <div className="flex items-center gap-2 text-sm">
+                <Label htmlFor="globe-color">{t("terrainSettings.globe.color")}</Label>
+                <input
+                  id="globe-color"
+                  type="color"
+                  className="h-7 w-10 cursor-pointer rounded border border-border bg-background"
+                  value={globeLook.color ?? "#000000"}
+                  onChange={(event) => applyGlobeLook({ color: event.target.value })}
+                />
+                <span className="text-muted-foreground text-xs">
+                  {t("terrainSettings.globe.colorHint")}
+                </span>
+              </div>
+            </div>
+          ) : null}
           <div className="flex justify-between gap-2">
             <Button
               type="button"

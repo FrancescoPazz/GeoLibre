@@ -1,5 +1,5 @@
 // @refresh reset
-import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import { uniqueLayerName, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import type { MapDiagnosticEvent, MapEngine } from "@geolibre/map";
 import {
@@ -187,7 +187,9 @@ import { SunPanel } from "../panels/SunPanel";
 import { RouteAnimationPanel } from "../panels/RouteAnimationPanel";
 import { FlightSimulatorPanel } from "../panels/FlightSimulatorPanel";
 import { LineOfSightPanel } from "../panels/LineOfSightPanel";
+import { ViewshedAreaPanel } from "../panels/ViewshedAreaPanel";
 import { Measure3dPanel } from "../panels/Measure3dPanel";
+import { useIdentifyPopupExtras } from "../../hooks/useIdentifyPopupExtras";
 import { PlayPathPanel } from "../panels/PlayPathPanel";
 import { getSharedGeoid } from "../../lib/geoid";
 import { GlobeClippingPanel } from "../panels/GlobeClippingPanel";
@@ -607,6 +609,7 @@ export function DesktopShell({
     }),
     [t],
   );
+  const identifyPopupExtras = useIdentifyPopupExtras();
   const shellRef = useRef<HTMLDivElement>(null);
   const verticalResizeGuideRef = useRef<HTMLDivElement>(null);
   // Push the translated bookmark labels into the framework-agnostic plugins
@@ -1498,6 +1501,9 @@ export function DesktopShell({
       // Layers whose coordinates cannot be WGS84; surfaced together after the
       // loop so a multi-file drop reports once rather than per file.
       const nonGeographic: string[] = [];
+      // The same file added twice gets `name (2)`, not two identical rows;
+      // the set grows as the loop adds so a multi-layer drop is distinct too.
+      const takenNames = new Set(useAppStore.getState().layers.map((l) => l.name));
       // Frame ids for each time-animated overlay sequence (keyed by the loader's
       // group marker), so they can be gathered into one layer group afterward.
       const frameGroups = new Map<string, string[]>();
@@ -1561,7 +1567,8 @@ export function DesktopShell({
         }
         // `||` (not `??`) so an empty-string name falls back to the path, and
         // matches the name shown in the drop confirmation toast.
-        const layerName = layer.name || layerNameFromPath(layer.path);
+        const layerName = uniqueLayerName(layer.name || layerNameFromPath(layer.path), takenNames);
+        takenNames.add(layerName);
         // A file that declares WGS84 but holds projected coordinates loads
         // cleanly, lists in the Layers panel, and renders nowhere — the map
         // simply never moves. Warn rather than fail: the data is readable and
@@ -2671,6 +2678,7 @@ export function DesktopShell({
                 <PrimaryCesiumCanvas
                   engineRef={mapControllerRef}
                   onEngineReady={handleMapControllerReady}
+                  identifyPopupExtras={identifyPopupExtras}
                 />
               ) : (
                 <>
@@ -2678,6 +2686,7 @@ export function DesktopShell({
                     canUseRemoteElevation={hasElevationConsent}
                     controllerRef={mapControllerRef}
                     identifyAllLabels={identifyAllLabels}
+                    identifyPopupExtras={identifyPopupExtras}
                     identifyRasterLayerAt={identifyRasterLayerAt}
                     onMapDiagnosticEvent={handleMapDiagnosticEvent}
                     onControllerReady={handleMapControllerReady}
@@ -2835,6 +2844,12 @@ export function DesktopShell({
             displayName={t("shell.section.lineOfSightPanel")}
           >
             <LineOfSightPanel />
+          </SectionErrorBoundary>
+          <SectionErrorBoundary
+            label="Viewshed area panel"
+            displayName={t("shell.section.viewshedAreaPanel")}
+          >
+            <ViewshedAreaPanel />
           </SectionErrorBoundary>
           <SectionErrorBoundary
             label="Globe clipping panel"

@@ -1,4 +1,4 @@
-import { hasPathTraversal, type GeoLibreLayer } from "@geolibre/core";
+import { hasPathTraversal, sameBaseLayerName, type GeoLibreLayer } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import {
   isAbsoluteLocalPath,
@@ -125,7 +125,9 @@ export async function reloadLocalFileLayer(
 
   let match = loaded[0];
   if (loaded.length > 1) {
-    const named = loaded.find((entry) => entry.name === layer.name);
+    const named = loaded.find(
+      (entry) => entry.name !== undefined && sameBaseLayerName(entry.name, layer.name),
+    );
     if (!named) {
       throw new Error(
         `Could not match "${layer.name}" to a layer in this file. Renaming a layer from a multi-layer file breaks its link to the source; re-add the file to reload it.`,

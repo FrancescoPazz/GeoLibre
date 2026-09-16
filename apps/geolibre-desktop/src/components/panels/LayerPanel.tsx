@@ -64,6 +64,7 @@ import {
   replayVectorControlLayerById,
   SKETCHES_SOURCE_KIND,
   TIME_SLIDER_PLUGIN_ID,
+  loadMeasure3dPathFromFeatures,
   type TimePropertyCandidate,
   type TimePropertyRecord,
 } from "@geolibre/plugins";
@@ -108,6 +109,7 @@ import {
   type DataSourceCatalogEntry,
   activeInterfaceProfile,
   isDataSourceVisible,
+  isMenuItemVisible,
 } from "../../lib/ui-profile";
 import type { AddDataKind } from "../layout/add-data/types";
 import { KIND_I18N_KEY } from "../layout/add-data/constants";
@@ -146,6 +148,7 @@ import {
   CircleDashed,
   ClipboardPaste,
   Copy,
+  CopyPlus,
   Database,
   Download,
   Eye,
@@ -172,6 +175,7 @@ import {
   PanelLeftOpen,
   Pencil,
   PencilRuler,
+  Route,
   PenTool,
   Pentagon,
   RefreshCw,
@@ -721,6 +725,7 @@ export function LayerPanel({
   const removeLayer = useAppStore((s) => s.removeLayer);
   const updateLayer = useAppStore((s) => s.updateLayer);
   const copyLayerStyle = useAppStore((s) => s.copyLayerStyle);
+  const duplicateLayer = useAppStore((s) => s.duplicateLayer);
   const pasteLayerStyle = useAppStore((s) => s.pasteLayerStyle);
   const copiedLayerStyle = useAppStore((s) => s.copiedLayerStyle);
   const saveLayerLibraryEntry = useAppStore((s) => s.saveLayerLibraryEntry);
@@ -1638,6 +1643,32 @@ export function LayerPanel({
       }
     },
     [clearRefreshStatusTimer, scheduleStatusClear, t, updateLayer],
+  );
+
+  // Hand a vector layer's lines (or polygons, or points) to the 3D Measure
+  // tool as its paths — the way a GPX track gets a terrain profile and a
+  // Play Path flight (the geoportal's "use as path").
+  const handleUseAsMeasurePath = useCallback(
+    async (layer: GeoLibreLayer) => {
+      clearRefreshStatusTimer(layer.id);
+      const geojson = await resolveLayerGeojson(
+        layer,
+        mapControllerRef.current?.getMap() ?? undefined,
+      );
+      const loaded = geojson
+        ? loadMeasure3dPathFromFeatures(createAppAPI(mapControllerRef), geojson.features, {
+            sourceName: layer.name,
+          })
+        : 0;
+      if (loaded === 0) {
+        setRefreshStatuses((current) => ({
+          ...current,
+          [layer.id]: { type: "error", message: t("layers.useAsMeasurePathNoPath") },
+        }));
+        scheduleStatusClear(layer.id);
+      }
+    },
+    [clearRefreshStatusTimer, mapControllerRef, scheduleStatusClear, t],
   );
 
   const handleExportLayer = useCallback(
@@ -3264,6 +3295,13 @@ export function LayerPanel({
             // geojson-backed vector layers carry those features.
             const canExportLayer = layerCaps.export && layer.type === "geojson";
             const canExportPolyline = canExportLayer && layerSupportsPolylineExport(layer);
+            // Any vector layer with features can become a 3D Measure path,
+            // as long as the deployment shows the tool at all.
+            const canUseAsMeasurePath =
+              layer.type === "geojson" &&
+              layerCaps.query &&
+              (layer.geojson?.features?.length ?? 0) > 0 &&
+              isMenuItemVisible(uiProfile, "controls.measure3d");
             // Importing a style (Mapbox GL or SLD) only writes the layer's
             // vector symbology, so it applies to any vector-styled layer (local
             // GeoJSON and vector tiles), not just the export-capable GeoJSON
@@ -3749,6 +3787,18 @@ export function LayerPanel({
                             <Pencil className="me-2 h-3.5 w-3.5" />
                             {t("layers.rename")}
                           </DropdownMenuItem>
+                          {/* A plugin-owned native layer has no source of its
+                          own to copy, so it is the one kind left out. */}
+                          {layer.metadata.externalNativeLayer !== true && (
+                            <DropdownMenuItem
+                              onSelect={() => {
+                                duplicateLayer(layer.id);
+                              }}
+                            >
+                              <CopyPlus className="me-2 h-3.5 w-3.5" />
+                              {t("layers.duplicateLayer")}
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuSeparator />
                           {/* The Rename item above keeps preventDefault so the
                           menu's close does not race its input autofocus. Every
@@ -4097,6 +4147,17 @@ export function LayerPanel({
                               )}
                             </>
                           )}
+                          {canUseAsMeasurePath && (
+                            <DropdownMenuItem
+                              title={t("layers.useAsMeasurePathTooltip")}
+                              onSelect={() => {
+                                void handleUseAsMeasurePath(layer);
+                              }}
+                            >
+                              <Route className="me-2 h-3.5 w-3.5" />
+                              {t("layers.useAsMeasurePath")}
+                            </DropdownMenuItem>
+                          )}
                           {canBindTimeSlider && (
                             <DropdownMenuItem
                               onSelect={() => {
@@ -4158,6 +4219,13 @@ export function LayerPanel({
                                   }}
                                 >
                                   KMZ
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onSelect={() => {
+                                    void handleExportLayer(layer, "gpx");
+                                  }}
+                                >
+                                  GPX
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onSelect={() => {

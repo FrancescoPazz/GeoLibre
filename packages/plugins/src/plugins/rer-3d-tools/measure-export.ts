@@ -58,6 +58,7 @@ export function measureSummaryProperties(
   geometry: DrawGeometry,
   measures: DrawMeasures,
   profile: TerrainProfile | null,
+  notes = "",
 ): Record<string, unknown> {
   const kind = measureSummaryKind(geometry);
   const vertexAlts = geometry.points.map((p) => p.alt).filter((a) => Number.isFinite(a));
@@ -100,6 +101,7 @@ export function measureSummaryProperties(
     props.sampling_step_m = profile.samplingStepM;
     props.terrain_sampled = profile.detailed;
   }
+  if (notes.trim()) props.notes = notes.trim();
   return props;
 }
 
@@ -112,10 +114,11 @@ export function buildMeasureFeatureCollection(
   geometry: DrawGeometry,
   measures: DrawMeasures,
   profile: TerrainProfile | null,
+  notes = "",
 ): FeatureCollection {
   const kind = measureSummaryKind(geometry);
   const points = geometry.points;
-  const summary = measureSummaryProperties(C, geometry, measures, profile);
+  const summary = measureSummaryProperties(C, geometry, measures, profile, notes);
   const features: Feature[] = [];
 
   let figure: Geometry | null = null;
@@ -184,6 +187,70 @@ export function buildMeasureFeatureCollection(
   return { type: "FeatureCollection", features };
 }
 
+/** One figure of a multi-path measurement, as the export functions take it. */
+export interface MeasurePath {
+  geometry: DrawGeometry;
+  measures: DrawMeasures;
+  profile: TerrainProfile | null;
+  notes: string;
+}
+
+/**
+ * Every path of a multi-path measurement in one collection, each feature
+ * tagged `path: n` (1-based) so the paths can be told apart after export —
+ * the geoportal's "percorsi multipli" download.
+ */
+export function buildMultiPathFeatureCollection(
+  C: CesiumNs,
+  paths: readonly MeasurePath[],
+): FeatureCollection {
+  const features: Feature[] = [];
+  paths.forEach((path, index) => {
+    if (path.geometry.points.length === 0) return;
+    const collection = buildMeasureFeatureCollection(
+      C,
+      path.geometry,
+      path.measures,
+      path.profile,
+      path.notes,
+    );
+    for (const feature of collection.features) {
+      features.push({
+        ...feature,
+        properties:
+          paths.length > 1 ? { path: index + 1, ...feature.properties } : feature.properties,
+      });
+    }
+  });
+  return { type: "FeatureCollection", features };
+}
+
+/**
+ * The sampled profile as CSV — one row per terrain sample with its position,
+ * height and distance from the start, and the 1-based vertex number on the
+ * rows that are the drawn vertices — the "altimetric graph points" download.
+ */
+export function measureProfileCsv(profile: TerrainProfile): string {
+  const vertexAt = new Map<number, number>();
+  profile.stopIndex.forEach((sampleIndex, i) => {
+    if (!vertexAt.has(sampleIndex)) vertexAt.set(sampleIndex, i + 1);
+  });
+  const rows = ["sample,vertex,lng,lat,alt_m,distance_m"];
+  profile.samples.forEach((sample, i) => {
+    rows.push(
+      [
+        i + 1,
+        vertexAt.get(i) ?? "",
+        sample.lng.toFixed(7),
+        sample.lat.toFixed(7),
+        sample.alt.toFixed(2),
+        sample.distanceM.toFixed(2),
+      ].join(","),
+    );
+  });
+  return rows.join("\n");
+}
+
 /** The `name: value` summary text the geoportal downloads as `<name>_summary.txt`. */
 export function measureSummaryText(
   C: CesiumNs,
@@ -191,9 +258,12 @@ export function measureSummaryText(
   geometry: DrawGeometry,
   measures: DrawMeasures,
   profile: TerrainProfile | null,
+  notes = "",
 ): string {
   const kind = measureSummaryKind(geometry);
   const lines: string[] = [`name: ${name}`, `kind: ${kind}`];
+  // A note is free text: it goes on one line, whatever the user typed.
+  if (notes.trim()) lines.push(`notes: ${notes.trim().replace(/\s*\n\s*/g, " / ")}`);
   const num = (label: string, value: number | null | undefined, digits: number, unit: string) => {
     if (typeof value !== "number" || !Number.isFinite(value)) return;
     lines.push(`${label}: ${value.toFixed(digits)} ${unit}`);
