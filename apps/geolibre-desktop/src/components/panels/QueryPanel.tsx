@@ -83,11 +83,6 @@ export function QueryPanel({ mapControllerRef }: QueryPanelProps) {
   return <QueryDialog mapControllerRef={mapControllerRef} />;
 }
 
-/** Whether the map holds a layer the query panel can work on. */
-export function useHasQueryableLayer(): boolean {
-  return useAppStore((s) => s.layers.some(isQueryableLayer));
-}
-
 function QueryDialog({ mapControllerRef }: QueryPanelProps) {
   const { t } = useTranslation();
   const layers = useAppStore((s) => s.layers);

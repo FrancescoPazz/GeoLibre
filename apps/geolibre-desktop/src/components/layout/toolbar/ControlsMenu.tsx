@@ -42,18 +42,18 @@ import { type MouseEvent as ReactMouseEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ToolbarPanels } from "../../../hooks/useToolbarPanels";
 import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
+import { useHasQueryableLayer } from "../../../hooks/useHasQueryableLayer";
+import { useMapCapabilities } from "../../../hooks/useMapCapabilities";
+import { useMicrozonationConfig } from "../../../hooks/useMicrozonationConfig";
 import { isMaptoolkitBasemapActive } from "../../../lib/maptoolkit-basemap";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import { useCoordsConverterUrl } from "../../panels/CoordsConverterPanel";
-import { useHasQueryableLayer } from "../../panels/QueryPanel";
-import { useMicrozonationConfig } from "../../panels/MicrozonationPanel";
 import {
   LOGO_CONTROL_IDS,
   MAP_CONTROL_ITEMS,
   type ToolbarChrome,
   type ToolbarMapControl,
 } from "./constants";
-import { useMapCapabilities } from "../../../hooks/useMapCapabilities";
 
 /**
  * Controls-menu entries that write to the project rather than only changing

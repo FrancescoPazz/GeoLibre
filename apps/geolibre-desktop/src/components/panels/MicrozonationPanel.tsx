@@ -1,4 +1,3 @@
-import { getRuntimeEnvironment } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import {
   EMPTY_MICROZONATION_FILTERS,
@@ -8,7 +7,6 @@ import {
   formatMicrozonationDate,
   formatMicrozonationValue,
   geometryBBox,
-  getMicrozonationConfig,
   microzonationDetailOf,
   microzonationRecordId,
   uniqueSorted,
@@ -24,6 +22,7 @@ import { Activity, ExternalLink, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useDraggableCard } from "../../hooks/useDraggableCard";
+import { useMicrozonationConfig } from "../../hooks/useMicrozonationConfig";
 import {
   closeMicrozonationPanel,
   isMicrozonationPanelVisible,
@@ -31,18 +30,6 @@ import {
 } from "../../lib/microzonation-panel";
 
 const PANEL_WIDTH = 460;
-
-/** The deployment's microzonation service, re-read when the runtime environment changes. */
-export function useMicrozonationConfig(): MicrozonationConfig | undefined {
-  const [config, setConfig] = useState(() => getMicrozonationConfig(getRuntimeEnvironment()));
-  useEffect(() => {
-    const refresh = () => setConfig(getMicrozonationConfig(getRuntimeEnvironment()));
-    refresh();
-    window.addEventListener("geolibre:runtime-env-change", refresh);
-    return () => window.removeEventListener("geolibre:runtime-env-change", refresh);
-  }, []);
-  return config;
-}
 
 interface MicrozonationPanelProps {
   mapControllerRef: RefObject<MapEngine | null>;
