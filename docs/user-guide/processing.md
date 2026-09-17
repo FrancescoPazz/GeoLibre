@@ -90,25 +90,25 @@ Several of these are also one click away from the **Quick analysis** submenu. Ri
 
 **Geometry**
 
-| Tool                        | Description                                                                                                                                           |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Buffer**                  | Create a buffer polygon around each feature by a fixed distance.                                                                                      |
-| **Centroids**               | Compute the centroid point of each feature.                                                                                                           |
-| **Convex hull**             | Compute the convex hull enclosing all features.                                                                                                       |
-| **Dissolve**                | Merge polygon features into a single geometry, optionally grouped by a field.                                                                         |
-| **Bounding box**            | Compute the rectangular envelope of all features.                                                                                                     |
-| **Simplify**                | Reduce the number of vertices using Douglas-Peucker.                                                                                                  |
-| **Reproject**               | Reinterpret a layer's coordinates as a source CRS and transform them to WGS84 so they display in the right place. Needs the Sidecar or Python engine. |
-| **Explode**                 | Split multipart geometries into single-part features, one per part, keeping the parent's attributes.                                                  |
-| **Aggregate by attribute**  | Dissolve features sharing an attribute value into one geometry per group, with a summary statistic.                                                   |
-| **Smooth**                  | Round the corners of lines and polygons with Chaikin's algorithm (this _adds_ vertices, unlike Simplify). Z values are preserved.                     |
-| **Extract vertices**        | Turn every vertex of a line or polygon layer into a point feature, keeping the parent's attributes.                                                   |
-| **Points along geometry**   | Place points at a fixed spacing (or a fixed count) along each line or polygon boundary.                                                               |
-| **Regular grid**            | Generate a rectangular grid (fishnet) over the map view, a layer's extent, or a manual bounding box.                                                  |
-| **Voronoi / Delaunay**      | Build a Voronoi diagram (one polygon per point, clipped to the points' extent) or a Delaunay triangulation from a point layer.                        |
-| **Cell-site coverage**      | Build antenna sector polygons from point sites using azimuth, radius, and beamwidth read from fields or fixed values.                                 |
-| **Decode polyline**         | Decode encoded polyline strings (precision 5 or 6) from an attribute field into a LineString vector layer.                                            |
-| **Encode line to polyline** | Encode LineString and MultiLineString geometries into an encoded polyline string stored in a new attribute field.                                     |
+| Tool                        | Description                                                                                                                                                                          |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Buffer**                  | Create a buffer polygon around each feature by a fixed distance. Pick the side (outside, inside, or both), and optionally dissolve the buffers into a single attribute-less feature. |
+| **Centroids**               | Compute the centroid point of each feature.                                                                                                                                          |
+| **Convex hull**             | Compute the convex hull enclosing all features.                                                                                                                                      |
+| **Dissolve**                | Merge polygon features into a single geometry, optionally grouped by a field.                                                                                                        |
+| **Bounding box**            | Compute the rectangular envelope of all features.                                                                                                                                    |
+| **Simplify**                | Reduce the number of vertices using Douglas-Peucker.                                                                                                                                 |
+| **Reproject**               | Reinterpret a layer's coordinates as a source CRS and transform them to WGS84 so they display in the right place. Needs the Sidecar or Python engine.                                |
+| **Explode**                 | Split multipart geometries into single-part features, one per part, keeping the parent's attributes.                                                                                 |
+| **Aggregate by attribute**  | Dissolve features sharing an attribute value into one geometry per group, with a summary statistic.                                                                                  |
+| **Smooth**                  | Round the corners of lines and polygons with Chaikin's algorithm (this _adds_ vertices, unlike Simplify). Z values are preserved.                                                    |
+| **Extract vertices**        | Turn every vertex of a line or polygon layer into a point feature, keeping the parent's attributes.                                                                                  |
+| **Points along geometry**   | Place points at a fixed spacing (or a fixed count) along each line or polygon boundary.                                                                                              |
+| **Regular grid**            | Generate a rectangular grid (fishnet) over the map view, a layer's extent, or a manual bounding box.                                                                                 |
+| **Voronoi / Delaunay**      | Build a Voronoi diagram (one polygon per point, clipped to the points' extent) or a Delaunay triangulation from a point layer.                                                       |
+| **Cell-site coverage**      | Build antenna sector polygons from point sites using azimuth, radius, and beamwidth read from fields or fixed values.                                                                |
+| **Decode polyline**         | Decode encoded polyline strings (precision 5 or 6) from an attribute field into a LineString vector layer.                                                                           |
+| **Encode line to polyline** | Encode LineString and MultiLineString geometries into an encoded polyline string stored in a new attribute field.                                                                    |
 
 **Overlay**
 

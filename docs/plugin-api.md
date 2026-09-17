@@ -33,7 +33,7 @@ export interface GeoLibrePlugin {
    * Mapbox renderer" below). The Plugins menu gates options against the active
    * renderer.
    */
-  engines?: ("maplibre" | "mapbox" | "cesium")[];
+  engines?: ("maplibre" | "mapbox" | "cesium" | "arcgis")[];
   /** Plugins in the same group cannot be active at the same time. */
   exclusiveGroup?: string;
   /** At least one name is required for handleUrlParameters to be called. */
@@ -143,7 +143,7 @@ export interface GeoLibreAppAPI {
   getViewBounds?: () => [number, number, number, number] | null;
   getMap?: () => import("maplibre-gl").Map | null;
   // The active primary renderer, including while its canvas is being replaced.
-  getMapRenderer?: () => "maplibre" | "mapbox" | "cesium";
+  getMapRenderer?: () => "maplibre" | "mapbox" | "cesium" | "arcgis";
   // The native mapbox-gl map, only while Mapbox is the primary renderer; null
   // otherwise. Built-in plugins read the 2D map through getStyleMap(app), which
   // falls back to this when getMap() is null — see "Supporting the Mapbox
@@ -978,7 +978,7 @@ If instead you want a plugin compiled into the main JS bundle (no `plugin.json`,
 }
 ```
 
-The `entry` file must export a `GeoLibrePlugin` as either the default export or a named `plugin` export. The exported plugin `id`, `name`, and `version` must match `plugin.json`. The entry must be a self-contained `.js` or `.mjs` bundle because relative module imports inside the zip are not resolved by this first loader. The optional `engines` array declares which map renderers the plugin supports (`"maplibre" | "mapbox" | "cesium"`, defaulting to `["maplibre"]`); plugins supporting the 3D globe declare `["maplibre", "cesium"]` so users can toggle them when Cesium is active, and plugins that only use the style API both 2D engines share add `"mapbox"` (see "Supporting the Mapbox renderer").
+The `entry` file must export a `GeoLibrePlugin` as either the default export or a named `plugin` export. The exported plugin `id`, `name`, and `version` must match `plugin.json`. The entry must be a self-contained `.js` or `.mjs` bundle because relative module imports inside the zip are not resolved by this first loader. The optional `engines` array declares which map renderers the plugin supports (`"maplibre" | "mapbox" | "cesium" | "arcgis"`, defaulting to `["maplibre"]`; no bundled plugin declares `"arcgis"` yet, since that engine hosts no MapLibre controls — see `docs/arcgis-renderer.md`); plugins supporting the 3D globe declare `["maplibre", "cesium"]` so users can toggle them when Cesium is active, and plugins that only use the style API both 2D engines share add `"mapbox"` (see "Supporting the Mapbox renderer").
 
 External plugin entries are executed with `import(URL.createObjectURL(...))`, which is why the desktop CSP in `tauri.conf.json` includes `blob:` in `script-src`. Removing `blob:` from `script-src` breaks external plugin loading. Combined with `'unsafe-eval'`, this means code that can create a blob URL can execute scripts, which is acceptable because external plugins are trusted local files installed by the user.
 
@@ -1275,20 +1275,34 @@ only for the shared surface; a mapbox-gl map has none of MapLibre's extensions:
   per request) are MapLibre-only. Custom `CustomLayerInterface` layers
   (`capabilities.customLayers` is false on Mapbox). The terrain camera helpers
   (`calculateCameraOptionsFromCameraLngLatAltRotation`,
-  `getCenterClampedToGround`) the Flight Simulator flies with. The `transform`
-  / `_camera` internals some upstream controls read.
+  `getCenterClampedToGround`): Mapbox kept the free camera those replaced, so
+  the Flight Simulator flies it there through `setFreeCameraOptions` and a
+  `MercatorCoordinate` carrying the altitude. The `transform` / `_camera`
+  internals some upstream controls read.
 - `getProjection()` differs in shape: `{ type: "globe" }` on MapLibre,
   `{ name: "globe" }` on Mapbox; `setProjection` takes `{ type }` on MapLibre
   and a name string (or `{ name }`) on Mapbox. Read both.
 - MapLibre's `Popup` and `Marker` classes imported from `maplibre-gl` do not
   work on a mapbox-gl map: their update path reads `map._camera.transform` and
-  throws on the first move (the Street View control's marker, GeoAgent's tool
-  markers). A plugin that needs markers on both engines positions a DOM element
-  through `map.project` instead, as the Elements panel does. When an upstream
-  library insists on constructing the engine's own classes, `app.getMapboxGl()`
-  hands out the mapbox-gl namespace: the Geo Editor feeds its `Marker` /
-  `LngLatBounds` to Geoman's map adapter and its `Popup` to
-  `maplibre-gl-geo-editor`'s `createPopup` option (`geo-editor-mapbox.ts`).
+  throws on the first move. A plugin that needs markers on both engines
+  positions a DOM element through `map.project` instead, as the Elements panel
+  does. When an upstream library insists on constructing the engine's own
+  classes, `app.getMapboxGl()` hands out the mapbox-gl namespace: the Geo Editor
+  feeds its `Marker` / `LngLatBounds` to Geoman's map adapter and its `Popup` to
+  `maplibre-gl-geo-editor`'s `createPopup` option (`geo-editor-mapbox.ts`),
+  Street View feeds its `Marker` to `maplibre-gl-streetview`'s `createMarker`
+  option, Layer Swipe feeds its `Map` to `maplibre-gl-swipe`'s `createMap`
+  option, which builds the clipped comparison pane, and GeoAgent hands
+  `maplibre-gl-geoagent`'s `mapEngine` option the whole namespace
+  (`geoagent-map-engine.ts`) — not a narrowed subset, because its
+  `run_maplibre_script` tool passes it straight to the script it runs. The
+  pattern upstream is the same each time: the library keeps the element and its
+  styling and takes only the engine class that positions it.
+  A plugin that constructs a _second_ Mapbox map must also pass
+  `app.getMapboxAccessToken()` in its constructor options: mapbox-gl reads its
+  token from the global `mapboxgl.accessToken` unless handed one, and GeoLibre
+  sets it per map, so a second map built without it renders nothing and logs
+  every frame.
 
 The same frontend audit that scans Cesium-capable plugins scans every plugin
 declaring Mapbox support, follows its relative imports, and fails on a read

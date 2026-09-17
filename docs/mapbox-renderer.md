@@ -135,6 +135,62 @@ Regular` glyphs when the style has no font to borrow.
   container; the control container is lifted above them, as on MapLibre) and
   **Sun** (canvas night mask, raster layer and `setLight` all apply to
   mapbox-gl).
+- **Flight Simulator**. mapbox-gl kept the free camera MapLibre dropped, so the
+  Mapbox adapter places the eye directly — a `MercatorCoordinate` carrying the
+  altitude plus `setPitchBearing` — where MapLibre converts through
+  `calculateCameraOptionsFromCameraLngLatAltRotation`. Terrain, the suspended
+  interaction handlers, the widened pitch ceiling and the exit view all behave
+  as on MapLibre; `setCenterClampedToGround` has no counterpart and needs none,
+  because the free camera positions the eye rather than the map center. One
+  setting does nothing here: mapbox-gl 3 has no camera roll axis at all (its
+  free camera orientation is documented as representable with only pitch and
+  bearing), so **Bank the horizon in turns** leaves the horizon level — the
+  aircraft still banks, and a bank still turns it. The panel says so while the
+  Mapbox renderer is primary.
+- **Street View** (Google and Mapillary). Everything the upstream control
+  touches is on the shared surface except the location marker: MapLibre's
+  `Marker` reads `map._camera.transform` on every position update, so it threw
+  on the first map click. `maplibre-gl-streetview` 0.8.0 takes a `createMarker`
+  factory, and the plugin feeds it mapbox-gl's own `Marker` on a Mapbox host —
+  the control still owns the marker element and its direction arrow, and only
+  the positioning changes engine. A renderer swap rebuilds the control, so the
+  marker follows whichever engine is primary.
+- **Layer Swipe** for native style layers. The control drives both maps only
+  through the surface the two engines share, so the one map it constructed
+  itself — the clipped comparison pane, until now always a MapLibre one — comes
+  from `maplibre-gl-swipe` 0.13.0's `createMap`, fed mapbox-gl's `Map`. Two Mapbox specifics come with it: the
+  pane is handed the access token explicitly (mapbox-gl reads its token from a
+  global the app never sets, so a second map built without it renders nothing),
+  and the basemap grouping is seeded with `basemapLayerIds` because a
+  `mapbox://` style URL cannot be fetched — the same reason the layer control
+  seeds its own. The panel lists each row by the name the Layers panel shows
+  rather than by the style layer id it drives, because the engine publishes the
+  same style-layer-id-to-name bridge MapController does
+  (`packages/map/src/layer-labels.ts`); without it a row read
+  `geolibre-mapbox-<id>-geojson-fill`. The deck.gl **raster provider stays MapLibre-only**: it mirrors
+  COG and `maplibre-gl-raster` layers onto the comparison pane, and both of
+  those controls register MapLibre tile protocols, so neither draws on Mapbox in
+  the first place. A project authored on MapLibre can still carry such layers,
+  and the swipe panel omits them rather than offering sides for layers that are
+  not on screen. One known defect: changing the basemap while the swipe is
+  active leaves the previous comparison pane — and the map inside it, a live
+  WebGL context — orphaned on the Mapbox canvas. The swipe itself keeps working
+  against the new basemap. The same sequence on MapLibre leaves one pane, so it
+  sits in the Mapbox control lifecycle rather than the plugin; tracked in #2430.
+- **GeoAgent**. Almost every tool already sits on the shared Style Spec
+  surface; four did not, and each broke differently — `add_marker` built
+  MapLibre's `Marker`/`Popup`, `set_projection` wrote `{ type }` (Mapbox takes a
+  name string), `get_map_state` read `projection.type`, and
+  `run_maplibre_script` handed user-authored code the wrong namespace. That
+  matters more here than in a control that simply fails to mount: an agent run
+  breaks mid-way, after it has already changed the map. `maplibre-gl-geoagent`
+  0.6.1 takes the engine as one option (`mapEngine`) and all four follow it, so
+  the plugin names the host's engine once (`geoagent-map-engine.ts`) and hands
+  over the whole mapbox-gl namespace — `run_maplibre_script` passes it straight
+  to the script it runs. Agent overlays reach the Layers panel as
+  plugin-owned rows the engine adopts, as on MapLibre. `set_sky` / `clear_sky`
+  stay MapLibre-only: mapbox-gl has no `setSky` (it draws sky through a style
+  layer), and the tool reports that instead of failing silently.
 - **Overture Maps**. mapbox-gl 3.30+ reads `.pmtiles` archives itself, through
   a tile provider it fetches from `api.mapbox.com` (allowlisted in the desktop
   and web CSPs), so the plugin hands `maplibre-gl-overture-maps` its `nativePmtiles`
@@ -146,17 +202,8 @@ Regular` glyphs when the style has no font to borrow.
   MapLibre. The Style panel's 3D extrusion of the buildings theme is a
   MapLibre layer-sync feature and stays MapLibre-only.
 
-Still MapLibre-only, each for a concrete reason:
-
-- **Street View**: the upstream control places a `maplibre-gl` `Marker`, whose
-  update path reads `map._camera.transform` and throws on a mapbox-gl map.
-- **GeoAgent**: its tools call `setProjection({ type })`, `setTerrain` and
-  MapLibre `Marker` / `Popup`, so agent actions would break mid-run.
-- **Swipe**: `maplibre-gl-swipe` constructs a second MapLibre `Map` as the
-  comparison pane, and the plugin mirrors COG and raster layers onto it.
-- **Flight Simulator**: flies with `calculateCameraOptionsFromCameraLngLatAltRotation`
-  and `getCenterClampedToGround`, which have no mapbox-gl equivalent (a
-  `FreeCameraOptions` port is a separate job).
+No plugin is held back by a MapLibre-internal dependency of its own. What
+remains MapLibre-only is a map feature rather than a plugin.
 
 Two engine changes came with the port and apply to every plugin: a store
 layer added while a Mapbox source is still loading is now synced when that

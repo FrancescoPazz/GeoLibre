@@ -1,3 +1,4 @@
+import { showGlSearchResult } from "./gl-search-result";
 import {
   BLANK_BASEMAP,
   DEFAULT_BASEMAP,
@@ -23,7 +24,7 @@ import type {
   StoryChapterLocation,
 } from "@geolibre/core";
 import bbox from "@turf/bbox";
-import type { Feature, FeatureCollection, Geometry } from "geojson";
+import type { Feature, FeatureCollection, Geometry, Point, Polygon } from "geojson";
 import * as maplibregl from "maplibre-gl";
 import { getLayerMetadataBounds, LayerControlHost } from "./layer-control-host";
 export { layerControlPaintToStyle, restoreControlOrder } from "./layer-control-host";
@@ -51,6 +52,7 @@ import {
   sourceId,
   textLayerId,
 } from "./geojson-loader";
+import { BASEMAP_LABEL_KEY, clearLayerLabels, publishLayerLabels } from "./layer-labels";
 import {
   mbtilesStyleLayerIds,
   externalSourceIdsFor,
@@ -372,10 +374,6 @@ function createPlanetaryMapStyle(basemap: PlanetaryBasemap): maplibregl.StyleSpe
       },
     ],
   };
-}
-
-interface GeoLibreLayerLabelWindow extends Window {
-  __GEOLIBRE_LAYER_LABELS__?: Record<string, string>;
 }
 
 // Moved to ./map-engine so MapEngine can reference it without importing this
@@ -974,6 +972,7 @@ export class MapController implements MapEngine {
   }
 
   destroy(): void {
+    for (const dispose of this.searchDisposers) dispose();
     this.extentDrawingDispose?.();
     this.removeNavigationControl();
     this.removeFullscreenControl();
@@ -1608,6 +1607,8 @@ export class MapController implements MapEngine {
     );
   }
 
+  private searchDisposers = new Set<() => void>();
+
   private extentDrawingDispose: (() => void) | null = null;
 
   getRenderSurface() {
@@ -1664,6 +1665,17 @@ export class MapController implements MapEngine {
     return bounds
       ? [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]
       : null;
+  }
+
+  showSearchResult(geometry: Point | Polygon): () => void {
+    const map = this.map;
+    if (!map) return () => {};
+    return showGlSearchResult(
+      map,
+      geometry,
+      (center, color) => new maplibregl.Marker({ color }).setLngLat(center).addTo(map),
+      this.searchDisposers,
+    );
   }
 
   showExtent(_extent: MapExtent): () => void {
@@ -2252,10 +2264,7 @@ export class MapController implements MapEngine {
   }
 
   private publishLayerDisplayNames(layers: GeoLibreLayer[]): void {
-    if (typeof window === "undefined") return;
-
-    const labelWindow = window as GeoLibreLayerLabelWindow;
-    labelWindow.__GEOLIBRE_LAYER_LABELS__ = Object.fromEntries([
+    publishLayerLabels([
       ...layers
         .flatMap((layer) => this.getNamedStyleLayers(layer))
         .map(({ id, name }): [string, string] => [id, name]),
@@ -2280,9 +2289,8 @@ export class MapController implements MapEngine {
       // always wins over a layer that happens to share the id, matching the
       // sidebar. It is published even with no overlay layers, since the panel
       // always lists the basemap entry.
-      ["__basemap__", this.backgroundLabel],
+      [BASEMAP_LABEL_KEY, this.backgroundLabel],
     ]);
-    window.dispatchEvent(new CustomEvent("geolibre-layer-labels-change"));
   }
 
   /**
@@ -2291,9 +2299,7 @@ export class MapController implements MapEngine {
    * which always re-publishes the basemap entry.
    */
   private clearLayerDisplayNames(): void {
-    if (typeof window === "undefined") return;
-    (window as GeoLibreLayerLabelWindow).__GEOLIBRE_LAYER_LABELS__ = {};
-    window.dispatchEvent(new CustomEvent("geolibre-layer-labels-change"));
+    clearLayerLabels();
   }
 
   private addNavigationControl(): boolean {

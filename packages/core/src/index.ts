@@ -199,6 +199,7 @@ export {
   type GeoportalSession,
 } from "./geoportal-session";
 export {
+  getArcgisApiKey,
   getBuildEnvironment,
   getCesiumIonToken,
   getCesiumTerrainAssetId,

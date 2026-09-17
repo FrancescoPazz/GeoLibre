@@ -1067,6 +1067,7 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
     },
     unregisterTemporalLayer: (layerId: string) => unregisterTemporalLayer(layerId),
     getActiveBasemap: () => effectiveBasemapUrl(useAppStore.getState()),
+    getBasemapLayerIds: () => mapControllerRef?.current?.getBasemapStyleLayerIds() ?? [],
     onBasemapChange: (callback: (styleUrl: string) => void) =>
       useAppStore.subscribe((state, prev) => {
         const current = effectiveBasemapUrl(state);
@@ -1136,6 +1137,14 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
         "getMapboxGl" in engine &&
         typeof engine.getMapboxGl === "function"
         ? engine.getMapboxGl()
+        : null;
+    },
+    getMapboxAccessToken: () => {
+      const engine = mapControllerRef?.current;
+      return engine?.kind === "mapbox" &&
+        "getMapboxAccessToken" in engine &&
+        typeof engine.getMapboxAccessToken === "function"
+        ? engine.getMapboxAccessToken()
         : null;
     },
     getCesiumScene: () => {

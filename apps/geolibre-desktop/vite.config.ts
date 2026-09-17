@@ -15,6 +15,8 @@ import { emiliaRomagnaKit } from "./vite-plugins/emilia-romagna-kit";
 import { proxyBinaryRequestGuarded } from "./vite-proxy-guard";
 
 const GEOAGENT_BROWSER_BUNDLE = "maplibre-gl-geoagent/dist/browser-";
+import { ARCGIS_SDK_HOST, ARCGIS_SDK_VERSION } from "../../packages/map/src/arcgis-sdk";
+
 const EARTH_ENGINE_CONTROL_BUNDLE = "maplibre-gl-earth-engine/dist/";
 const EARTH_ENGINE_BROWSER_BUNDLE = "@google/earthengine/build/browser.js";
 const GIS_CHUNK_WARNING_LIMIT_KB = 14000;
@@ -145,6 +147,18 @@ if (!process.env.VITE_MAPBOX_ACCESS_TOKEN) {
   );
   if (mapboxAccessToken) {
     process.env.VITE_MAPBOX_ACCESS_TOKEN = mapboxAccessToken;
+  }
+}
+
+// ArcGIS API key for the ArcGIS renderer's Esri basemap styles: same
+// bare→prefixed bridge. `ARCGIS_API_KEY` from the shell or an .env file is
+// surfaced as `VITE_ARCGIS_API_KEY`; getArcgisApiKey() then lets a runtime
+// Settings override win over this build-time value.
+if (!process.env.VITE_ARCGIS_API_KEY) {
+  const arcgisApiKey =
+    process.env.ARCGIS_API_KEY || FILE_ENV.VITE_ARCGIS_API_KEY || FILE_ENV.ARCGIS_API_KEY;
+  if (arcgisApiKey) {
+    process.env.VITE_ARCGIS_API_KEY = arcgisApiKey;
   }
 }
 
@@ -303,6 +317,7 @@ const BUILD_ENV_KEYS = [
   "VITE_GEOLIBRE_CAPABILITIES",
   "VITE_GEOLIBRE_CLERK_PUBLISHABLE_KEY",
   "VITE_GEOLIBRE_CLERK_WAITLIST",
+  "VITE_ARCGIS_API_KEY",
   "VITE_GEOLIBRE_COLLAB_URL",
   "VITE_GEOLIBRE_EMBED_ORIGINS",
   "VITE_GEOLIBRE_GA_MEASUREMENT_ID",
@@ -1215,6 +1230,24 @@ function pwaPlugin(): Plugin[] {
           options: {
             cacheName: "geolibre-cdn-engines",
             expiration: { maxEntries: 400, maxAgeSeconds: 60 * 60 * 24 * 30 },
+            cacheableResponse: { statuses: [0, 200] },
+          },
+        },
+        {
+          // The ArcGIS Maps SDK for JavaScript, imported per module from Esri's
+          // versioned ES-module CDN by the ArcGIS renderer
+          // (packages/map/src/arcgis-sdk.ts), plus its stylesheet, fonts and
+          // workers from the same versioned prefix. Its own cache, not the
+          // engines' one above: a first load is a few hundred small modules,
+          // enough to evict a previously cached engine from a 400-entry cache
+          // and take it offline. The version is in every path, so a bump mints
+          // new URLs and CacheFirst never serves a stale SDK.
+          urlPattern: ({ url }: { url: URL }) =>
+            url.hostname === ARCGIS_SDK_HOST && url.pathname.startsWith(`/${ARCGIS_SDK_VERSION}/`),
+          handler: "CacheFirst",
+          options: {
+            cacheName: "geolibre-arcgis-sdk",
+            expiration: { maxEntries: 1500, maxAgeSeconds: 60 * 60 * 24 * 30 },
             cacheableResponse: { statuses: [0, 200] },
           },
         },

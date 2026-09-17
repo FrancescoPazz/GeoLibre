@@ -49,6 +49,7 @@ import {
 } from "@geolibre/core";
 import type { EllipsoidId, GeoLibreLayer, LayerGroup } from "@geolibre/core";
 import { layerFilteredHintKey } from "../../lib/layer-filter-hint";
+import { commitPendingAttributeDrafts } from "../../lib/attribute-draft-commit";
 import type { FeatureCollection } from "geojson";
 import {
   buildTimeBindingFromRecords,
@@ -83,6 +84,7 @@ import {
   buildQml,
   buildSld,
   isCesiumSupportedLayerType,
+  isArcgisSupportedLayer,
   isMapboxSupportedLayer,
   isPlaceholderLayer,
   mapboxStyleToJson,
@@ -677,6 +679,9 @@ export function LayerPanel({
   // it rejects (a MapLibre custom protocol, deck.gl, COG, ...) is flagged here
   // rather than only reported by the map's error banner once it is visible.
   const mapboxPrimary = useAppStore((s) => s.primaryRenderer === "mapbox");
+  // And the ArcGIS engine draws through the SDK's own layer classes, so the
+  // layer kinds without a translation are flagged the same way.
+  const arcgisPrimary = useAppStore((s) => s.primaryRenderer === "arcgis");
   // The subset panel draws its extract box on the map surface, so it needs an
   // engine the user can draw on — not merely "not the globe".
   const capabilities = useMapCapabilities(mapControllerRef);
@@ -1690,10 +1695,33 @@ export function LayerPanel({
     },
     [clearRefreshStatusTimer, mapControllerRef, scheduleStatusClear, t],
   );
+  // Values typed in the attribute table stay drafts until its own Save runs,
+  // while Export and write-back read the layer from the store. Commit the drafts
+  // first so both include what the table shows instead of silently using the
+  // pre-edit features (#2438, #2439). Returns the up-to-date layer, or null
+  // (with an error status set) when the drafts cannot be applied: invalid
+  // values, form violations, or a revoked update capability.
+  const commitTableDrafts = useCallback(
+    (layer: GeoLibreLayer): GeoLibreLayer | null => {
+      if (commitPendingAttributeDrafts(layer.id) === "blocked") {
+        setRefreshStatuses((current) => ({
+          ...current,
+          [layer.id]: { type: "error", message: t("layers.pendingTableDraftsBlocked") },
+        }));
+        scheduleStatusClear(layer.id);
+        return null;
+      }
+      // A commit replaces the layer's features, so read the layer back.
+      return useAppStore.getState().layers.find((l) => l.id === layer.id) ?? layer;
+    },
+    [scheduleStatusClear, t],
+  );
 
   const handleExportLayer = useCallback(
-    async (layer: GeoLibreLayer, format: VectorExportFormat, precision?: number) => {
-      clearRefreshStatusTimer(layer.id);
+    async (clickedLayer: GeoLibreLayer, format: VectorExportFormat, precision?: number) => {
+      clearRefreshStatusTimer(clickedLayer.id);
+      const layer = commitTableDrafts(clickedLayer);
+      if (!layer) return;
       try {
         const geojson = await resolveLayerGeojson(
           layer,
@@ -1759,7 +1787,7 @@ export function LayerPanel({
         scheduleStatusClear(layer.id);
       }
     },
-    [clearRefreshStatusTimer, mapControllerRef, scheduleStatusClear, t],
+    [clearRefreshStatusTimer, commitTableDrafts, mapControllerRef, scheduleStatusClear, t],
   );
 
   // Shared symbology-export flow: resolve the layer's features, build the style
@@ -2031,9 +2059,11 @@ export function LayerPanel({
   // or diffing against the PostGIS table by primary key. Unlike Export, there
   // is no save dialog: write-back targets the known source.
   const handleSaveEditsToSource = useCallback(
-    async (layer: GeoLibreLayer) => {
-      if (!canEditLayer(layer.id)) return;
-      clearRefreshStatusTimer(layer.id);
+    async (clickedLayer: GeoLibreLayer) => {
+      if (!canEditLayer(clickedLayer.id)) return;
+      clearRefreshStatusTimer(clickedLayer.id);
+      const layer = commitTableDrafts(clickedLayer);
+      if (!layer) return;
       const isPostgis = isPostgisEditableLayer(layer);
       const path = typeof layer.sourcePath === "string" ? layer.sourcePath.trim() : "";
       if (!isPostgis && !isArcGISWritableLayer(layer) && !path) return;
@@ -2183,7 +2213,15 @@ export function LayerPanel({
         scheduleStatusClear(layer.id);
       }
     },
-    [canEditLayer, clearRefreshStatusTimer, mapControllerRef, scheduleStatusClear, t, updateLayer],
+    [
+      canEditLayer,
+      clearRefreshStatusTimer,
+      commitTableDrafts,
+      mapControllerRef,
+      scheduleStatusClear,
+      t,
+      updateLayer,
+    ],
   );
 
   // Close the bind dialog and invalidate any in-flight scan/confirm so a late
@@ -3584,6 +3622,16 @@ export function LayerPanel({
                             className="shrink-0 rounded-sm bg-muted px-1 text-[10px] uppercase text-muted-foreground"
                           >
                             {t("mapGrid.noMapbox")}
+                          </span>
+                        )}
+                      {arcgisPrimary &&
+                        !isCesiumOnlyLayer(layer) &&
+                        !isArcgisSupportedLayer(layer) && (
+                          <span
+                            title={t("renderer.layerArcgisUnsupported")}
+                            className="shrink-0 rounded-sm bg-muted px-1 text-[10px] uppercase text-muted-foreground"
+                          >
+                            {t("mapGrid.noArcgis")}
                           </span>
                         )}
                       <span className="shrink-0 text-[10px] uppercase text-muted-foreground">

@@ -1,6 +1,7 @@
 import { isCesiumOnlyLayer, useAppStore, type MapRendererKind } from "@geolibre/core";
 import {
   CesiumCanvas,
+  isArcgisSupportedLayer,
   isCesiumSupportedLayerType,
   isMapboxSupportedLayer,
   SecondaryMapCanvas,
@@ -21,6 +22,8 @@ import { type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCesiumIonToken, useCesiumTerrainAssetId } from "../../hooks/useCesiumIonToken";
 import { PrimaryMapboxCanvas } from "./PrimaryMapboxCanvas";
+import { PrimaryArcgisCanvas } from "./PrimaryArcgisCanvas";
+import { useCesiumIonToken } from "../../hooks/useCesiumIonToken";
 
 /**
  * An editable label shown centered at the top of a map pane. Empty by default;
@@ -148,6 +151,8 @@ function SecondaryMapPane({
     <div className="relative isolate min-h-0 min-w-0 overflow-hidden bg-background">
       {renderer === "mapbox" ? (
         <PrimaryMapboxCanvas viewId={viewId} />
+      ) : renderer === "arcgis" ? (
+        <PrimaryArcgisCanvas viewId={viewId} />
       ) : is3d ? (
         // Key on the token so changing the Cesium Ion token in Settings remounts
         // the globe: `Cesium.Ion.defaultAccessToken` is applied once at viewer
@@ -196,7 +201,9 @@ function SecondaryMapPane({
               onValueChange={(value) =>
                 setSecondaryViewKind(
                   viewId,
-                  value === "cesium" || value === "mapbox" ? value : "maplibre",
+                  value === "cesium" || value === "mapbox" || value === "arcgis"
+                    ? value
+                    : "maplibre",
                 )
               }
             >
@@ -205,6 +212,9 @@ function SecondaryMapPane({
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="mapbox">
                 {t("toolbar.item.rendererMapbox")}
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="arcgis">
+                {t("toolbar.item.rendererArcgis")}
               </DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="cesium">
                 {t("toolbar.item.rendererCesium")}
@@ -237,7 +247,7 @@ interface PaneLayerToggleProps {
  * are visible in this pane. A layer's checkbox reflects its effective visibility
  * (the pane's override, or the primary map's visibility when not overridden). On
  * a 3D-globe pane, layer kinds the globe cannot render are tagged "2D only"; on
- * a Mapbox pane, layers its native adapter cannot compile are tagged too.
+ * a Mapbox or ArcGIS pane, layers its native adapter cannot compile are tagged too.
  */
 function PaneLayerToggle({ viewId, index, renderer }: PaneLayerToggleProps) {
   const { t } = useTranslation();
@@ -280,6 +290,7 @@ function PaneLayerToggle({ viewId, index, renderer }: PaneLayerToggleProps) {
             const only2d = is3d && !isCesiumSupportedLayerType(layer);
             const only3d = !is3d && isCesiumOnlyLayer(layer);
             const noMapbox = renderer === "mapbox" && !isMapboxSupportedLayer(layer);
+            const noArcgis = renderer === "arcgis" && !isArcgisSupportedLayer(layer);
             return (
               <DropdownMenuCheckboxItem
                 key={layer.id}
@@ -292,9 +303,17 @@ function PaneLayerToggle({ viewId, index, renderer }: PaneLayerToggleProps) {
                 onSelect={(event: Event) => event.preventDefault()}
               >
                 <span className="truncate">{layer.name}</span>
-                {only2d || only3d || noMapbox ? (
+                {only2d || only3d || noMapbox || noArcgis ? (
                   <span className="ms-auto shrink-0 ps-2 text-xs text-muted-foreground">
-                    {t(only2d ? "mapGrid.only2d" : only3d ? "mapGrid.only3d" : "mapGrid.noMapbox")}
+                    {t(
+                      only2d
+                        ? "mapGrid.only2d"
+                        : only3d
+                          ? "mapGrid.only3d"
+                          : noMapbox
+                            ? "mapGrid.noMapbox"
+                            : "mapGrid.noArcgis",
+                    )}
                   </span>
                 ) : null}
               </DropdownMenuCheckboxItem>

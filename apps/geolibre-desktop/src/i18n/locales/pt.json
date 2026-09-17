@@ -1930,6 +1930,7 @@
     "only2d": "Somente 2D",
     "only3d": "Somente 3D",
     "noMapbox": "Sem Mapbox",
+    "noArcgis": "Sem ArcGIS",
     "cesiumTokenHint": "Adicione um token do Cesium Ion em Configurações para terreno e imagens do Ion"
   },
   "renderer": {
@@ -1939,6 +1940,7 @@
     "layerUnsupported": "Não renderizado pelo globo 3D",
     "layerCesiumOnly": "Renderizado somente pelo globo 3D",
     "layerMapboxUnsupported": "Não renderizado pelo motor Mapbox",
+    "layerArcgisUnsupported": "Não renderizado pelo motor ArcGIS",
     "resetView": "Redefinir vista",
     "scene3D": "Globo 3D",
     "scene2D": "Mapa 2D",
@@ -1947,6 +1949,7 @@
     "fullscreenExit": "Sair da tela cheia",
     "fullscreenUnavailable": "Tela cheia indisponível",
     "mapboxTokenHint": "Adicione seu token de acesso do Mapbox em <settingsLink>Configurações → Variáveis de ambiente</settingsLink> para usar este renderizador.",
+    "arcgisKeyHint": "Adicione uma chave de API do ArcGIS em <settingsLink>Configurações → Variáveis de ambiente</settingsLink> para usar os estilos de mapa base da Esri.",
     "pluginUnsupported": "Este plugin não oferece suporte ao mecanismo de renderização selecionado."
   },
   "mapContextMenu": {
@@ -2214,6 +2217,10 @@
       "mapboxTokenPlaceholder": "pk.…",
       "mapboxTokenDescription": "Para usar o Mapbox, cole abaixo um token de acesso da <tokenLink>sua conta Mapbox</tokenLink>.",
       "mapboxTokenStorageNote": "Armazenado localmente neste dispositivo (não no arquivo do projeto, portanto nunca é compartilhado) e enviado apenas para o Mapbox. Na versão web, ele compartilha o mesmo armazenamento do navegador que outros dados do site.",
+      "arcgisKeyTitle": "Chave de API do ArcGIS",
+      "arcgisKeyPlaceholder": "AAPT…",
+      "arcgisKeyDescription": "O renderizador ArcGIS funciona sem chave: ele exibe o mapa base do projeto e suas camadas por meio do ArcGIS Maps SDK for JavaScript, carregado da CDN da Esri. Uma chave de API adiciona os estilos de mapa base da Esri (Ruas, Imagens, Topográfico, …). Crie uma em <keyLink>credenciais de desenvolvedor</keyLink> na sua conta do ArcGIS com o privilégio de mapas base e cole-a abaixo.",
+      "arcgisKeyStorageNote": "Armazenada localmente neste dispositivo (não no arquivo do projeto, portanto nunca é compartilhada) e enviada apenas para a Esri. Na versão web, ela compartilha o mesmo armazenamento do navegador que outros dados do site.",
       "variablesTitle": "Variáveis de ambiente",
       "variablesCount_one": "{{count}} variável de execução ativada.",
       "variablesCount_other": "{{count}} variáveis de execução ativadas.",
@@ -2406,6 +2413,7 @@
       "imperial": "Nós / pés",
       "metric": "km/h / metros",
       "bankCamera": "Inclinar o horizonte nas curvas",
+      "bankCameraMapbox": "O Mapbox GL não tem rolagem de câmera, portanto o horizonte permanece nivelado aqui. A aeronave continua inclinando e curvando.",
       "invertPitch": "Inverter o eixo de arfagem",
       "knots": "kt",
       "kph": "km/h",
@@ -2809,6 +2817,7 @@
       "renderingEngine": "Motor de renderização",
       "rendererMapLibre": "MapLibre",
       "rendererMapbox": "Mapbox",
+      "rendererArcgis": "ArcGIS",
       "rendererCesium": "Cesium",
       "viewInGoogleMaps": "Ver no Google Maps",
       "viewInGoogleEarth": "Ver no Google Earth",
@@ -4663,6 +4672,10 @@
                 "inside": "Dentro (reduzir)",
                 "both": "Ambos os lados"
               }
+            },
+            "dissolve": {
+              "label": "Dissolver o resultado",
+              "description": "Mescla os buffers em uma única feição e dissolve as sobreposições entre eles. A forma resultante não pertence a nenhuma feição de entrada, por isso os atributos são descartados; para dissolver por um atributo, execute a ferramenta Dissolver no resultado."
             }
           }
         },
@@ -7237,6 +7250,7 @@
     "saveEditsSuccess": "{{count}} feição(ões) salva(s) no arquivo de origem.",
     "saveEditsNoFeatures": "Esta camada não tem feições para salvar.",
     "saveEditsError": "Não foi possível salvar as edições no arquivo de origem.",
+    "pendingTableDraftsBlocked": "A tabela de atributos tem edições não salvas que não podem ser aplicadas. Corrija-as ou cancele-as e tente novamente.",
     "saveEditsToArcgis": "Salvar edições no serviço ArcGIS",
     "saveEditsArcgisSuccess": "Salvo em ArcGIS: {{inserted}} inserida(s), {{updated}} atualizada(s), {{deleted}} excluída(s).",
     "saveEditsToPostgis": "Salvar edições na tabela PostGIS",
