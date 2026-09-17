@@ -23,7 +23,6 @@ import { useTranslation } from "react-i18next";
 import { useCesiumIonToken, useCesiumTerrainAssetId } from "../../hooks/useCesiumIonToken";
 import { PrimaryMapboxCanvas } from "./PrimaryMapboxCanvas";
 import { PrimaryArcgisCanvas } from "./PrimaryArcgisCanvas";
-import { useCesiumIonToken } from "../../hooks/useCesiumIonToken";
 
 /**
  * An editable label shown centered at the top of a map pane. Empty by default;
