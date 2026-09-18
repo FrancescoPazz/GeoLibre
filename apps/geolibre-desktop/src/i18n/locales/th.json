@@ -22,6 +22,7 @@
     "noMatches": "ไม่พบรายการที่ตรงกัน",
     "addFailed": "ไม่สามารถเพิ่มแหล่งข้อมูลนี้ได้",
     "builtinBadge": "ในตัว",
+    "configBadge": "คอนฟิก",
     "newConnection": "การเชื่อมต่อ {{kind}} ใหม่",
     "loadingTables": "กำลังโหลดตาราง…",
     "files": "ไฟล์",
@@ -357,6 +358,10 @@
       "kml": {
         "label": "KML / KMZ",
         "description": "โหลด KML หรือ KMZ บนลูกโลกโดยคงรูปแบบต้นฉบับ ภาพซ้อนทับ และลิงก์เครือข่าย"
+      },
+      "wcs": {
+        "description": "โหลดข้อมูลตัวเลข GeoTIFF บางส่วนจากบริการ WCS 1.0.0",
+        "label": "เลเยอร์ WCS"
       }
     },
     "shared": {
@@ -396,6 +401,7 @@
       "loadAria": "โหลดบริการที่บันทึกไว้",
       "loadPlaceholder": "โหลดบริการที่บันทึกไว้…",
       "builtin": "{{name}} (ในตัว)",
+      "config": "{{name}} (คอนฟิก)",
       "deleteAria": "ลบบริการที่บันทึกไว้",
       "empty": "ยังไม่มีบริการที่บันทึกไว้ — กรอกแบบฟอร์มแล้วเลือก “บันทึกรายการปัจจุบัน”",
       "name": "ชื่อ",
@@ -945,7 +951,39 @@
       "modelTooLarge": "โมเดลนี้มีขนาดเกินขีดจำกัด {{limit}} MB สำหรับการฝังในโปรเจกต์ โปรดโฮสต์ไฟล์แล้วเพิ่มผ่าน URL แทน",
       "modelFileError": "ไม่สามารถอ่านโมเดลนี้ได้ โปรดเลือกไฟล์ glTF 2.0 หรือ GLB ที่ถูกต้อง"
     },
-    "nonGeographicCoordinates": "พิกัดใน {{names}} ไม่ใช่ลองจิจูด/ละติจูด จึงจะไม่มีสิ่งใดถูกวาดบนแผนที่ ระบบพิกัดระบุไว้ผิด — โปรดฉายพิกัดข้อมูลใหม่ (หรือแก้ไฟล์ .prj) แล้วโหลดอีกครั้ง"
+    "nonGeographicCoordinates": "พิกัดใน {{names}} ไม่ใช่ลองจิจูด/ละติจูด จึงจะไม่มีสิ่งใดถูกวาดบนแผนที่ ระบบพิกัดระบุไว้ผิด — โปรดฉายพิกัดข้อมูลใหม่ (หรือแก้ไฟล์ .prj) แล้วโหลดอีกครั้ง",
+    "pmtiles": {
+      "errorUrl": "โปรดป้อน URL ของ PMTiles แบบ HTTP หรือ HTTPS ที่ถูกต้อง",
+      "errorMlt": "ArcGIS ต้องใช้ไทล์เวกเตอร์ MVT ไม่ใช่ MLT"
+    },
+    "zarr": {
+      "errorUrl": "โปรดป้อน URL ของ Zarr แบบ HTTP หรือ HTTPS ที่ถูกต้อง",
+      "errorColorLimits": "ค่าสีสูงสุดต้องมากกว่าค่าสีต่ำสุด"
+    },
+    "raster": {
+      "errorSource": "ป้อน URL ของ GeoTIFF หรือเลือกไฟล์"
+    },
+    "wcs": {
+      "coverage": "คัฟเวอเรจ",
+      "retrieve": "ดึงข้อมูลคัฟเวอเรจ",
+      "select": "เลือกคัฟเวอเรจ",
+      "extent": "ใช้ขอบเขตคัฟเวอเรจ",
+      "width": "ความกว้าง (พิกเซล)",
+      "height": "ความสูง (พิกเซล)",
+      "hint": "ดาวน์โหลด GeoTIFF ใน EPSG:4326 ตามขนาดพิกเซลที่เลือก ค่าอาจถูกสุ่มตัวอย่างใหม่ บันทึกแรสเตอร์เพื่อเก็บข้อมูลที่ดาวน์โหลด",
+      "errors": {
+        "xml": "บริการส่งคืน XML ที่ไม่ถูกต้อง",
+        "version": "แหล่งข้อมูลนี้ต้องใช้ WCS 1.0.0 บริการส่งคืนการตอบกลับที่ไม่รองรับ",
+        "empty": "ไม่มีคัฟเวอเรจที่ตรงกัน",
+        "format": "คัฟเวอเรจไม่ได้ประกาศรองรับเอาต์พุต GeoTIFF",
+        "crs": "คัฟเวอเรจต้องรองรับ EPSG:4326 สำหรับทั้งคำขอและเอาต์พุต",
+        "size": "เลือกขนาดตั้งแต่ 1 ถึง 4096 พิกเซล จำกัดการดาวน์โหลดที่ 128 MB",
+        "metadata": "บริการส่งคืนเมทาดาทามากเกินกว่าที่ GeoLibre จะโหลดได้ จำกัดการตอบกลับเมทาดาทาที่ 32 MB",
+        "response": "บริการไม่ได้ส่งคืน GeoTIFF ที่ถูกต้อง",
+        "bounds": "ป้อนกรอบที่ถูกต้อง: ตะวันตก/ตะวันออกอยู่ในช่วง -180 ถึง 180 ใต้/เหนืออยู่ในช่วง -90 ถึง 90 โดยตะวันตก < ตะวันออก และใต้ < เหนือ",
+        "url": "ป้อน URL ของบริการ WCS"
+      }
+    }
   },
   "offline": {
     "title": "ดาวน์โหลดพื้นที่แบบออฟไลน์",
@@ -1895,6 +1933,7 @@
     "layerCesiumOnly": "แสดงผลบนลูกโลก 3 มิติเท่านั้น",
     "layerMapboxUnsupported": "ไม่แสดงผลบนเอนจิน Mapbox",
     "layerArcgisUnsupported": "ไม่แสดงผลบนเอนจิน ArcGIS",
+    "layerArcgisViewUnsupported": "ไม่แสดงผลในมุมมอง ArcGIS นี้",
     "resetView": "รีเซ็ตมุมมอง",
     "scene3D": "ลูกโลก 3 มิติ",
     "scene2D": "แผนที่ 2 มิติ",
@@ -2513,7 +2552,8 @@
       "czml": "ฉาก 3 มิติไดนามิก CZML",
       "gltfModel": "โมเดล 3 มิติ (glTF)",
       "postgres": "เลเยอร์ PostgreSQL",
-      "iceberg": "เลเยอร์ Apache Iceberg"
+      "iceberg": "เลเยอร์ Apache Iceberg",
+      "wcs": "เลเยอร์ WCS"
     },
     "conversion": {
       "vectorToVector": "เวกเตอร์เป็นเวกเตอร์",
@@ -2978,6 +3018,7 @@
       "maplibre-gl-esri-wayback": "ภาพถ่ายย้อนหลัง",
       "maplibre-gl-openaerialmap": "OpenAerialMap",
       "maplibre-gl-arcgis-hub": "ArcGIS Hub",
+      "geolibre-osm-downloader": "ตัวดาวน์โหลด OSM",
       "geolibre-stac-catalogs": "แคตตาล็อก STAC",
       "geolibre-planet-open-data": "ข้อมูลเปิดของ Planet",
       "maplibre-gl-source-coop": "Source Cooperative",
@@ -7897,5 +7938,41 @@
     "catalogHuc12pp": "จุดระบายน้ำ HUC12",
     "catalogNmwdiSt": "สถานีตรวจวัดน้ำในรัฐนิวเม็กซิโก",
     "catalogFlowlines": "เส้นทางน้ำ NHDPlus"
+  },
+  "plugin": {
+    "3d-tiles": {
+      "arcgisSourceUnsupported": "ใช้ URL tileset.json ของ 3D Tiles ในมุมมอง ArcGIS นี้ ไทล์ Google Photorealistic และ I3S ต้องใช้เอนจินเรนเดอร์อื่น"
+    },
+    "geolibre-osm-downloader": {
+      "title": "ตัวดาวน์โหลด OSM",
+      "hint": "ดาวน์โหลดข้อมูล OpenStreetMap จากพื้นที่บนแผนที่ปัจจุบันผ่าน Overpass API สาธารณะ",
+      "attribution": "ข้อมูล © ผู้มีส่วนร่วมใน OpenStreetMap ใช้งานภายใต้สัญญาอนุญาต ODbL",
+      "featureType": "ประเภทฟีเจอร์",
+      "presetBuildings": "อาคาร",
+      "presetRoads": "ถนน",
+      "presetAmenities": "สิ่งอำนวยความสะดวก",
+      "presetWaterways": "ทางน้ำ",
+      "presetLanduse": "การใช้ที่ดิน",
+      "presetCustom": "แท็กกำหนดเอง",
+      "presetAll": "ฟีเจอร์ที่มีแท็กทั้งหมด",
+      "tagKey": "คีย์แท็ก",
+      "tagValue": "ค่าแท็ก",
+      "tagKeyPlaceholder": "เช่น shop",
+      "tagValuePlaceholder": "ไม่บังคับ เช่น bakery",
+      "west": "ทิศตะวันตก",
+      "south": "ทิศใต้",
+      "east": "ทิศตะวันออก",
+      "north": "ทิศเหนือ",
+      "useMapExtent": "ใช้ขอบเขตแผนที่",
+      "download": "ดาวน์โหลดข้อมูล OSM",
+      "ready": "เลือกพื้นที่และประเภทฟีเจอร์",
+      "exportGeoJson": "บันทึกเป็น GeoJSON",
+      "mapUnavailable": "ยังไม่มีขอบเขตแผนที่",
+      "extentApplied": "ใช้ขอบเขตแผนที่แล้ว",
+      "downloading": "กำลังดาวน์โหลดจาก OpenStreetMap…",
+      "noFeatures": "ไม่พบฟีเจอร์ที่ตรงกันในพื้นที่นี้",
+      "error": "ไม่สามารถดาวน์โหลดข้อมูล OSM ได้: {{message}}",
+      "added": "เพิ่มฟีเจอร์ {{count}} รายการลงบนแผนที่"
+    }
   }
 }

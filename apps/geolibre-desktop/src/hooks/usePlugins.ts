@@ -42,6 +42,7 @@ import {
   maplibreNasaEarthdataPlugin,
   maplibreNationalMapPlugin,
   maplibreOpenAerialMapPlugin,
+  maplibreOsmDownloaderPlugin,
   maplibreArcGisHubPlugin,
   TERRIA_CATALOG_PLUGIN_ID,
   terriaCatalogPlugin,
@@ -223,6 +224,7 @@ manager.registerAll([
   maplibrePortolanPlugin,
   maplibreEarthdataGisPlugin,
   maplibreOpenAerialMapPlugin,
+  maplibreOsmDownloaderPlugin,
   maplibreArcGisHubPlugin,
   maplibreSocrataPlugin,
   maplibreCkanPlugin,
@@ -1123,6 +1125,14 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
     readRasterWindow: (layerId: string, options: GeoLibreRasterWindowOptions) =>
       readRasterWindow(layerId, options),
     getMapRenderer: () => useAppStore.getState().primaryRenderer,
+    getArcgisView: () => {
+      const engine = mapControllerRef?.current;
+      return engine?.kind === "arcgis" &&
+        "getView" in engine &&
+        typeof engine.getView === "function"
+        ? engine.getView()
+        : null;
+    },
     getMapboxMap: () => {
       const engine = mapControllerRef?.current;
       return engine?.kind === "mapbox" &&

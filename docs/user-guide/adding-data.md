@@ -2,6 +2,8 @@
 
 The **Add Data** menu is the main way to bring layers into GeoLibre. It groups sources into Files, Web services, Cloud formats, 3D layers, and Databases. You can also drag files straight onto the map.
 
+For a consolidated list of file formats, service protocols, and platform limitations, see [Supported Data Formats](../data-formats.md).
+
 To collect supported dataset links from a catalog or other webpage and open several at once, use the [GeoLibre Chrome extension](chrome-extension.md), available from the [Chrome Web Store](https://chromewebstore.google.com/detail/open-data-in-geolibre/joinecgbfoldanidcoakpjgkbaceaooj).
 
 ![The Add Data menu, grouped into Files, Web services, Cloud formats, 3D layers, and Databases](https://assets.geolibre.app/images/geolibre-add-data-menu.webp)
@@ -54,19 +56,20 @@ KML is read by an in-house parser that keeps the file's own symbology, so styled
 
 ## Web services
 
-| Item                   | Notes                                                                                                                |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| **XYZ Layer**          | A raster or vector tile service using a `{z}/{x}/{y}` URL template.                                                  |
-| **WMS Layer**          | A Web Map Service layer, with click-to-identify through GetFeatureInfo where supported.                              |
-| **WFS Layer**          | A Web Feature Service layer, with optional automatic refresh.                                                        |
-| **WMTS Layer**         | A Web Map Tile Service layer.                                                                                        |
-| **OGC API - Features** | An OGC API - Features endpoint; pick a collection and add it as a vector layer.                                      |
-| **OGC Vector Tiles**   | An OGC API - Tiles vector tile service.                                                                              |
-| **ArcGIS Layer**       | An ArcGIS FeatureServer, VectorTileServer, MapServer, or ImageServer layer. See [ArcGIS services](#arcgis-services). |
-| **GeoRSS Layer**       | A GeoRSS feed, added as points and lines with the feed's titles and descriptions as attributes.                      |
-| **STAC Layer**         | Searches a STAC catalog and adds the matching raster items.                                                          |
-| **Video Layer**        | Drapes a video over four map corner coordinates, the way MapLibre's video source does.                               |
-| **Deck.gl Layer**      | Renders a deck.gl layer specification over the map, for visualizations MapLibre's own layer types do not cover.      |
+| Item | Notes |
+| --- | --- |
+| **XYZ Layer** | A raster or vector tile service using a `{z}/{x}/{y}` URL template. |
+| **[WCS Layer](../data-formats.md#wcs-raster-subsets)** | Downloads numerical GeoTIFF subsets from WCS 1.0.0 services. |
+| **WMS Layer** | A Web Map Service layer, with click-to-identify through GetFeatureInfo where supported. |
+| **WFS Layer** | A Web Feature Service layer, with optional automatic refresh. |
+| **WMTS Layer** | A Web Map Tile Service layer. |
+| **OGC API - Features** | An OGC API - Features endpoint; pick a collection and add it as a vector layer. |
+| **OGC Vector Tiles** | An OGC API - Tiles vector tile service. |
+| **ArcGIS Layer** | An ArcGIS FeatureServer, VectorTileServer, MapServer, or ImageServer layer. See [ArcGIS services](#arcgis-services). |
+| **GeoRSS Layer** | A GeoRSS feed, added as points and lines with the feed's titles and descriptions as attributes. |
+| **STAC Layer** | Searches a STAC catalog and adds the matching raster items. |
+| **Video Layer** | Drapes a video over four map corner coordinates, the way MapLibre's video source does. |
+| **Deck.gl Layer** | Renders a deck.gl layer specification over the map, for visualizations MapLibre's own layer types do not cover. |
 
 ### ArcGIS services
 
@@ -135,12 +138,12 @@ The **Browser** tab on the left edge of the window opens a QGIS-style Data Sourc
 
 ![The Browser panel, with My Data, Services, Recent, and Databases sections](https://assets.geolibre.app/images/geolibre-browser-panel.webp)
 
-| Section       | What it holds                                                                                                                                                                                                                                                                                            |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **My Data**   | Your personal layer library. **Layer actions → Save to My Data** stores a fully configured layer — source, style, labels, filters, joins, virtual fields, and attribute form — and one click here re-adds it to any later project. Import and export the library with the buttons on the section header. |
-| **Services**  | Saved map services, grouped by kind (XYZ, WMS, WFS, WMTS, ArcGIS). GeoLibre ships a starter set; the **+** on a group adds a new connection of that kind. Expand a service to browse its layers and add one.                                                                                             |
-| **Recent**    | The sources you added most recently, so a repeat is one click.                                                                                                                                                                                                                                           |
-| **Databases** | PostGIS connections. Expand one to browse its schemas and tables; on a table that registers more than one geometry column, pick the column explicitly.                                                                                                                                                   |
+| Section | What it holds |
+| --- | --- |
+| **My Data** | Your personal layer library. **Layer actions → Save to My Data** stores a fully configured layer — source, style, labels, filters, joins, virtual fields, and attribute form — and one click here re-adds it to any later project. Import and export the library with the buttons on the section header. |
+| **Services** | Saved map services, grouped by kind (XYZ, WMS, WFS, WMTS, ArcGIS). GeoLibre ships a starter set; the **+** on a group adds a new connection of that kind. Expand a service to browse its layers and add one. Self-hosted deployments can add read-only organization-wide services here, marked with a *config* badge (see [Getting Started](../getting-started.md#deployment-service-library)); they are shared with every user, cannot be edited or deleted, and are never stored in your own service library. |
+| **Recent** | The sources you added most recently, so a repeat is one click. |
+| **Databases** | PostGIS connections. Expand one to browse its schemas and tables; on a table that registers more than one geometry column, pick the column explicitly. |
 
 Type in the search box to filter the whole tree, and navigate it entirely from the keyboard with the arrow keys.
 

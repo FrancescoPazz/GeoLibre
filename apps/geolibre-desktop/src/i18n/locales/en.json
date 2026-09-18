@@ -22,6 +22,7 @@
     "noMatches": "No matches.",
     "addFailed": "Could not add this data source.",
     "builtinBadge": "built-in",
+    "configBadge": "config",
     "newConnection": "New {{kind}} connection",
     "loadingTables": "Loading tables…",
     "files": "Files",
@@ -363,6 +364,10 @@
       "kml": {
         "label": "KML / KMZ",
         "description": "Load KML or KMZ with native globe styling, overlays, and network links."
+      },
+      "wcs": {
+        "label": "WCS Layer",
+        "description": "Load a numerical GeoTIFF subset from a WCS 1.0.0 service."
       }
     },
     "shared": {
@@ -402,6 +407,7 @@
       "loadAria": "Load a saved service",
       "loadPlaceholder": "Load a saved service…",
       "builtin": "{{name}} (built-in)",
+      "config": "{{name}} (config)",
       "deleteAria": "Delete saved service",
       "empty": "No saved services yet — fill in the form and choose “Save current”.",
       "name": "Name",
@@ -457,8 +463,9 @@
     "xyz": {
       "defaultName": "XYZ Layer",
       "sampleLabel": "USGS imagery",
-      "errorUrl": "Enter an XYZ tile URL template.",
-      "urlPlaceholder": "https://example.com/{z}/{x}/{y}.png",
+      "errorUrl": "Enter an XYZ tile URL template or a raster TileJSON URL.",
+      "urlLabel": "XYZ template or TileJSON URL",
+      "urlPlaceholder": "https://example.com/tilejson.json or https://example.com/{z}/{x}/{y}.png",
       "shortUrlPlaceholder": "https://go.example.com/layer",
       "shortUrl": "Short URL"
     },
@@ -973,7 +980,39 @@
       "modelTooLarge": "This model is larger than the {{limit}} MB limit for embedding in a project. Host it and add it by URL instead.",
       "modelFileError": "Could not read this model. Choose a valid glTF 2.0 or GLB file."
     },
-    "nonGeographicCoordinates": "Coordinates in {{names}} are not longitude/latitude, so nothing will be drawn on the map. The CRS is mislabelled — reproject the data (or fix its .prj) and load it again."
+    "nonGeographicCoordinates": "Coordinates in {{names}} are not longitude/latitude, so nothing will be drawn on the map. The CRS is mislabelled — reproject the data (or fix its .prj) and load it again.",
+    "pmtiles": {
+      "errorUrl": "Enter a valid HTTP or HTTPS PMTiles URL.",
+      "errorMlt": "ArcGIS requires MVT vector tiles, not MLT."
+    },
+    "zarr": {
+      "errorUrl": "Enter a valid HTTP or HTTPS Zarr URL.",
+      "errorColorLimits": "The maximum color limit must be greater than the minimum."
+    },
+    "raster": {
+      "errorSource": "Enter a GeoTIFF URL or choose a file."
+    },
+    "wcs": {
+      "coverage": "Coverage",
+      "retrieve": "Retrieve coverages",
+      "select": "Select a coverage",
+      "extent": "Use coverage extent",
+      "width": "Width (pixels)",
+      "height": "Height (pixels)",
+      "hint": "Downloads a GeoTIFF in EPSG:4326 at the selected pixel dimensions. Values may be resampled. Save the raster to retain the downloaded data.",
+      "errors": {
+        "url": "Enter an HTTP or HTTPS WCS service URL.",
+        "xml": "The service returned invalid XML.",
+        "version": "This source requires WCS 1.0.0. The service returned an unsupported response.",
+        "empty": "No matching coverages are available.",
+        "format": "The coverage does not advertise GeoTIFF output.",
+        "crs": "The coverage must support EPSG:4326 for both requests and output.",
+        "bounds": "Enter a valid box: west/east within -180 to 180, south/north within -90 to 90, with west < east and south < north.",
+        "size": "Choose dimensions from 1 to 4096 pixels. Downloads are limited to 128 MB.",
+        "metadata": "The service returned more metadata than GeoLibre can load. Metadata responses are limited to 32 MB.",
+        "response": "The service did not return a valid GeoTIFF."
+      }
+    }
   },
   "offline": {
     "title": "Download Offline Area",
@@ -1964,6 +2003,7 @@
     "layerCesiumOnly": "Rendered by the 3D globe only",
     "layerMapboxUnsupported": "Not rendered by the Mapbox engine",
     "layerArcgisUnsupported": "Not rendered by the ArcGIS engine",
+    "layerArcgisViewUnsupported": "Not rendered in this ArcGIS view",
     "resetView": "Reset view",
     "scene3D": "3D globe",
     "scene2D": "2D map",
@@ -2844,7 +2884,8 @@
       "czml": "CZML Dynamic 3D Scene",
       "gltfModel": "3D Model (glTF)",
       "postgres": "PostgreSQL Layer",
-      "iceberg": "Apache Iceberg Layer"
+      "iceberg": "Apache Iceberg Layer",
+      "wcs": "WCS Layer"
     },
     "conversion": {
       "vectorToVector": "Vector to Vector",
@@ -3331,6 +3372,7 @@
       "maplibre-gl-openaerialmap": "OpenAerialMap",
       "maplibre-gl-arcgis-hub": "ArcGIS Hub",
       "terria-catalog": "Catalog",
+      "geolibre-osm-downloader": "OSM Downloader",
       "geolibre-stac-catalogs": "STAC Catalogs",
       "geolibre-planet-open-data": "Planet Open Data",
       "maplibre-gl-source-coop": "Source Cooperative",
@@ -8464,5 +8506,41 @@
     "catalogHuc12pp": "HUC12 pour points",
     "catalogNmwdiSt": "New Mexico water sites",
     "catalogFlowlines": "NHDPlus flowlines"
+  },
+  "plugin": {
+    "3d-tiles": {
+      "arcgisSourceUnsupported": "Use a 3D Tiles tileset.json URL in this ArcGIS view. Google Photorealistic and I3S tiles require another renderer."
+    },
+    "geolibre-osm-downloader": {
+      "title": "OSM Downloader",
+      "hint": "Download OpenStreetMap features from the current map area with the public Overpass API.",
+      "attribution": "Data © OpenStreetMap contributors, available under the ODbL.",
+      "featureType": "Feature type",
+      "presetBuildings": "Buildings",
+      "presetRoads": "Roads",
+      "presetAmenities": "Amenities",
+      "presetWaterways": "Waterways",
+      "presetLanduse": "Land use",
+      "presetCustom": "Custom tag",
+      "presetAll": "All tagged features",
+      "tagKey": "Tag key",
+      "tagValue": "Tag value",
+      "tagKeyPlaceholder": "e.g. shop",
+      "tagValuePlaceholder": "optional, e.g. bakery",
+      "west": "West",
+      "south": "South",
+      "east": "East",
+      "north": "North",
+      "useMapExtent": "Use map extent",
+      "download": "Download OSM data",
+      "ready": "Choose an area and feature type.",
+      "exportGeoJson": "Save GeoJSON",
+      "mapUnavailable": "The map extent is not available yet.",
+      "extentApplied": "Map extent applied.",
+      "downloading": "Downloading from OpenStreetMap…",
+      "noFeatures": "No matching features were found in this area.",
+      "error": "Could not download OSM data: {{message}}",
+      "added": "Added {{count}} features to the map."
+    }
   }
 }

@@ -150,6 +150,7 @@ export {
   addCloudNetcdfLayer,
   type CloudNetcdfLayerOptions,
   addZarrRasterLayer,
+  restoreArcgisZarrLayers,
   queryZarrLayer,
   setZarrLayerSelector,
   setZarrLocalStoreProvider,
@@ -510,6 +511,22 @@ export {
   setOpenAerialMapLabels,
   type OpenAerialMapLabels,
 } from "./plugins/maplibre-openaerialmap";
+export {
+  maplibreOsmDownloaderPlugin,
+  OSM_DOWNLOADER_PLUGIN_ID,
+} from "./plugins/maplibre-osm-downloader";
+export {
+  buildOsmDownloadQuery,
+  downloadOsmGeoJson,
+  escapeOverpassString,
+  overpassJsonToGeoJson,
+  OVERPASS_DEFAULT_ENDPOINT,
+  type OsmDownloadFilter,
+  type OsmDownloadPreset,
+  type OverpassElement,
+  type OverpassFetch,
+  type OverpassResponse,
+} from "./plugins/osm-downloader-api";
 export {
   ARCGIS_HUB_PLUGIN_ID,
   DEFAULT_ARCGIS_HUB_LABELS,

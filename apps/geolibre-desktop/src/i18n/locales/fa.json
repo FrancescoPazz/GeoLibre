@@ -22,6 +22,7 @@
     "noMatches": "نتیجه‌ای یافت نشد.",
     "addFailed": "افزودن این منبع داده با شکست مواجه شد.",
     "builtinBadge": "توکار",
+    "configBadge": "کانفیگ",
     "newConnection": "اتصال {{kind}} جدید",
     "loadingTables": "در حال بارگیری جدول‌ها…",
     "files": "فایل‌ها",
@@ -359,6 +360,10 @@
       "kml": {
         "label": "KML / KMZ",
         "description": "KML یا KMZ را با سبک‌های بومی، هم‌پوشانی‌ها و پیوندهای شبکه روی کره بارگذاری کنید."
+      },
+      "wcs": {
+        "description": "بارگذاری زیرمجموعهٔ عددی GeoTIFF از سرویس WCS 1.0.0.",
+        "label": "لایهٔ WCS"
       }
     },
     "shared": {
@@ -398,6 +403,7 @@
       "loadAria": "بارگیری یک سرویس ذخیره‌شده",
       "loadPlaceholder": "بارگیری یک سرویس ذخیره‌شده…",
       "builtin": "{{name}} (توکار)",
+      "config": "{{name}} (کانفیگ)",
       "deleteAria": "حذف سرویس ذخیره‌شده",
       "empty": "هنوز سرویس ذخیره‌شده‌ای نیست — فرم را پر کنید و «ذخیرهٔ مورد فعلی» را برگزینید.",
       "name": "نام",
@@ -966,7 +972,39 @@
       "modelTooLarge": "این مدل از حد {{limit}} مگابایت برای جاسازی در پروژه بزرگ‌تر است. آن را روی سرور میزبانی کنید و با نشانی بیفزایید.",
       "modelFileError": "خواندن این مدل ممکن نشد. یک فایل معتبر glTF 2.0 یا GLB انتخاب کنید."
     },
-    "nonGeographicCoordinates": "مختصات در {{names}} طول/عرض جغرافیایی نیستند، بنابراین چیزی روی نقشه ترسیم نمی‌شود. برچسب سیستم مختصات نادرست است — داده را دوباره تصویر کنید (یا فایل ‎.prj آن را درست کنید) و دوباره بارگیری کنید."
+    "nonGeographicCoordinates": "مختصات در {{names}} طول/عرض جغرافیایی نیستند، بنابراین چیزی روی نقشه ترسیم نمی‌شود. برچسب سیستم مختصات نادرست است — داده را دوباره تصویر کنید (یا فایل ‎.prj آن را درست کنید) و دوباره بارگیری کنید.",
+    "pmtiles": {
+      "errorUrl": "یک نشانی HTTP یا HTTPS معتبر برای PMTiles وارد کنید.",
+      "errorMlt": "ArcGIS به کاشی‌های برداری MVT نیاز دارد، نه MLT."
+    },
+    "zarr": {
+      "errorUrl": "یک نشانی HTTP یا HTTPS معتبر برای Zarr وارد کنید.",
+      "errorColorLimits": "حد بالای رنگ باید بزرگ‌تر از حد پایین باشد."
+    },
+    "raster": {
+      "errorSource": "نشانی GeoTIFF را وارد کنید یا یک فایل انتخاب کنید."
+    },
+    "wcs": {
+      "coverage": "پوشش",
+      "retrieve": "دریافت پوشش‌ها",
+      "select": "انتخاب پوشش",
+      "extent": "استفاده از محدودهٔ پوشش",
+      "width": "عرض (پیکسل)",
+      "height": "ارتفاع (پیکسل)",
+      "hint": "یک GeoTIFF در EPSG:4326 با ابعاد پیکسلی انتخاب‌شده دریافت می‌کند. ممکن است مقادیر بازنمونه‌برداری شوند. برای نگهداری داده‌های دریافت‌شده، رستر را ذخیره کنید.",
+      "errors": {
+        "xml": "سرویس XML نامعتبر برگرداند.",
+        "version": "این منبع به WCS 1.0.0 نیاز دارد. پاسخ سرویس پشتیبانی نمی‌شود.",
+        "empty": "هیچ پوشش منطبقی در دسترس نیست.",
+        "format": "پوشش، خروجی GeoTIFF را ارائه نمی‌کند.",
+        "crs": "پوشش باید EPSG:4326 را برای درخواست و خروجی پشتیبانی کند.",
+        "size": "ابعاد 1 تا 4096 پیکسل را انتخاب کنید. دریافت‌ها به 128 MB محدود هستند.",
+        "metadata": "سرویس فراداده‌ای بیش از توان بارگذاری GeoLibre برگرداند. پاسخ‌های فراداده به 32 MB محدود هستند.",
+        "response": "سرویس GeoTIFF معتبری برنگرداند.",
+        "bounds": "یک کادر معتبر وارد کنید: غرب/شرق میان ‎-180 تا ‎180، جنوب/شمال میان ‎-90 تا ‎90، با غرب < شرق و جنوب < شمال.",
+        "url": "یک نشانی سرویس WCS وارد کنید."
+      }
+    }
   },
   "offline": {
     "title": "دانلود ناحیهٔ برون‌خط",
@@ -1941,6 +1979,7 @@
     "layerCesiumOnly": "تنها روی کرهٔ سه‌بعدی ترسیم می‌شود",
     "layerMapboxUnsupported": "با موتور Mapbox ترسیم نمی‌شود",
     "layerArcgisUnsupported": "با موتور ArcGIS ترسیم نمی‌شود",
+    "layerArcgisViewUnsupported": "در این نمای ArcGIS ترسیم نمی‌شود",
     "resetView": "بازنشانی نما",
     "scene3D": "کرهٔ سه‌بعدی",
     "scene2D": "نقشهٔ دوبعدی",
@@ -2561,7 +2600,8 @@
       "czml": "صحنهٔ سه‌بعدی پویای CZML",
       "gltfModel": "مدل سه‌بعدی (glTF)",
       "postgres": "لایهٔ PostgreSQL",
-      "iceberg": "لایهٔ Apache Iceberg"
+      "iceberg": "لایهٔ Apache Iceberg",
+      "wcs": "لایهٔ WCS"
     },
     "conversion": {
       "vectorToVector": "برداری به برداری",
@@ -3029,6 +3069,7 @@
       "maplibre-gl-esri-wayback": "تصاویر تاریخی",
       "maplibre-gl-openaerialmap": "OpenAerialMap",
       "maplibre-gl-arcgis-hub": "ArcGIS Hub",
+      "geolibre-osm-downloader": "بارگیر OSM",
       "geolibre-stac-catalogs": "فهرست‌های STAC",
       "geolibre-planet-open-data": "داده‌های باز Planet",
       "maplibre-gl-source-coop": "Source Cooperative",
@@ -7984,5 +8025,41 @@
     "catalogHuc12pp": "نقاط خروجی HUC12",
     "catalogNmwdiSt": "ایستگاه‌های آبی نیومکزیکو",
     "catalogFlowlines": "خطوط جریان NHDPlus"
+  },
+  "plugin": {
+    "3d-tiles": {
+      "arcgisSourceUnsupported": "در این نمای ArcGIS از نشانی tileset.json مربوط به 3D Tiles استفاده کنید. کاشی‌های Google Photorealistic و I3S به موتور نمایش دیگری نیاز دارند."
+    },
+    "geolibre-osm-downloader": {
+      "title": "بارگیر OSM",
+      "hint": "بارگیری عوارض OpenStreetMap از محدوده فعلی نقشه با استفاده از Overpass API عمومی.",
+      "attribution": "داده‌ها © مشارکت‌کنندگان OpenStreetMap، تحت مجوز ODbL در دسترس است.",
+      "featureType": "نوع عارضه",
+      "presetBuildings": "ساختمان‌ها",
+      "presetRoads": "راه‌ها",
+      "presetAmenities": "امکانات",
+      "presetWaterways": "آبراه‌ها",
+      "presetLanduse": "استفاده از زمین",
+      "presetCustom": "برچسب سفارشی",
+      "presetAll": "تمام عوارض برچسب‌دار",
+      "tagKey": "کلید برچسب",
+      "tagValue": "مقدار برچسب",
+      "tagKeyPlaceholder": "مثلاً shop",
+      "tagValuePlaceholder": "اختیاری، مثلاً bakery",
+      "west": "غرب",
+      "south": "جنوب",
+      "east": "شرق",
+      "north": "شمال",
+      "useMapExtent": "استفاده از محدوده نقشه",
+      "download": "دانلود داده OSM",
+      "ready": "یک محدوده و نوع عارضه انتخاب کنید.",
+      "exportGeoJson": "ذخیره فایل GeoJSON",
+      "mapUnavailable": "محدوده نقشه هنوز در دسترس نیست.",
+      "extentApplied": "محدوده نقشه اعمال شد.",
+      "downloading": "در حال دانلود از OpenStreetMap…",
+      "noFeatures": "هیچ عارضه منطبقی در این محدوده یافت نشد.",
+      "error": "بارگیری داده‌های OSM انجام نشد: {{message}}",
+      "added": "{{count}} عارضه به نقشه افزوده شد."
+    }
   }
 }

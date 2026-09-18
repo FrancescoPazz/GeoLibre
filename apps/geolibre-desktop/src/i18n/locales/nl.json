@@ -22,6 +22,7 @@
     "noMatches": "Geen resultaten.",
     "addFailed": "Kan deze gegevensbron niet toevoegen.",
     "builtinBadge": "ingebouwd",
+    "configBadge": "geconfigureerd",
     "newConnection": "Nieuwe {{kind}}-verbinding",
     "loadingTables": "Tabellen laden…",
     "files": "Bestanden",
@@ -359,6 +360,10 @@
       "kml": {
         "label": "KML / KMZ",
         "description": "Laad KML of KMZ met oorspronkelijke stijlen, overlays en netwerkkoppelingen op de globe."
+      },
+      "wcs": {
+        "description": "Laad een numerieke GeoTIFF-uitsnede van een WCS 1.0.0-service.",
+        "label": "WCS-laag"
       }
     },
     "shared": {
@@ -398,6 +403,7 @@
       "loadAria": "Een opgeslagen service laden",
       "loadPlaceholder": "Een opgeslagen service laden…",
       "builtin": "{{name}} (ingebouwd)",
+      "config": "{{name}} (geconfigureerd)",
       "deleteAria": "Opgeslagen service verwijderen",
       "empty": "Nog geen opgeslagen services — vul het formulier in en kies “Huidige opslaan”.",
       "name": "Naam",
@@ -966,7 +972,39 @@
       "modelTooLarge": "Dit model is groter dan de limiet van {{limit}} MB voor insluiten in een project. Host het en voeg het via een URL toe.",
       "modelFileError": "Kan dit model niet lezen. Kies een geldig glTF 2.0- of GLB-bestand."
     },
-    "nonGeographicCoordinates": "De coördinaten in {{names}} zijn geen lengte-/breedtegraad, dus er wordt niets op de kaart getekend. Het CRS klopt niet — herprojecteer de gegevens (of corrigeer de .prj) en laad ze opnieuw."
+    "nonGeographicCoordinates": "De coördinaten in {{names}} zijn geen lengte-/breedtegraad, dus er wordt niets op de kaart getekend. Het CRS klopt niet — herprojecteer de gegevens (of corrigeer de .prj) en laad ze opnieuw.",
+    "pmtiles": {
+      "errorUrl": "Voer een geldige HTTP- of HTTPS-URL voor PMTiles in.",
+      "errorMlt": "ArcGIS vereist MVT-vectortegels, geen MLT."
+    },
+    "zarr": {
+      "errorUrl": "Voer een geldige HTTP- of HTTPS-URL voor Zarr in.",
+      "errorColorLimits": "De maximale kleurgrens moet groter zijn dan de minimale."
+    },
+    "raster": {
+      "errorSource": "Voer een GeoTIFF-URL in of kies een bestand."
+    },
+    "wcs": {
+      "coverage": "Coverage",
+      "retrieve": "Coverages ophalen",
+      "select": "Selecteer een coverage",
+      "extent": "Coveragebereik gebruiken",
+      "width": "Breedte (pixels)",
+      "height": "Hoogte (pixels)",
+      "hint": "Downloadt een GeoTIFF in EPSG:4326 met de gekozen pixelafmetingen. Waarden kunnen opnieuw worden bemonsterd. Sla het raster op om de gedownloade gegevens te behouden.",
+      "errors": {
+        "xml": "De service heeft ongeldige XML teruggestuurd.",
+        "version": "Deze bron vereist WCS 1.0.0. De service heeft een niet-ondersteund antwoord teruggestuurd.",
+        "empty": "Er zijn geen overeenkomende coverages beschikbaar.",
+        "format": "De coverage biedt geen GeoTIFF-uitvoer aan.",
+        "crs": "De coverage moet EPSG:4326 ondersteunen voor aanvragen en uitvoer.",
+        "size": "Kies afmetingen van 1 tot 4096 pixels. Downloads zijn beperkt tot 128 MB.",
+        "metadata": "De service heeft meer metadata teruggestuurd dan GeoLibre kan laden. Metadata-antwoorden zijn beperkt tot 32 MB.",
+        "response": "De service heeft geen geldige GeoTIFF teruggestuurd.",
+        "bounds": "Voer een geldig kader in: west/oost binnen -180 tot 180, zuid/noord binnen -90 tot 90, met west < oost en zuid < noord.",
+        "url": "Voer een WCS-service-URL in."
+      }
+    }
   },
   "offline": {
     "title": "Offline gebied downloaden",
@@ -1941,6 +1979,7 @@
     "layerCesiumOnly": "Alleen weergegeven door de 3D-globe",
     "layerMapboxUnsupported": "Niet weergegeven door de Mapbox-engine",
     "layerArcgisUnsupported": "Niet weergegeven door de ArcGIS-engine",
+    "layerArcgisViewUnsupported": "Niet weergegeven in deze ArcGIS-weergave",
     "resetView": "Weergave herstellen",
     "scene3D": "3D-globe",
     "scene2D": "2D-kaart",
@@ -2561,7 +2600,8 @@
       "czml": "Dynamische CZML-3D-scène",
       "gltfModel": "3D-model (glTF)",
       "postgres": "PostgreSQL-laag",
-      "iceberg": "Apache Iceberg-laag"
+      "iceberg": "Apache Iceberg-laag",
+      "wcs": "WCS-laag"
     },
     "conversion": {
       "vectorToVector": "Vector naar vector",
@@ -3029,6 +3069,7 @@
       "maplibre-gl-esri-wayback": "Historische beelden",
       "maplibre-gl-openaerialmap": "OpenAerialMap",
       "maplibre-gl-arcgis-hub": "ArcGIS Hub",
+      "geolibre-osm-downloader": "OSM-downloader",
       "geolibre-stac-catalogs": "STAC-catalogi",
       "geolibre-planet-open-data": "Open data van Planet",
       "maplibre-gl-source-coop": "Source Cooperative",
@@ -7984,5 +8025,41 @@
     "catalogHuc12pp": "HUC12-uitstroompunten",
     "catalogNmwdiSt": "Waterlocaties in New Mexico",
     "catalogFlowlines": "NHDPlus-stroomlijnen"
+  },
+  "plugin": {
+    "3d-tiles": {
+      "arcgisSourceUnsupported": "Gebruik een 3D Tiles-URL voor tileset.json in deze ArcGIS-weergave. Google Photorealistic- en I3S-tegels vereisen een andere renderer."
+    },
+    "geolibre-osm-downloader": {
+      "title": "OSM-downloader",
+      "hint": "Download OpenStreetMap-objecten van het huidige kaartgebied via de publieke Overpass API.",
+      "attribution": "Data © OpenStreetMap-bijdragers, beschikbaar onder de ODbL.",
+      "featureType": "Type object",
+      "presetBuildings": "Gebouwen",
+      "presetRoads": "Wegen",
+      "presetAmenities": "Voorzieningen",
+      "presetWaterways": "Waterwegen",
+      "presetLanduse": "Grondgebruik",
+      "presetCustom": "Aangepaste tag",
+      "presetAll": "Alle getagde objecten",
+      "tagKey": "Tag-sleutel",
+      "tagValue": "Tag-waarde",
+      "tagKeyPlaceholder": "bijv. shop",
+      "tagValuePlaceholder": "optioneel, bijv. bakkerij",
+      "west": "West",
+      "south": "Zuid",
+      "east": "Oost",
+      "north": "Noord",
+      "useMapExtent": "Gebruik kaartbereik",
+      "download": "Download OSM-data",
+      "ready": "Kies een gebied en een type object.",
+      "exportGeoJson": "Opslaan als GeoJSON",
+      "mapUnavailable": "Het kaartbereik is nog niet beschikbaar.",
+      "extentApplied": "Kaartbereik toegepast.",
+      "downloading": "Downloaden van OpenStreetMap…",
+      "noFeatures": "Geen overeenkomende objecten gevonden in dit gebied.",
+      "error": "OSM-data kon niet worden gedownload: {{message}}",
+      "added": "{{count}} objecten toegevoegd aan de kaart."
+    }
   }
 }

@@ -22,6 +22,7 @@
     "noMatches": "无匹配项。",
     "addFailed": "无法添加此数据源。",
     "builtinBadge": "内置",
+    "configBadge": "配置",
     "newConnection": "新建 {{kind}} 连接",
     "loadingTables": "正在加载表…",
     "files": "文件",
@@ -357,6 +358,10 @@
       "kml": {
         "label": "KML / KMZ",
         "description": "在地球仪上加载 KML 或 KMZ，保留原生样式、叠加层和网络链接。"
+      },
+      "wcs": {
+        "description": "从 WCS 1.0.0 服务加载数值型 GeoTIFF 子集。",
+        "label": "WCS 图层"
       }
     },
     "shared": {
@@ -396,6 +401,7 @@
       "loadAria": "加载已保存的服务",
       "loadPlaceholder": "加载已保存的服务…",
       "builtin": "{{name}}（内置）",
+      "config": "{{name}}（配置）",
       "deleteAria": "删除已保存的服务",
       "empty": "尚无已保存的服务 — 填写表单并选择“保存当前设置”。",
       "name": "名称",
@@ -945,6 +951,38 @@
       "sampleMultiLine": "多线路线批量（3 段）",
       "unitMeters": "{{value}} 米",
       "unitKm": "{{value}} 千米"
+    },
+    "pmtiles": {
+      "errorUrl": "请输入有效的 HTTP 或 HTTPS PMTiles 地址。",
+      "errorMlt": "ArcGIS 需要 MVT 矢量瓦片，不支持 MLT。"
+    },
+    "zarr": {
+      "errorUrl": "请输入有效的 HTTP 或 HTTPS Zarr 地址。",
+      "errorColorLimits": "颜色上限必须大于下限。"
+    },
+    "raster": {
+      "errorSource": "输入 GeoTIFF URL 或选择文件。"
+    },
+    "wcs": {
+      "coverage": "覆盖数据",
+      "retrieve": "获取覆盖数据",
+      "select": "选择覆盖数据",
+      "extent": "使用覆盖范围",
+      "width": "宽度（像素）",
+      "height": "高度（像素）",
+      "hint": "按所选像素尺寸下载 EPSG:4326 的 GeoTIFF。数值可能经过重采样。请保存栅格以保留下载的数据。",
+      "errors": {
+        "xml": "服务返回了无效的 XML。",
+        "version": "此数据源需要 WCS 1.0.0。服务返回了不支持的响应。",
+        "empty": "没有可用的匹配覆盖数据。",
+        "format": "覆盖数据未声明支持 GeoTIFF 输出。",
+        "crs": "覆盖数据必须支持使用 EPSG:4326 进行请求和输出。",
+        "size": "请选择 1 到 4096 像素的尺寸。下载大小限制为 128 MB。",
+        "metadata": "服务返回的元数据超出 GeoLibre 可加载的大小。元数据响应限制为 32 MB。",
+        "response": "服务未返回有效的 GeoTIFF。",
+        "bounds": "请输入有效的边界框：东西经度在 -180 到 180 之间，南北纬度在 -90 到 90 之间，且西 < 东、南 < 北。",
+        "url": "请输入 WCS 服务 URL。"
+      }
     }
   },
   "offline": {
@@ -1895,6 +1933,7 @@
     "layerCesiumOnly": "仅由 3D 地球渲染",
     "layerMapboxUnsupported": "Mapbox 引擎不渲染此图层",
     "layerArcgisUnsupported": "ArcGIS 引擎不渲染此图层",
+    "layerArcgisViewUnsupported": "当前 ArcGIS 视图不渲染此图层",
     "resetView": "重置视图",
     "scene3D": "3D 地球",
     "scene2D": "2D 地图",
@@ -2513,7 +2552,8 @@
       "gltfModel": "3D 模型（glTF）",
       "postgres": "PostgreSQL 图层",
       "iceberg": "Apache Iceberg 图层",
-      "polyline": "编码折线"
+      "polyline": "编码折线",
+      "wcs": "WCS 图层"
     },
     "conversion": {
       "vectorToVector": "矢量转矢量",
@@ -2978,6 +3018,7 @@
       "maplibre-gl-esri-wayback": "历史影像",
       "maplibre-gl-openaerialmap": "OpenAerialMap",
       "maplibre-gl-arcgis-hub": "ArcGIS Hub",
+      "geolibre-osm-downloader": "OSM 下载器",
       "geolibre-stac-catalogs": "STAC 目录",
       "geolibre-planet-open-data": "Planet 开放数据",
       "maplibre-gl-source-coop": "Source Cooperative",
@@ -7897,5 +7938,41 @@
     "catalogHuc12pp": "HUC12 出水口",
     "catalogNmwdiSt": "新墨西哥州水文站点",
     "catalogFlowlines": "NHDPlus 河段"
+  },
+  "plugin": {
+    "3d-tiles": {
+      "arcgisSourceUnsupported": "请在此 ArcGIS 视图中使用 3D Tiles 的 tileset.json URL。Google Photorealistic 和 I3S 瓦片需要其他渲染引擎。"
+    },
+    "geolibre-osm-downloader": {
+      "title": "OSM 下载器",
+      "hint": "使用公共 Overpass API 下载当前地图区域的 OpenStreetMap 要素。",
+      "attribution": "数据 © OpenStreetMap 贡献者，基于 ODbL 许可提供。",
+      "featureType": "要素类型",
+      "presetBuildings": "建筑物",
+      "presetRoads": "道路",
+      "presetAmenities": "设施",
+      "presetWaterways": "水系",
+      "presetLanduse": "土地利用",
+      "presetCustom": "自定义标签",
+      "presetAll": "所有带标签的要素",
+      "tagKey": "标签键",
+      "tagValue": "标签值",
+      "tagKeyPlaceholder": "例如 shop",
+      "tagValuePlaceholder": "可选，例如 bakery",
+      "west": "西",
+      "south": "南",
+      "east": "东",
+      "north": "北",
+      "useMapExtent": "使用地图范围",
+      "download": "下载 OSM 数据",
+      "ready": "请选择区域和要素类型。",
+      "exportGeoJson": "保存 GeoJSON",
+      "mapUnavailable": "地图范围尚不可用。",
+      "extentApplied": "已应用地图范围。",
+      "downloading": "正在从 OpenStreetMap 下载…",
+      "noFeatures": "在此区域内未找到匹配的要素。",
+      "error": "无法下载 OSM 数据：{{message}}",
+      "added": "已将 {{count}} 个要素添加到地图。"
+    }
   }
 }
