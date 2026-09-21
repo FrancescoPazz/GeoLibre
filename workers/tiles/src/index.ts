@@ -39,11 +39,16 @@ import {
   ADSB_LOL_MILITARY_UPSTREAM,
   ADSBDB_AIRCRAFT_UPSTREAM,
   CALGARY_CCTV_FRAME_UPSTREAM,
+  DRIVEBC_CCTV_CATALOG_UPSTREAM,
   fetchAllowlistedUpstream,
   HDX_CKAN_SEARCH_UPSTREAM,
+  NSW_CCTV_CATALOG_UPSTREAM,
+  NSW_CCTV_FRAME_UPSTREAM,
   OPEN_SKY_STATES_UPSTREAM,
   OVERPASS_API_UPSTREAM,
   OVERPASS_API_FALLBACK_UPSTREAM,
+  ONTARIO_CCTV_CATALOG_UPSTREAM,
+  ONTARIO_CCTV_FRAME_UPSTREAM,
 } from "./allowlisted-fetch";
 import { remapRowsToMercator, tileGeoBounds, wmsBboxFor } from "./reproject";
 
@@ -116,8 +121,15 @@ const OPEN_SKY_CACHE_SECONDS = 30;
 const ADSB_LOL_CACHE_SECONDS = 15;
 const AIRCRAFT_FEED_MAX_BODY_BYTES = 25 * 1024 * 1024;
 const CALGARY_CCTV_PATH = /^\/cctv\/calgary\/(\d{1,4})\.jpg$/;
+const ONTARIO_CCTV_PATH = /^\/cctv\/ontario\/([A-Za-z0-9_.-]{1,64})$/;
+const NSW_CCTV_PATH = /^\/cctv\/nsw\/((?:[A-Za-z0-9_.-]|%[0-9A-Fa-f]{2}){1,300})$/;
+const CCTV_CATALOG_PATH = /^\/cctv\/catalog\/(ontario|drivebc|nsw)\.json$/;
 const CCTV_FRAME_MAX_BODY_BYTES = 5 * 1024 * 1024;
-const CCTV_FRAME_UPSTREAM_TIMEOUT_MS = 30_000;
+const CCTV_UPSTREAM_TIMEOUT_MS = 30_000;
+const CCTV_CATALOG_MAX_BODY_BYTES = 4 * 1024 * 1024;
+const CCTV_CATALOG_CACHE_SECONDS = 15 * 60;
+const NSW_CCTV_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 // The public Overpass endpoint rejects some browser origins (notably Pages
 // previews) with a CORS-less 406. Relay only its fixed interpreter endpoint,
@@ -897,10 +909,11 @@ async function handleAdsbdbAircraft(
   return response;
 }
 
-async function handleCalgaryCctvFrame(
+async function handleCctvFrame(
   request: Request,
   ctx: ExecutionContext,
-  frameId: string,
+  upstream: string,
+  extraHeaders: Record<string, string> = {},
 ): Promise<Response> {
   if (!isAllowedProxyImageRequest(request)) {
     return new Response("Forbidden", { status: 403, headers: CORS_HEADERS });
@@ -909,18 +922,12 @@ async function handleCalgaryCctvFrame(
   const cached = await cache?.match(request);
   if (cached) return cached;
   const upstreamController = new AbortController();
-  const upstreamTimeout = setTimeout(
-    () => upstreamController.abort(),
-    CCTV_FRAME_UPSTREAM_TIMEOUT_MS,
-  );
+  const upstreamTimeout = setTimeout(() => upstreamController.abort(), CCTV_UPSTREAM_TIMEOUT_MS);
   try {
-    const originResponse = await fetchAllowlistedUpstream(
-      `${CALGARY_CCTV_FRAME_UPSTREAM}loc${frameId}.jpg`,
-      {
-        headers: { accept: "image/jpeg,image/*" },
-        signal: upstreamController.signal,
-      },
-    );
+    const originResponse = await fetchAllowlistedUpstream(upstream, {
+      headers: { accept: "image/jpeg,image/png,image/*", ...extraHeaders },
+      signal: upstreamController.signal,
+    });
     const contentType = originResponse.headers.get("content-type")?.split(";", 1)[0].trim() ?? "";
     const body = await readResponseBytesWithLimit(originResponse, CCTV_FRAME_MAX_BODY_BYTES);
     if (!originResponse.ok || !body || !["image/jpeg", "image/png"].includes(contentType)) {
@@ -929,6 +936,57 @@ async function handleCalgaryCctvFrame(
     const headers = new Headers(CORS_HEADERS);
     headers.set("content-type", contentType);
     headers.set("cache-control", "public, max-age=30");
+    const response = new Response(body, { status: 200, headers });
+    if (cache) ctx.waitUntil(cache.put(request, response.clone()));
+    return response;
+  } catch {
+    return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+  } finally {
+    clearTimeout(upstreamTimeout);
+  }
+}
+
+async function handleCctvCatalog(
+  request: Request,
+  ctx: ExecutionContext,
+  provider: "ontario" | "drivebc" | "nsw",
+): Promise<Response> {
+  if (!isAllowedProxyOrigin(request.headers.get("origin"))) {
+    return new Response("Forbidden", { status: 403, headers: CORS_HEADERS });
+  }
+  const cache = typeof caches === "undefined" ? null : caches.default;
+  const cached = await cache?.match(request);
+  if (cached) return cached;
+  const upstream = {
+    ontario: `${ONTARIO_CCTV_CATALOG_UPSTREAM}?format=json&lang=en`,
+    drivebc: DRIVEBC_CCTV_CATALOG_UPSTREAM,
+    nsw: NSW_CCTV_CATALOG_UPSTREAM,
+  }[provider];
+  const upstreamController = new AbortController();
+  const upstreamTimeout = setTimeout(() => upstreamController.abort(), CCTV_UPSTREAM_TIMEOUT_MS);
+  try {
+    const originResponse = await fetchAllowlistedUpstream(upstream, {
+      headers: { accept: "application/json" },
+      signal: upstreamController.signal,
+    });
+    const body = await readResponseBytesWithLimit(originResponse, CCTV_CATALOG_MAX_BODY_BYTES);
+    if (!originResponse.ok || !body) {
+      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+    }
+    try {
+      const payload = JSON.parse(new TextDecoder().decode(body)) as
+        | { features?: unknown }
+        | unknown[];
+      const features =
+        payload && typeof payload === "object" && !Array.isArray(payload) ? payload.features : null;
+      const valid = provider === "nsw" ? Array.isArray(features) : Array.isArray(payload);
+      if (!valid) throw new Error();
+    } catch {
+      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+    }
+    const headers = new Headers(CORS_HEADERS);
+    headers.set("content-type", "application/json; charset=utf-8");
+    headers.set("cache-control", `public, max-age=${CCTV_CATALOG_CACHE_SECONDS}`);
     const response = new Response(body, { status: 200, headers });
     if (cache) ctx.waitUntil(cache.put(request, response.clone()));
     return response;
@@ -1204,7 +1262,44 @@ export const tilesWorker = {
 
     const calgaryCctvMatch = CALGARY_CCTV_PATH.exec(url.pathname);
     if (calgaryCctvMatch) {
-      return handleCalgaryCctvFrame(request, ctx, calgaryCctvMatch[1]);
+      return handleCctvFrame(
+        request,
+        ctx,
+        `${CALGARY_CCTV_FRAME_UPSTREAM}loc${calgaryCctvMatch[1]}.jpg`,
+      );
+    }
+
+    const cctvCatalogMatch = CCTV_CATALOG_PATH.exec(url.pathname);
+    if (cctvCatalogMatch) {
+      return handleCctvCatalog(request, ctx, cctvCatalogMatch[1] as "ontario" | "drivebc" | "nsw");
+    }
+
+    const ontarioCctvMatch = ONTARIO_CCTV_PATH.exec(url.pathname);
+    if (ontarioCctvMatch) {
+      return handleCctvFrame(
+        request,
+        ctx,
+        `${ONTARIO_CCTV_FRAME_UPSTREAM}${encodeURIComponent(ontarioCctvMatch[1])}`,
+      );
+    }
+
+    const nswCctvMatch = NSW_CCTV_PATH.exec(url.pathname);
+    if (nswCctvMatch) {
+      let frameId: string;
+      try {
+        frameId = decodeURIComponent(nswCctvMatch[1]);
+      } catch {
+        return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
+      }
+      if (!/^[a-z0-9_.&-]{1,100}\.(?:jpe?g)$/i.test(frameId)) {
+        return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
+      }
+      return handleCctvFrame(
+        request,
+        ctx,
+        `${NSW_CCTV_FRAME_UPSTREAM}${encodeURIComponent(frameId)}`,
+        { "user-agent": NSW_CCTV_USER_AGENT },
+      );
     }
 
     // Source Cooperative metadata: source.coop sends no CORS headers, so the

@@ -40,6 +40,15 @@ const AIRCRAFT_UPSTREAMS = {
 } as const;
 const ADSBDB_AIRCRAFT_BASE = "https://api.adsbdb.com/v0/aircraft/";
 const CALGARY_CCTV_FRAME_BASE = "https://trafficcam.calgary.ca/loc";
+const ONTARIO_CCTV_FRAME_BASE = "https://511on.ca/map/Cctv/";
+const NSW_CCTV_FRAME_BASE = "https://webcams.transport.nsw.gov.au/livetraffic-webcams/cameras/";
+const NSW_CCTV_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const CCTV_CATALOG_URLS = {
+  ontario: "https://511on.ca/api/v2/get/cameras?format=json&lang=en",
+  drivebc: "https://www.drivebc.ca/api/webcams/",
+  nsw: "https://data.livetraffic.com/cameras/traffic-cam.json",
+} as const;
 const OVERPASS_EDGE_URL = "https://tiles.geolibre.app/overpass";
 const OVERPASS_MAX_REQUEST_BYTES = 20_000;
 const CELESTRAK_GROUPS = new Set([
@@ -581,14 +590,38 @@ export async function proxyCalgaryCctvFrameRequestGuarded(
     res.end("Invalid Calgary camera id");
     return;
   }
-  const response = await fetchWithGuard(`${CALGARY_CCTV_FRAME_BASE}${frameId}.jpg`, {
-    headers: { accept: "image/jpeg,image/*" },
+  await proxyCctvFrameRequestGuarded(`${CALGARY_CCTV_FRAME_BASE}${frameId}.jpg`, res);
+}
+
+/** Fixed, bounded image relay for Ontario 511's public traffic snapshots. */
+export async function proxyOntarioCctvFrameRequestGuarded(
+  frameId: string,
+  res: ServerResponse,
+): Promise<void> {
+  if (!/^[A-Za-z0-9_.-]{1,64}$/.test(frameId)) {
+    res.statusCode = 400;
+    res.end("Invalid Ontario camera id");
+    return;
+  }
+  await proxyCctvFrameRequestGuarded(
+    `${ONTARIO_CCTV_FRAME_BASE}${encodeURIComponent(frameId)}`,
+    res,
+  );
+}
+
+async function proxyCctvFrameRequestGuarded(
+  upstream: string,
+  res: ServerResponse,
+  extraHeaders: Record<string, string> = {},
+): Promise<void> {
+  const response = await fetchWithGuard(upstream, {
+    headers: { accept: "image/jpeg,image/*", ...extraHeaders },
   });
   const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim() ?? "";
   if (!response.ok || !["image/jpeg", "image/png"].includes(contentType)) {
     await response.body?.cancel().catch(() => undefined);
     res.statusCode = 502;
-    res.end("Calgary CCTV frame request failed");
+    res.end("CCTV frame request failed");
     return;
   }
   const body = await readBodyWithLimit(response, 5 * 1024 * 1024);
@@ -596,6 +629,59 @@ export async function proxyCalgaryCctvFrameRequestGuarded(
   res.setHeader("access-control-allow-origin", "*");
   res.setHeader("cache-control", "public, max-age=30");
   res.setHeader("content-type", contentType);
+  res.setHeader("content-length", String(body.byteLength));
+  res.end(body);
+}
+
+/** Fixed image relay for NSW frames whose host rejects non-browser clients. */
+export async function proxyNswCctvFrameRequestGuarded(
+  frameId: string,
+  res: ServerResponse,
+): Promise<void> {
+  if (!/^[a-z0-9_.&-]{1,100}\.(?:jpe?g)$/i.test(frameId)) {
+    res.statusCode = 400;
+    res.end("Invalid NSW camera id");
+    return;
+  }
+  await proxyCctvFrameRequestGuarded(`${NSW_CCTV_FRAME_BASE}${encodeURIComponent(frameId)}`, res, {
+    "user-agent": NSW_CCTV_USER_AGENT,
+  });
+}
+
+/** Fixed, bounded JSON relay for public camera catalogs without browser CORS. */
+export async function proxyCctvCatalogRequestGuarded(
+  provider: string,
+  res: ServerResponse,
+): Promise<void> {
+  if (!Object.hasOwn(CCTV_CATALOG_URLS, provider)) {
+    res.statusCode = 400;
+    res.end("Invalid CCTV catalog provider");
+    return;
+  }
+  const url = CCTV_CATALOG_URLS[provider as keyof typeof CCTV_CATALOG_URLS];
+  const response = await fetchWithGuard(url, { headers: { accept: "application/json" } });
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    res.statusCode = 502;
+    res.end("CCTV catalog request failed");
+    return;
+  }
+  const body = await readBodyWithLimit(response, 4 * 1024 * 1024);
+  try {
+    const payload = JSON.parse(body.toString("utf8")) as { features?: unknown } | unknown[];
+    const features =
+      payload && typeof payload === "object" && !Array.isArray(payload) ? payload.features : null;
+    const valid = provider === "nsw" ? Array.isArray(features) : Array.isArray(payload);
+    if (!valid) throw new Error();
+  } catch {
+    res.statusCode = 502;
+    res.end("CCTV catalog returned malformed JSON");
+    return;
+  }
+  res.statusCode = 200;
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("cache-control", "public, max-age=900");
+  res.setHeader("content-type", "application/json; charset=utf-8");
   res.setHeader("content-length", String(body.byteLength));
   res.end(body);
 }

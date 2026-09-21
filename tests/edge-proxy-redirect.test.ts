@@ -125,6 +125,29 @@ describe("viewer redirect policy", () => {
 });
 
 describe("tiles allowlisted fetch", () => {
+  it("accepts only the fixed Ontario CCTV catalog and frame prefixes", () => {
+    assert.equal(
+      isAllowedTilesUpstreamUrl("https://511on.ca/api/v2/get/cameras?format=json&lang=en"),
+      true,
+    );
+    assert.equal(isAllowedTilesUpstreamUrl("https://511on.ca/map/Cctv/1456"), true);
+    assert.equal(isAllowedTilesUpstreamUrl("https://511on.ca/api/v2/get/events"), false);
+  });
+
+  it("accepts only the fixed NSW CCTV catalog and frame prefixes", () => {
+    assert.equal(
+      isAllowedTilesUpstreamUrl("https://data.livetraffic.com/cameras/traffic-cam.json"),
+      true,
+    );
+    assert.equal(
+      isAllowedTilesUpstreamUrl(
+        "https://webcams.transport.nsw.gov.au/livetraffic-webcams/cameras/test.jpeg",
+      ),
+      true,
+    );
+    assert.equal(isAllowedTilesUpstreamUrl("https://data.livetraffic.com/events.json"), false);
+  });
+
   it("refuses off-host and off-prefix S3 redirects", async () => {
     assert.equal(isAllowedTilesUpstreamUrl("https://api.openaerialmap.org/meta"), true);
     assert.equal(isAllowedTilesUpstreamUrl("https://evil.example/meta"), false);
