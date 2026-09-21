@@ -38,6 +38,7 @@ import * as UPNG from "upng-js";
 import {
   ADSB_LOL_MILITARY_UPSTREAM,
   ADSBDB_AIRCRAFT_UPSTREAM,
+  CALGARY_CCTV_FRAME_UPSTREAM,
   fetchAllowlistedUpstream,
   HDX_CKAN_SEARCH_UPSTREAM,
   OPEN_SKY_STATES_UPSTREAM,
@@ -114,6 +115,9 @@ const ADSBDB_AIRCRAFT_PATH = /^\/adsbdb\/aircraft\/([0-9a-fA-F]{6})$/;
 const OPEN_SKY_CACHE_SECONDS = 30;
 const ADSB_LOL_CACHE_SECONDS = 15;
 const AIRCRAFT_FEED_MAX_BODY_BYTES = 25 * 1024 * 1024;
+const CALGARY_CCTV_PATH = /^\/cctv\/calgary\/(\d{1,4})\.jpg$/;
+const CCTV_FRAME_MAX_BODY_BYTES = 5 * 1024 * 1024;
+const CCTV_FRAME_UPSTREAM_TIMEOUT_MS = 30_000;
 
 // The public Overpass endpoint rejects some browser origins (notably Pages
 // previews) with a CORS-less 406. Relay only its fixed interpreter endpoint,
@@ -405,6 +409,17 @@ function isAllowedProxyOrigin(origin: string | null): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Image elements use `no-cors` mode and normally send `Referer`, not `Origin`.
+ * Prefer Origin when present so an untrusted caller cannot hide behind a forged
+ * allowed referrer; only fall back for the header shape produced by `<img>`.
+ */
+function isAllowedProxyImageRequest(request: Request): boolean {
+  const origin = request.headers.get("origin");
+  if (origin) return isAllowedProxyOrigin(origin);
+  return isAllowedProxyOrigin(request.headers.get("referer"));
 }
 
 /**
@@ -882,6 +897,48 @@ async function handleAdsbdbAircraft(
   return response;
 }
 
+async function handleCalgaryCctvFrame(
+  request: Request,
+  ctx: ExecutionContext,
+  frameId: string,
+): Promise<Response> {
+  if (!isAllowedProxyImageRequest(request)) {
+    return new Response("Forbidden", { status: 403, headers: CORS_HEADERS });
+  }
+  const cache = typeof caches === "undefined" ? null : caches.default;
+  const cached = await cache?.match(request);
+  if (cached) return cached;
+  const upstreamController = new AbortController();
+  const upstreamTimeout = setTimeout(
+    () => upstreamController.abort(),
+    CCTV_FRAME_UPSTREAM_TIMEOUT_MS,
+  );
+  try {
+    const originResponse = await fetchAllowlistedUpstream(
+      `${CALGARY_CCTV_FRAME_UPSTREAM}loc${frameId}.jpg`,
+      {
+        headers: { accept: "image/jpeg,image/*" },
+        signal: upstreamController.signal,
+      },
+    );
+    const contentType = originResponse.headers.get("content-type")?.split(";", 1)[0].trim() ?? "";
+    const body = await readResponseBytesWithLimit(originResponse, CCTV_FRAME_MAX_BODY_BYTES);
+    if (!originResponse.ok || !body || !["image/jpeg", "image/png"].includes(contentType)) {
+      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+    }
+    const headers = new Headers(CORS_HEADERS);
+    headers.set("content-type", contentType);
+    headers.set("cache-control", "public, max-age=30");
+    const response = new Response(body, { status: 200, headers });
+    if (cache) ctx.waitUntil(cache.put(request, response.clone()));
+    return response;
+  } catch {
+    return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+  } finally {
+    clearTimeout(upstreamTimeout);
+  }
+}
+
 export const tilesWorker = {
   async fetch(request: Request, _env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
@@ -1143,6 +1200,11 @@ export const tilesWorker = {
     const adsbdbMatch = ADSBDB_AIRCRAFT_PATH.exec(url.pathname);
     if (adsbdbMatch) {
       return handleAdsbdbAircraft(request, ctx, adsbdbMatch[1]);
+    }
+
+    const calgaryCctvMatch = CALGARY_CCTV_PATH.exec(url.pathname);
+    if (calgaryCctvMatch) {
+      return handleCalgaryCctvFrame(request, ctx, calgaryCctvMatch[1]);
     }
 
     // Source Cooperative metadata: source.coop sends no CORS headers, so the

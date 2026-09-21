@@ -2379,6 +2379,13 @@
       "bikeShare": "Bikesharing",
       "streetTraffic": "Simulierter Straßenverkehr",
       "mappedAlpr": "Kartierte Kennzeichenkameras",
+      "cctv": "Öffentliche CCTV-Kameras",
+      "cctvPopup": {
+        "liveSnapshot": "Livebild",
+        "provider": "Anbieter",
+        "attribution": "Quellenangabe",
+        "privacy": "Datenschutz"
+      },
       "radio": "Radiosender",
       "datacenters": "Rechenzentren",
       "dams": "Staudämme",

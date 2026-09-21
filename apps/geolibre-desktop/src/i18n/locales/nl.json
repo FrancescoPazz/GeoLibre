@@ -2379,6 +2379,13 @@
       "bikeShare": "Deelfietsen",
       "streetTraffic": "Gesimuleerd wegverkeer",
       "mappedAlpr": "Gekarteerde kentekencamera's",
+      "cctv": "Openbare CCTV-camera's",
+      "cctvPopup": {
+        "liveSnapshot": "Livebeeld",
+        "provider": "Provider",
+        "attribution": "Naamsvermelding",
+        "privacy": "Privacy"
+      },
       "radio": "Radiozenders",
       "datacenters": "Datacenters",
       "dams": "Dammen",
