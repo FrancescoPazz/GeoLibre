@@ -43,6 +43,7 @@ import {
   maplibreNationalMapPlugin,
   maplibreOpenAerialMapPlugin,
   maplibreOsmDownloaderPlugin,
+  maplibreIgnLidarHdPlugin,
   maplibreArcGisHubPlugin,
   TERRIA_CATALOG_PLUGIN_ID,
   terriaCatalogPlugin,
@@ -53,6 +54,7 @@ import {
   maplibreNaturalEarthPlugin,
   maplibreHuggingFacePlugin,
   maplibreGeoLensPlugin,
+  setGeoLensDefaultServerUrl,
   maplibreVantorPlugin,
   maplibrePlanetOpenDataPlugin,
   maplibrePortolanPlugin,
@@ -77,6 +79,7 @@ import {
   maplibreRouteAnimationPlugin,
   flightSimulatorPlugin,
   rer3dToolsPlugin,
+  godsEyeViewPlugin,
   maplibreSwipePlugin,
   SWIPE_PLUGIN_ID,
   maplibreTimelapsePlugin,
@@ -205,6 +208,7 @@ interface TauriRuntimeWindow extends Window {
 }
 
 const manager = new PluginManager();
+setGeoLensDefaultServerUrl(readDeploymentEnvValue("VITE_GEOLENS_DEFAULT_URL"));
 manager.registerAll([
   maplibreLayerControlPlugin,
   maplibreGeoEditorPlugin,
@@ -225,6 +229,7 @@ manager.registerAll([
   maplibreEarthdataGisPlugin,
   maplibreOpenAerialMapPlugin,
   maplibreOsmDownloaderPlugin,
+  maplibreIgnLidarHdPlugin,
   maplibreArcGisHubPlugin,
   maplibreSocrataPlugin,
   maplibreCkanPlugin,
@@ -262,6 +267,7 @@ manager.registerAll([
   flightSimulatorPlugin,
   rer3dToolsPlugin,
   terriaCatalogPlugin,
+  godsEyeViewPlugin,
   // Last visible entry of the Plugins menu; the ids below are skipped by
   // PluginsMenu and surface elsewhere.
   maplibreSamGeoPlugin,

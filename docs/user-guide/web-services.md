@@ -15,26 +15,26 @@ They are grouped together because they behave the same way, not because they sha
 
 ## At a glance
 
-| Panel | Provider | What you get |
-| --- | --- | --- |
-| [FEMA NFHL](#fema-nfhl) | FEMA | National Flood Hazard Layer WMS layers |
-| [NASA Earthdata](#nasa-earthdata) | NASA GIBS | 1,100+ pre-rendered global imagery layers, by date |
-| [US EPA EnviroAtlas](#us-epa-enviroatlas) | EPA | Environmental and ecosystem map services |
-| [USGS National Map](#usgs-national-map) | USGS | Topo, imagery, hydrography, elevation, and index services |
-| [USGS NLDI](#usgs-nldi) | USGS | Flowline tracing, hydrolocation, basins, and network navigation |
-| [Vantor Open Data](#vantor-open-data) | Vantor | Disaster-event satellite imagery (COG) |
-| [Planet Open Data](#planet-open-data) | Planet Labs | Planet's disaster data releases, through the STAC browser |
-| [Earthdata GIS](#earthdata-gis) | NASA EOSDIS | ArcGIS image, map, and feature services, and published web maps |
-| [OpenAerialMap](#openaerialmap) | OpenAerialMap | Openly licensed drone and aerial imagery |
-| [OSM Downloader](#osm-downloader) | OpenStreetMap / Overpass | Buildings, roads, amenities, waterways, land use, or custom OSM tags |
-| [ArcGIS Hub](#arcgis-hub) | Esri | Public datasets published to ArcGIS Hub |
-| [Socrata](#socrata) | Socrata | Government open-data portals |
-| [CKAN](#ckan) | HDX | Humanitarian Data Exchange resources |
-| [STAC Catalogs](#stac-catalogs) | any STAC | Any STAC API or static catalog, via STAC Index |
-| [Source Cooperative](#source-cooperative) | Source.coop | Cloud-native products (PMTiles, GeoParquet, COG) |
-| [Natural Earth](#natural-earth) | Natural Earth | The Natural Earth vector and raster themes |
-| [Hugging Face](#hugging-face) | Hugging Face | Geospatial files in dataset repos — and uploads |
-| [GeoLens](#geolens) | your server | A self-hosted spatial catalog |
+| Panel                                     | Provider                 | What you get                                                         |
+| ----------------------------------------- | ------------------------ | -------------------------------------------------------------------- |
+| [FEMA NFHL](#fema-nfhl)                   | FEMA                     | National Flood Hazard Layer WMS layers                               |
+| [NASA Earthdata](#nasa-earthdata)         | NASA GIBS                | 1,100+ pre-rendered global imagery layers, by date                   |
+| [US EPA EnviroAtlas](#us-epa-enviroatlas) | EPA                      | Environmental and ecosystem map services                             |
+| [USGS National Map](#usgs-national-map)   | USGS                     | Topo, imagery, hydrography, elevation, and index services            |
+| [USGS NLDI](#usgs-nldi)                   | USGS                     | Flowline tracing, hydrolocation, basins, and network navigation      |
+| [Vantor Open Data](#vantor-open-data)     | Vantor                   | Disaster-event satellite imagery (COG)                               |
+| [Planet Open Data](#planet-open-data)     | Planet Labs              | Planet's disaster data releases, through the STAC browser            |
+| [Earthdata GIS](#earthdata-gis)           | NASA EOSDIS              | ArcGIS image, map, and feature services, and published web maps      |
+| [OpenAerialMap](#openaerialmap)           | OpenAerialMap            | Openly licensed drone and aerial imagery                             |
+| [OSM Downloader](#osm-downloader)         | OpenStreetMap / Overpass | Buildings, roads, amenities, waterways, land use, or custom OSM tags |
+| [ArcGIS Hub](#arcgis-hub)                 | Esri                     | Public datasets published to ArcGIS Hub                              |
+| [Socrata](#socrata)                       | Socrata                  | Government open-data portals                                         |
+| [CKAN](#ckan)                             | HDX                      | Humanitarian Data Exchange resources                                 |
+| [STAC Catalogs](#stac-catalogs)           | any STAC                 | Any STAC API or static catalog, via STAC Index                       |
+| [Source Cooperative](#source-cooperative) | Source.coop              | Cloud-native products (PMTiles, GeoParquet, COG)                     |
+| [Natural Earth](#natural-earth)           | Natural Earth            | The Natural Earth vector and raster themes                           |
+| [Hugging Face](#hugging-face)             | Hugging Face             | Geospatial files in dataset repos — and uploads                      |
+| [GeoLens](#geolens)                       | your server              | A self-hosted spatial catalog                                        |
 
 ---
 

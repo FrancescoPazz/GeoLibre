@@ -193,18 +193,16 @@ function buildServiceKinds(services: readonly ServiceLibraryEntry[]): BrowserNod
       // The panel's "New connection" (＋) action opens this Add Data source.
       newConnectionKind: kind,
       count: entries.length,
-      children: entries.map(
-        (entry): BrowserNode => ({
-          id: `service:${entry.id}`,
-          kind: "service",
-          label: entry.name,
-          addable: true,
-          serviceId: entry.id,
-          serviceKind: entry.kind,
-          builtin: entry.builtin,
-          deployment: entry.deployment,
-        }),
-      ),
+      children: entries.map((entry): BrowserNode => ({
+        id: `service:${entry.id}`,
+        kind: "service",
+        label: entry.name,
+        addable: true,
+        serviceId: entry.id,
+        serviceKind: entry.kind,
+        builtin: entry.builtin,
+        deployment: entry.deployment,
+      })),
     };
   });
 }

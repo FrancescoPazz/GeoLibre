@@ -113,15 +113,17 @@ export function createEmptyProject(
     layers: [],
     layerGroups: [],
     styles: {},
-    preferences: options.ellipsoidId
-      ? {
-          ...DEFAULT_PROJECT_PREFERENCES,
-          map: {
-            ...DEFAULT_PROJECT_PREFERENCES.map,
-            ellipsoidId: getEllipsoid(options.ellipsoidId).id,
-          },
-        }
-      : DEFAULT_PROJECT_PREFERENCES,
+    // A copy, never the shared constant: a caller that edits the new project's
+    // preferences — `project.preferences.map.cesiumBasemap = …` — would
+    // otherwise rewrite the app-wide defaults for the rest of the process, and
+    // every later "what is the default" read would answer with its edit.
+    preferences: {
+      ...DEFAULT_PROJECT_PREFERENCES,
+      map: {
+        ...DEFAULT_PROJECT_PREFERENCES.map,
+        ...(options.ellipsoidId ? { ellipsoidId: getEllipsoid(options.ellipsoidId).id } : {}),
+      },
+    },
     legend: { ...DEFAULT_LEGEND_CONFIG },
     comments: [],
     metadata: {},
@@ -1239,6 +1241,11 @@ function normalizeProjectPreferences(preferences: unknown): ProjectPreferences {
         normalizeString((map as Partial<ProjectPreferences["map"]>).mapboxStyleUrl) || undefined,
       arcgisBasemap:
         normalizeString((map as Partial<ProjectPreferences["map"]>).arcgisBasemap) || undefined,
+      // Missing means follow the saved project basemap, as it does for
+      // `mapboxStyleUrl` above: a project written before this field existed
+      // chose nothing, and reapplying the new-project default would repaint
+      // its globe with Ion imagery the next time it opened. New projects get
+      // the default from `DEFAULT_PROJECT_PREFERENCES` and save it explicitly.
       cesiumBasemap: normalizeCesiumBasemap(
         (map as Partial<ProjectPreferences["map"]>).cesiumBasemap,
       ),
@@ -1714,7 +1721,6 @@ function hasRestorableSourceUrl(layer: GeoLibreLayer): boolean {
 export const USE_AUTHENTICATION_METADATA_KEY = "useAuthentication";
 
 function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
-
   layer = withoutLocalRasterBytes(layer);
 
   // A layer whose service is protected by the geoportal sign-in carries the
@@ -1746,6 +1752,24 @@ function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
   if (layer.embedFilter !== undefined) {
     const { embedFilter: _embedFilter, ...rest } = layer;
     layer = rest;
+  }
+
+  // Some live plugin layers publish a large in-memory row model solely for
+  // the Attribute Table and rebuild it from their feed on activation. Keeping
+  // those rows in the store makes them queryable; embedding them in every
+  // project/autosave would persist stale positions and can cross the history
+  // snapshot ceiling.
+  if (layer.geojson && layer.metadata.transientGeojson === true) {
+    const { geojson: _geojson, ...rest } = layer;
+    layer = rest;
+  }
+
+  // Live CZML feeds likewise rebuild their renderer payload on activation.
+  // Persisting thousands of packets in every autosave duplicates the feed,
+  // stores stale positions, and can exceed the history snapshot limit.
+  if (layer.source.czmlData !== undefined && layer.metadata.transientCzml === true) {
+    const { czmlData: _czmlData, ...source } = layer.source;
+    layer = { ...layer, source };
   }
 
   // External native layers that restore their features from a source URL keep

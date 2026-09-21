@@ -25,8 +25,8 @@ export {
   type MapCanvasProps,
   type MapCanvasRasterIdentify,
   type MapCanvasRasterIdentifyResult,
-  type MapDiagnosticEvent,
 } from "./MapCanvas";
+export type { MapDiagnosticEvent } from "./map-diagnostic";
 export {
   FEATURE_SELECTION_EVENT,
   featuresIntersectingPolygon,
@@ -86,6 +86,7 @@ export {
 export {
   MAPLIBRE_CAPABILITIES,
   type BuiltInMapControl,
+  type CameraIdleEvent,
   type FlyToCamera,
   type IdentifiedFeature,
   type ManualPlacementOptions,
@@ -160,6 +161,7 @@ export {
 export {
   isMapboxStyleUrl,
   loadMapboxStyle,
+  MAPBOX_BASEMAP_STYLES,
   mapboxAccessTokenFromStyleUrl,
   redactMapboxStyleUrl,
   resolveMapboxInternalUrl,

@@ -514,6 +514,7 @@
       "selectType_one": "انتخاب از میان {{count}} نوع عارضه",
       "selectType_other": "انتخاب از میان {{count}} نوع عارضه",
       "noTypesFound": "برای این سرویس هیچ نوع عارضه‌ای یافت نشد.",
+      "errorNoFeatures": "این نوع عارضه هیچ عارضه‌ای برنگرداند.",
       "retrieveError": "دریافت نوع‌های عارضه از این سرویس ممکن نشد."
     },
     "wmts": {
@@ -2359,6 +2360,46 @@
       }
     }
   },
+  "panel": {
+    "godsEyeView": {
+      "description": "رویدادهای زنده و زمان‌مند زمین از خوراک‌های داده عمومی.",
+      "globeOnly": "خوراک‌های زنده کره زمین روی کره Cesium نمایش داده می‌شوند. برای دیدن آن‌ها به کره سه‌بعدی بروید.",
+      "groups": {
+        "movement": "حرکت",
+        "cameras": "دوربین‌ها",
+        "infrastructure": "زیرساخت",
+        "events": "رویدادها",
+        "utilities": "ابزارها"
+      },
+      "earthquakes": "زمین‌لرزه‌ها",
+      "spaceMissions": "مأموریت‌های فضایی (۳۰ روز)",
+      "satellites": "ماهواره‌ها",
+      "flights": "پروازهای زنده",
+      "militaryFlights": "پروازهای نظامی",
+      "bikeShare": "اشتراک دوچرخه",
+      "streetTraffic": "ترافیک خیابانی شبیه‌سازی‌شده",
+      "mappedAlpr": "دوربین‌های پلاک‌خوان نقشه‌برداری‌شده",
+      "radio": "ایستگاه‌های رادیویی",
+      "datacenters": "مراکز داده",
+      "dams": "سدها",
+      "cables": "کابل‌های زیردریایی",
+      "osmInfrastructure": "زیرساخت‌های OSM",
+      "loading": "در حال به‌روزرسانی…",
+      "updateFailed": "به‌روزرسانی ناموفق بود",
+      "never": "هرگز",
+      "lastUpdated": "آخرین به‌روزرسانی: {{time}}",
+      "speed": "سرعت",
+      "speedRealTime": "زمان واقعی (1×)",
+      "speedMultiple": "{{factor}}×",
+      "denseSatellites": "فهرست متراکم ماهواره‌ها",
+      "denseLoading": "DENSE ···",
+      "denseFailed": "DENSE !",
+      "denseCount": "DENSE · {{count}}",
+      "dense": "DENSE",
+      "denseError": "فهرست Starlink بارگیری نشد: {{error}}. برای تلاش دوباره آن را انتخاب کنید.",
+      "denseDescription": "مجموعه کامل Starlink را به‌صورت نقاط سبک نمایش دهید (بدون برچسب یا ردیف‌های جدول)."
+    }
+  },
   "toolbar": {
     "menu": {
       "project": "پروژه",
@@ -3070,6 +3111,7 @@
       "maplibre-gl-openaerialmap": "OpenAerialMap",
       "maplibre-gl-arcgis-hub": "ArcGIS Hub",
       "geolibre-osm-downloader": "بارگیر OSM",
+      "geolibre-ign-lidar-hd": "IGN LiDAR HD Downloader",
       "geolibre-stac-catalogs": "فهرست‌های STAC",
       "geolibre-planet-open-data": "داده‌های باز Planet",
       "maplibre-gl-source-coop": "Source Cooperative",
@@ -3081,6 +3123,7 @@
       "maplibre-gl-huggingface": "Hugging Face",
       "carto-light": "نقشهٔ پایهٔ Carto Light",
       "geolibre-flight-simulator": "شبیه‌ساز پرواز",
+      "gods-eye-view": "دید خداگونه",
       "geolibre-route-animation": "پویانمایی مسیر",
       "geolibre-sun": "شبیه‌سازی خورشید",
       "maplibre-atmosphere-effects": "جلوه‌های جوّی",
@@ -8028,7 +8071,8 @@
   },
   "plugin": {
     "3d-tiles": {
-      "arcgisSourceUnsupported": "در این نمای ArcGIS از نشانی tileset.json مربوط به 3D Tiles استفاده کنید. کاشی‌های Google Photorealistic و I3S به موتور نمایش دیگری نیاز دارند."
+      "arcgisSourceUnsupported": "در این نمای ArcGIS از نشانی tileset.json مربوط به 3D Tiles استفاده کنید. کاشی‌های Google Photorealistic و I3S به موتور نمایش دیگری نیاز دارند.",
+      "globeGoogleKeyRequired": "برای بارگذاری کاشی‌های Google Photorealistic 3D Tiles روی کره، به کلید API گوگل مپس در تنظیمات نیاز است."
     },
     "geolibre-osm-downloader": {
       "title": "بارگیر OSM",
@@ -8060,6 +8104,41 @@
       "noFeatures": "هیچ عارضه منطبقی در این محدوده یافت نشد.",
       "error": "بارگیری داده‌های OSM انجام نشد: {{message}}",
       "added": "{{count}} عارضه به نقشه افزوده شد."
+    },
+    "geolibre-ign-lidar-hd": {
+      "title": "IGN LiDAR HD",
+      "hint": "پوشش کاشی‌های IGN LiDAR HD را برای محدوده فعلی نقشه جستجو کنید، کاشی‌ها را به‌صورت ابر نقاط به نقشه اضافه کنید یا فایل‌های COPC LAZ آن‌ها را از سرورهای IGN دانلود کنید.",
+      "attribution": "داده‌ها © IGN — LiDAR HD، منتشرشده تحت Licence Ouverte 2.0.",
+      "west": "غرب",
+      "south": "جنوب",
+      "east": "شرق",
+      "north": "شمال",
+      "useMapExtent": "استفاده از محدوده نقشه",
+      "search": "جستجوی کاشی‌ها",
+      "addToMap": "افزودن به نقشه",
+      "download": "دانلود",
+      "ready": "یک محدوده انتخاب کنید و کاشی‌های LiDAR HD را جستجو کنید.",
+      "mapUnavailable": "محدوده نقشه هنوز در دسترس نیست.",
+      "extentApplied": "محدوده نقشه اعمال شد.",
+      "searching": "در حال جستجوی کاشی‌های IGN LiDAR HD…",
+      "noTiles": "هیچ کاشی LiDAR HD در این محدوده یافت نشد.",
+      "noDownload": "ابر نقاطی منتشر نشده است",
+      "layerName": "کاشی‌های IGN LiDAR HD",
+      "found": "{{count}} کاشی یافت شد.",
+      "foundTruncated": "نمایش {{count}} کاشی نخست از {{matched}} کاشی. برای دیدن بقیه، محدوده جستجو را کوچک‌تر کنید.",
+      "addedToMap": "{{name}} به نقشه افزوده شد.",
+      "alreadyOnMap": "{{name}} از قبل روی نقشه است.",
+      "unsupportedRenderer": "ابرهای نقطه به موتور رندر MapLibre یا Mapbox نیاز دارند.",
+      "addError": "افزودن {{name}} به نقشه ممکن نشد: {{message}}",
+      "error": "جستجوی کاشی‌های IGN LiDAR HD ممکن نشد: {{message}}",
+      "selectAll": "انتخاب همه",
+      "selectTile": "انتخاب {{name}}",
+      "addSelectedToMap": "افزودن موارد انتخاب‌شده به نقشه",
+      "addSelectedToMapCount": "افزودن {{count}} مورد انتخاب‌شده به نقشه",
+      "addingSelected": "در حال افزودن {{count}} کاشی به نقشه…",
+      "addedSelectedCount": "{{count}} کاشی به نقشه افزوده شد.",
+      "alreadyOnMapCountPlural": "{{count}} کاشی از قبل روی نقشه بود.",
+      "addSelectedFailedCount": "افزودن {{count}} کاشی ممکن نشد."
     }
   }
 }
