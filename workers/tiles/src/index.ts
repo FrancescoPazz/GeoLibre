@@ -40,6 +40,7 @@ import {
   ADSBDB_AIRCRAFT_UPSTREAM,
   AUSTIN_CCTV_FRAME_UPSTREAM,
   CALGARY_CCTV_FRAME_UPSTREAM,
+  CALTRANS_CCTV_UPSTREAM,
   DRIVEBC_CCTV_CATALOG_UPSTREAM,
   fetchAllowlistedUpstream,
   HDX_CKAN_SEARCH_UPSTREAM,
@@ -50,6 +51,7 @@ import {
   OVERPASS_API_FALLBACK_UPSTREAM,
   ONTARIO_CCTV_CATALOG_UPSTREAM,
   ONTARIO_CCTV_FRAME_UPSTREAM,
+  TRANSIT_UPSTREAMS,
 } from "./allowlisted-fetch";
 import { remapRowsToMercator, tileGeoBounds, wmsBboxFor } from "./reproject";
 
@@ -121,11 +123,36 @@ const ADSBDB_AIRCRAFT_PATH = /^\/adsbdb\/aircraft\/([0-9a-fA-F]{6})$/;
 const OPEN_SKY_CACHE_SECONDS = 30;
 const ADSB_LOL_CACHE_SECONDS = 15;
 const AIRCRAFT_FEED_MAX_BODY_BYTES = 25 * 1024 * 1024;
+const TRANSIT_PATH = /^\/transit\/vehicles\/([a-z0-9][a-z0-9-]{1,63})$/;
+const TRANSIT_MAX_BODY_BYTES = 8 * 1024 * 1024;
+const TRANSIT_CACHE_SECONDS = 15;
+const OVAPI_TRANSIT_CACHE_SECONDS = 60;
 const CALGARY_CCTV_PATH = /^\/cctv\/calgary\/(\d{1,4})\.jpg$/;
 const AUSTIN_CCTV_PATH = /^\/cctv\/austin\/(\d{1,4})\.jpg$/;
 const ONTARIO_CCTV_PATH = /^\/cctv\/ontario\/([A-Za-z0-9_.-]{1,64})$/;
 const NSW_CCTV_PATH = /^\/cctv\/nsw\/((?:[A-Za-z0-9_.-]|%[0-9A-Fa-f]{2}){1,300})$/;
-const CCTV_CATALOG_PATH = /^\/cctv\/catalog\/(ontario|drivebc|nsw)\.json$/;
+const CALTRANS_CCTV_PATH = /^\/cctv\/caltrans\/(3|4|7|11)\/([a-z0-9-]{1,100})\.jpg$/i;
+/**
+ * The catalogs this worker proxies. The one authoritative list: the route
+ * matcher and the provider type are both derived from it, so a new provider
+ * cannot reach {@link handleCctvCatalog} without an upstream declared for it.
+ */
+const CCTV_CATALOG_PROVIDERS = [
+  "ontario",
+  "drivebc",
+  "nsw",
+  "caltrans-3",
+  "caltrans-4",
+  "caltrans-7",
+  "caltrans-11",
+] as const;
+type CctvCatalogProvider = (typeof CCTV_CATALOG_PROVIDERS)[number];
+// Built rather than written out, so it cannot drift from the list above. Every
+// entry is a literal slug with no regex metacharacters, so no escaping is
+// needed, and each alternative is anchored by the `\.json$` that follows.
+const CCTV_CATALOG_PATH = new RegExp(
+  `^/cctv/catalog/(${CCTV_CATALOG_PROVIDERS.join("|")})\\.json$`,
+);
 const CCTV_FRAME_MAX_BODY_BYTES = 5 * 1024 * 1024;
 const CCTV_UPSTREAM_TIMEOUT_MS = 30_000;
 const CCTV_CATALOG_MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -802,18 +829,63 @@ async function handleAircraftFeed(
         throw new Error("Malformed aircraft feed");
       }
     } catch {
-      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+      return new Response("Bad Gateway", {
+        status: 502,
+        headers: CORS_HEADERS,
+      });
     }
   }
   const headers = new Headers(CORS_HEADERS);
   headers.set("content-type", "application/json; charset=utf-8");
   headers.set("cache-control", originResponse.ok ? `public, max-age=${cacheSeconds}` : "no-store");
-  const response = new Response(body, { status: originResponse.status, headers });
+  const response = new Response(body, {
+    status: originResponse.status,
+    headers,
+  });
   // Cache only after the bounded body has passed schema validation. Using the
   // Cache API here (instead of `cf.cacheEverything` on the upstream fetch)
   // prevents a malformed third-party response from being cached before the
   // Worker can inspect it.
   if (originResponse.ok && cache) ctx.waitUntil(cache.put(request, response.clone()));
+  return response;
+}
+
+async function handleTransitFeed(
+  request: Request,
+  ctx: ExecutionContext,
+  feedId: string,
+): Promise<Response> {
+  if (!isAllowedProxyOrigin(request.headers.get("origin"))) {
+    return new Response("Forbidden", { status: 403, headers: CORS_HEADERS });
+  }
+  if (!Object.hasOwn(TRANSIT_UPSTREAMS, feedId)) {
+    return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
+  }
+  const cache = typeof caches === "undefined" ? null : caches.default;
+  const cached = await cache?.match(request);
+  if (cached) return cached;
+  const upstream = TRANSIT_UPSTREAMS[feedId as keyof typeof TRANSIT_UPSTREAMS];
+  let originResponse: Response;
+  try {
+    originResponse = await fetchAllowlistedUpstream(upstream, {
+      headers: {
+        accept: "application/x-protobuf,application/octet-stream",
+        "user-agent": "GeoLibre-Transit-Proxy/1.0 (+https://geolibre.org)",
+      },
+    });
+  } catch {
+    return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+  }
+  const body = await readResponseBytesWithLimit(originResponse, TRANSIT_MAX_BODY_BYTES);
+  if (!originResponse.ok || !body || body.byteLength === 0) {
+    return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+  }
+  const headers = new Headers(CORS_HEADERS);
+  headers.set("content-type", "application/x-protobuf");
+  const cacheSeconds = feedId === "ovapi-nl" ? OVAPI_TRANSIT_CACHE_SECONDS : TRANSIT_CACHE_SECONDS;
+  headers.set("cache-control", `public, max-age=${cacheSeconds}`);
+  const response = new Response(body, { status: 200, headers });
+  if (cache) ctx.waitUntil(cache.put(request, response.clone()));
   return response;
 }
 
@@ -902,11 +974,17 @@ async function handleAdsbdbAircraft(
         throw new Error("Malformed ADSBDB response");
       }
     } catch {
-      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+      return new Response("Bad Gateway", {
+        status: 502,
+        headers: CORS_HEADERS,
+      });
     }
   }
   headers.set("cache-control", originResponse.ok ? "public, max-age=86400" : "no-store");
-  const response = new Response(body, { status: originResponse.status, headers });
+  const response = new Response(body, {
+    status: originResponse.status,
+    headers,
+  });
   if (originResponse.ok && cache) ctx.waitUntil(cache.put(request, response.clone()));
   return response;
 }
@@ -933,7 +1011,10 @@ async function handleCctvFrame(
     const contentType = originResponse.headers.get("content-type")?.split(";", 1)[0].trim() ?? "";
     const body = await readResponseBytesWithLimit(originResponse, CCTV_FRAME_MAX_BODY_BYTES);
     if (!originResponse.ok || !body || !["image/jpeg", "image/png"].includes(contentType)) {
-      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+      return new Response("Bad Gateway", {
+        status: 502,
+        headers: CORS_HEADERS,
+      });
     }
     const headers = new Headers(CORS_HEADERS);
     headers.set("content-type", contentType);
@@ -948,10 +1029,15 @@ async function handleCctvFrame(
   }
 }
 
+/** Caltrans publishes one catalog per district, under a zero-padded file name. */
+function caltransCatalogUpstream(district: 3 | 4 | 7 | 11): string {
+  return `${CALTRANS_CCTV_UPSTREAM}d${district}/cctv/cctvStatusD${String(district).padStart(2, "0")}.json`;
+}
+
 async function handleCctvCatalog(
   request: Request,
   ctx: ExecutionContext,
-  provider: "ontario" | "drivebc" | "nsw",
+  provider: CctvCatalogProvider,
 ): Promise<Response> {
   if (!isAllowedProxyOrigin(request.headers.get("origin"))) {
     return new Response("Forbidden", { status: 403, headers: CORS_HEADERS });
@@ -959,11 +1045,19 @@ async function handleCctvCatalog(
   const cache = typeof caches === "undefined" ? null : caches.default;
   const cached = await cache?.match(request);
   if (cached) return cached;
-  const upstream = {
+  // Exhaustive over the provider union on purpose: adding a district to
+  // `CctvCatalogProvider` without its upstream here is a build error rather
+  // than a runtime fetch of the string "undefined".
+  const upstreams: Record<CctvCatalogProvider, string> = {
     ontario: `${ONTARIO_CCTV_CATALOG_UPSTREAM}?format=json&lang=en`,
     drivebc: DRIVEBC_CCTV_CATALOG_UPSTREAM,
     nsw: NSW_CCTV_CATALOG_UPSTREAM,
-  }[provider];
+    "caltrans-3": caltransCatalogUpstream(3),
+    "caltrans-4": caltransCatalogUpstream(4),
+    "caltrans-7": caltransCatalogUpstream(7),
+    "caltrans-11": caltransCatalogUpstream(11),
+  };
+  const upstream = upstreams[provider];
   const upstreamController = new AbortController();
   const upstreamTimeout = setTimeout(() => upstreamController.abort(), CCTV_UPSTREAM_TIMEOUT_MS);
   try {
@@ -973,18 +1067,29 @@ async function handleCctvCatalog(
     });
     const body = await readResponseBytesWithLimit(originResponse, CCTV_CATALOG_MAX_BODY_BYTES);
     if (!originResponse.ok || !body) {
-      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+      return new Response("Bad Gateway", {
+        status: 502,
+        headers: CORS_HEADERS,
+      });
     }
     try {
       const payload = JSON.parse(new TextDecoder().decode(body)) as
-        | { features?: unknown }
+        | { features?: unknown; data?: unknown }
         | unknown[];
       const features =
         payload && typeof payload === "object" && !Array.isArray(payload) ? payload.features : null;
-      const valid = provider === "nsw" ? Array.isArray(features) : Array.isArray(payload);
+      const valid =
+        provider === "nsw"
+          ? Array.isArray(features)
+          : provider.startsWith("caltrans-")
+            ? !Array.isArray(payload) && Array.isArray(payload.data)
+            : Array.isArray(payload);
       if (!valid) throw new Error();
     } catch {
-      return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
+      return new Response("Bad Gateway", {
+        status: 502,
+        headers: CORS_HEADERS,
+      });
     }
     const headers = new Headers(CORS_HEADERS);
     headers.set("content-type", "application/json; charset=utf-8");
@@ -1038,6 +1143,7 @@ export const tilesWorker = {
           "  OpenSky live flights: /opensky/states\n" +
           "  adsb.lol military flights: /adsb-lol/military\n" +
           "  ADSBDB aircraft details: /adsbdb/aircraft/<icao>\n" +
+          "  GTFS-Realtime transit: /transit/vehicles/<provider>\n" +
           "  OpenStreetMap download: POST /overpass\n" +
           "  Source Cooperative metadata: /source-coop/products/... , /source-coop/feed\n" +
           "  GitHub repository file: /github-raw?url=https://github.com/.../raw/...\n" +
@@ -1262,6 +1368,11 @@ export const tilesWorker = {
       return handleAdsbdbAircraft(request, ctx, adsbdbMatch[1]);
     }
 
+    const transitMatch = TRANSIT_PATH.exec(url.pathname);
+    if (transitMatch) {
+      return handleTransitFeed(request, ctx, transitMatch[1]);
+    }
+
     const calgaryCctvMatch = CALGARY_CCTV_PATH.exec(url.pathname);
     if (calgaryCctvMatch) {
       return handleCctvFrame(
@@ -1282,7 +1393,9 @@ export const tilesWorker = {
 
     const cctvCatalogMatch = CCTV_CATALOG_PATH.exec(url.pathname);
     if (cctvCatalogMatch) {
-      return handleCctvCatalog(request, ctx, cctvCatalogMatch[1] as "ontario" | "drivebc" | "nsw");
+      // Sound because the matcher's alternatives *are* CCTV_CATALOG_PROVIDERS;
+      // a RegExp match is just opaque to the type system.
+      return handleCctvCatalog(request, ctx, cctvCatalogMatch[1] as CctvCatalogProvider);
     }
 
     const ontarioCctvMatch = ONTARIO_CCTV_PATH.exec(url.pathname);
@@ -1300,16 +1413,32 @@ export const tilesWorker = {
       try {
         frameId = decodeURIComponent(nswCctvMatch[1]);
       } catch {
-        return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
+        return new Response("Not Found", {
+          status: 404,
+          headers: CORS_HEADERS,
+        });
       }
       if (!/^[a-z0-9_.&-]{1,100}\.(?:jpe?g)$/i.test(frameId)) {
-        return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
+        return new Response("Not Found", {
+          status: 404,
+          headers: CORS_HEADERS,
+        });
       }
       return handleCctvFrame(
         request,
         ctx,
         `${NSW_CCTV_FRAME_UPSTREAM}${encodeURIComponent(frameId)}`,
         { "user-agent": NSW_CCTV_USER_AGENT },
+      );
+    }
+
+    const caltransCctvMatch = CALTRANS_CCTV_PATH.exec(url.pathname);
+    if (caltransCctvMatch) {
+      const [, district, slug] = caltransCctvMatch;
+      return handleCctvFrame(
+        request,
+        ctx,
+        `${CALTRANS_CCTV_UPSTREAM}d${district}/cctv/image/${slug}/${slug}.jpg`,
       );
     }
 
@@ -1512,9 +1641,9 @@ async function handleWmsTile(
     // here renders as a blank tile, so log it — otherwise a typo'd map/layer in
     // a WMS_DATASETS entry would fail silently as an all-blank basemap in prod.
     console.warn(
-      `WMS reproject miss: dataset=${dataset} status=${origin.status} content-type=${
-        contentType || "?"
-      }`,
+      `WMS reproject miss: dataset=${dataset} status=${
+        origin.status
+      } content-type=${contentType || "?"}`,
     );
     await origin.arrayBuffer().catch(() => undefined);
     const resp = pngResponse(transparentTile(), NEGATIVE_CACHE_CONTROL);

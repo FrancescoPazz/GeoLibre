@@ -18,10 +18,12 @@ import {
   proxyBinaryRequestGuarded,
   proxyAustinCctvFrameRequestGuarded,
   proxyCalgaryCctvFrameRequestGuarded,
+  proxyCaltransCctvFrameRequestGuarded,
   proxyCctvCatalogRequestGuarded,
   proxyCelestrakRequestGuarded,
   proxyLaunchLibraryRequestGuarded,
   proxyOverpassRequestGuarded,
+  proxyTransitRequestGuarded,
   proxyOntarioCctvFrameRequestGuarded,
   proxyNswCctvFrameRequestGuarded,
 } from "./vite-proxy-guard";
@@ -653,11 +655,13 @@ const LAUNCH_LIBRARY_PROXY_PATH = "/launch-library/recent";
 const OPEN_SKY_PROXY_PATH = "/opensky/states";
 const ADSB_LOL_MILITARY_PROXY_PATH = "/adsb-lol/military";
 const ADSBDB_AIRCRAFT_PROXY_PATH = "/adsbdb/aircraft";
+const TRANSIT_PROXY_PATH = "/transit/vehicles";
 const AUSTIN_CCTV_FRAME_PROXY_PATH = "/cctv/austin";
 const CALGARY_CCTV_FRAME_PROXY_PATH = "/cctv/calgary";
 const CCTV_CATALOG_PROXY_PATH = "/cctv/catalog";
 const ONTARIO_CCTV_FRAME_PROXY_PATH = "/cctv/ontario";
 const NSW_CCTV_FRAME_PROXY_PATH = "/cctv/nsw";
+const CALTRANS_CCTV_FRAME_PROXY_PATH = "/cctv/caltrans";
 const OVERPASS_PROXY_PATH = "/overpass";
 const RASTER_PROXY_PATH = "/__geolibre_raster_proxy";
 const DUCKDB_WORKER_PATH_PART = "/@duckdb/duckdb-wasm/dist/";
@@ -868,6 +872,17 @@ function wmsProxyPlugin(): Plugin {
           res.end("ADSBDB proxy request failed");
         }
       });
+      server.middlewares.use(TRANSIT_PROXY_PATH, async (req, res) => {
+        try {
+          const requestUrl = new URL(req.url ?? "", `http://localhost${TRANSIT_PROXY_PATH}`);
+          const feedId = decodeURIComponent(requestUrl.pathname.replace(/^\//, ""));
+          await proxyTransitRequestGuarded(feedId, res);
+        } catch {
+          res.statusCode = 502;
+          res.setHeader("content-type", "text/plain");
+          res.end("Transit proxy request failed");
+        }
+      });
       server.middlewares.use(CALGARY_CCTV_FRAME_PROXY_PATH, async (req, res) => {
         try {
           const requestUrl = new URL(
@@ -900,7 +915,7 @@ function wmsProxyPlugin(): Plugin {
         try {
           const requestUrl = new URL(req.url ?? "", `http://localhost${CCTV_CATALOG_PROXY_PATH}`);
           const provider = decodeURIComponent(requestUrl.pathname).match(
-            /^\/(ontario|drivebc|nsw)\.json$/,
+            /^\/(ontario|drivebc|nsw|caltrans-(?:3|4|7|11))\.json$/,
           )?.[1];
           await proxyCctvCatalogRequestGuarded(provider ?? "", res);
         } catch {
@@ -936,6 +951,22 @@ function wmsProxyPlugin(): Plugin {
           res.statusCode = 502;
           res.setHeader("content-type", "text/plain");
           res.end("NSW CCTV frame request failed");
+        }
+      });
+      server.middlewares.use(CALTRANS_CCTV_FRAME_PROXY_PATH, async (req, res) => {
+        try {
+          const requestUrl = new URL(
+            req.url ?? "",
+            `http://localhost${CALTRANS_CCTV_FRAME_PROXY_PATH}`,
+          );
+          const match = decodeURIComponent(requestUrl.pathname).match(
+            /^\/(3|4|7|11)\/([a-z0-9-]{1,100})\.jpg$/i,
+          );
+          await proxyCaltransCctvFrameRequestGuarded(match?.[1] ?? "", match?.[2] ?? "", res);
+        } catch {
+          res.statusCode = 502;
+          res.setHeader("content-type", "text/plain");
+          res.end("Caltrans CCTV frame request failed");
         }
       });
       server.middlewares.use(OVERPASS_PROXY_PATH, async (req, res) => {

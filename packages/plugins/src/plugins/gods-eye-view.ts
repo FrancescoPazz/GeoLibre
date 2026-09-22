@@ -26,14 +26,17 @@ import {
   TRAFFIC_MAX_VIEW_SPAN_DEGREES,
   TRAFFIC_QUERY_SNAP_DEGREES,
   viewportBoundsKey,
+  viewportQueryBounds,
 } from "./gods-eye-view-viewport-feeds";
 import { OVERPASS_REQUEST_TIMEOUT_MS } from "./osm-downloader-api";
 import { fetchMilitaryFlightsCzml, fetchOpenSkyCzml } from "./gods-eye-view-aircraft-feeds";
 import {
   CCTV_MAX_VIEW_SPAN_DEGREES,
   CCTV_QUERY_SNAP_DEGREES,
+  cctvPreviewsVisibleAtZoom,
   fetchCctvCzml,
 } from "./gods-eye-view-cctv-feeds";
+import { fetchTransitCzml } from "./gods-eye-view-transit-feeds";
 
 export const GODS_EYE_VIEW_PLUGIN_ID = "gods-eye-view";
 export const GODS_EYE_VIEW_EARTHQUAKES_FLAG = "godsEyeViewEarthquakes";
@@ -51,6 +54,7 @@ export const GODS_EYE_VIEW_MAPPED_ALPR_FLAG = "godsEyeViewMappedAlpr";
 export const GODS_EYE_VIEW_FLIGHTS_FLAG = "godsEyeViewFlights";
 export const GODS_EYE_VIEW_MILITARY_FLIGHTS_FLAG = "godsEyeViewMilitaryFlights";
 export const GODS_EYE_VIEW_CCTV_FLAG = "godsEyeViewCctv";
+export const GODS_EYE_VIEW_TRANSIT_FLAG = "godsEyeViewTransit";
 
 // The aircraft feeds refresh every 15–30 seconds. Individual descriptors still
 // decide whether they are due, so this inexpensive scheduler does not increase
@@ -67,6 +71,7 @@ interface FeedFetchContext {
   signal: AbortSignal;
   window: CzmlTimeWindow;
   bounds: [number, number, number, number] | null;
+  zoom: number | null;
 }
 
 interface FeedDescriptor {
@@ -78,7 +83,8 @@ interface FeedDescriptor {
   flag: string;
   defaultEnabled: boolean;
   ownsClockWindow?: boolean;
-  viewportKey?: (bounds: FeedFetchContext["bounds"]) => string;
+  viewportKey?: (bounds: FeedFetchContext["bounds"], zoom: number | null) => string;
+  hasQueryableViewport?: (bounds: FeedFetchContext["bounds"]) => boolean;
   fetch: (context: FeedFetchContext) => Promise<GodsEyeViewFeedPayload>;
 }
 
@@ -145,6 +151,17 @@ const FEED_DESCRIPTORS = {
     defaultEnabled: false,
     fetch: ({ signal }) => fetchBikeShareCzml({ signal }),
   },
+  transit: {
+    group: "movement",
+    label: ["panel.godsEyeView.transit", "Live Transit"],
+    attribution:
+      "Live transit: MBTA/MassDOT; CapMetro; Metro Transit; HSL; OVapi; Entur; TransLink Queensland",
+    refreshIntervalMs: 15_000,
+    timeoutMs: 20_000,
+    flag: GODS_EYE_VIEW_TRANSIT_FLAG,
+    defaultEnabled: false,
+    fetch: ({ signal }) => fetchTransitCzml({ signal }),
+  },
   streetTraffic: {
     group: "movement",
     label: ["panel.godsEyeView.streetTraffic", "Simulated Street Traffic"],
@@ -155,6 +172,9 @@ const FEED_DESCRIPTORS = {
     defaultEnabled: false,
     viewportKey: (bounds) =>
       viewportBoundsKey(bounds, TRAFFIC_MAX_VIEW_SPAN_DEGREES, TRAFFIC_QUERY_SNAP_DEGREES),
+    hasQueryableViewport: (bounds) =>
+      viewportQueryBounds(bounds, TRAFFIC_MAX_VIEW_SPAN_DEGREES, TRAFFIC_QUERY_SNAP_DEGREES) !==
+      null,
     fetch: ({ bounds, signal, window }) => fetchStreetTrafficCzml(bounds, window, { signal }),
   },
   osmInfrastructure: {
@@ -232,20 +252,25 @@ const FEED_DESCRIPTORS = {
     defaultEnabled: false,
     viewportKey: (bounds) =>
       viewportBoundsKey(bounds, ALPR_MAX_VIEW_SPAN_DEGREES, ALPR_QUERY_SNAP_DEGREES),
+    hasQueryableViewport: (bounds) =>
+      viewportQueryBounds(bounds, ALPR_MAX_VIEW_SPAN_DEGREES, ALPR_QUERY_SNAP_DEGREES) !== null,
     fetch: ({ bounds, signal }) => fetchMappedAlprCzml(bounds, { signal }),
   },
   cctv: {
     group: "cameras",
     label: ["panel.godsEyeView.cctv", "Public CCTV Cameras"],
     attribution:
-      "Public camera imagery: TfL Open Data; City of Calgary; Fintraffic / digitraffic.fi",
+      "Public camera imagery: TfL Open Data; City of Austin; City of Calgary; Fintraffic; Ontario 511; DriveBC; Live Traffic NSW; Caltrans",
     refreshIntervalMs: 60_000,
     timeoutMs: 30_000,
     flag: GODS_EYE_VIEW_CCTV_FLAG,
     defaultEnabled: false,
-    viewportKey: (bounds) =>
-      viewportBoundsKey(bounds, CCTV_MAX_VIEW_SPAN_DEGREES, CCTV_QUERY_SNAP_DEGREES),
-    fetch: ({ bounds, signal }) => fetchCctvCzml(bounds, { signal }),
+    viewportKey: (bounds, zoom) =>
+      `${viewportBoundsKey(bounds, CCTV_MAX_VIEW_SPAN_DEGREES, CCTV_QUERY_SNAP_DEGREES)}|preview:${cctvPreviewsVisibleAtZoom(zoom)}`,
+    hasQueryableViewport: (bounds) =>
+      viewportQueryBounds(bounds, CCTV_MAX_VIEW_SPAN_DEGREES, CCTV_QUERY_SNAP_DEGREES) !== null,
+    fetch: ({ bounds, signal, zoom }) =>
+      fetchCctvCzml(bounds, { signal, showPreviews: cctvPreviewsVisibleAtZoom(zoom) }),
   },
   radio: {
     group: "utilities",
@@ -567,7 +592,8 @@ async function refreshFeed(feed: FeedId, force = true): Promise<void> {
   if (!force && state.retryAfter > Date.now()) return;
   const descriptor: FeedDescriptor = FEED_DESCRIPTORS[feed];
   const bounds = appRef?.getViewBounds?.() ?? null;
-  const viewportKey = descriptor.viewportKey?.(bounds) ?? null;
+  const zoom = cesiumRef?.readView().zoom ?? null;
+  const viewportKey = descriptor.viewportKey?.(bounds, zoom) ?? null;
   if (
     !force &&
     state.lastUpdated &&
@@ -595,6 +621,7 @@ async function refreshFeed(feed: FeedId, force = true): Promise<void> {
       signal: controller.signal,
       window,
       bounds,
+      zoom,
     });
     if (generation !== state.generation || !state.enabled) return;
     const updatedAt = new Date();
@@ -657,10 +684,11 @@ function setFeedEnabled(feed: FeedId, enabled: boolean): void {
 
 function refreshViewportFeeds(): void {
   const bounds = appRef?.getViewBounds?.() ?? null;
+  const zoom = cesiumRef?.readView().zoom ?? null;
   for (const feed of FEED_IDS) {
     const descriptor: FeedDescriptor = FEED_DESCRIPTORS[feed];
     if (!feeds[feed].enabled || !descriptor.viewportKey) continue;
-    const key = descriptor.viewportKey(bounds);
+    const key = descriptor.viewportKey(bounds, zoom);
     const { lastViewportKey, requestedViewportKey } = feeds[feed];
     // A completed result is reusable only when no request for another viewport
     // is in flight. This makes a quick A → B → A move abort B and restore A.
@@ -731,8 +759,22 @@ function normalizeProjectState(value: unknown): GodsEyeViewProjectState {
 
 function statusText(feed: FeedId): string {
   const state = feeds[feed];
+  const descriptor: FeedDescriptor = FEED_DESCRIPTORS[feed];
   if (state.loading) return translate("panel.godsEyeView.loading", "Updating…");
   if (state.failed) return translate("panel.godsEyeView.updateFailed", "Update failed");
+  if (state.lastUpdated && descriptor.viewportKey && state.layerId) {
+    const layer = useAppStore.getState().layers.find((candidate) => candidate.id === state.layerId);
+    const bounds = appRef?.getViewBounds?.() ?? null;
+    if (
+      layer?.geojson?.features.length === 0 &&
+      (descriptor.hasQueryableViewport?.(bounds) ?? true)
+    ) {
+      return translate(
+        "panel.godsEyeView.noneInView",
+        "No features found in the current view for this layer.",
+      );
+    }
+  }
   const time = state.lastUpdated
     ? new Intl.DateTimeFormat(appRef?.getLocale?.(), {
         dateStyle: "short",

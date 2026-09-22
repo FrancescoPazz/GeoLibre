@@ -38,17 +38,34 @@ const AIRCRAFT_UPSTREAMS = {
     label: "adsb.lol",
   },
 } as const;
+/** Exported so a test can hold it against the edge relay and the feed registry. */
+export const TRANSIT_UPSTREAMS = {
+  mbta: "https://cdn.mbta.com/realtime/VehiclePositions.pb",
+  "capmetro-austin": "https://data.texas.gov/download/eiei-9rpf/application%2Foctet-stream",
+  "metrotransit-msp": "https://svc.metrotransit.org/mtgtfs/vehiclepositions.pb",
+  "hsl-helsinki": "https://realtime.hsl.fi/realtime/vehicle-positions/v2/hsl",
+  "ovapi-nl": "https://gtfs.ovapi.nl/nl/vehiclePositions.pb",
+  "translink-seq": "https://gtfsrt.api.translink.com.au/api/realtime/seq/VehiclePositions",
+} as const;
+const TRANSIT_CACHE_TTL_MS = 15_000;
+const OVAPI_TRANSIT_CACHE_TTL_MS = 60_000;
+const TRANSIT_MAX_BODY_BYTES = 8 * 1024 * 1024;
 const ADSBDB_AIRCRAFT_BASE = "https://api.adsbdb.com/v0/aircraft/";
 const AUSTIN_CCTV_FRAME_BASE = "https://cctv.austinmobility.io/image/";
 const CALGARY_CCTV_FRAME_BASE = "https://trafficcam.calgary.ca/loc";
 const ONTARIO_CCTV_FRAME_BASE = "https://511on.ca/map/Cctv/";
 const NSW_CCTV_FRAME_BASE = "https://webcams.transport.nsw.gov.au/livetraffic-webcams/cameras/";
+const CALTRANS_CCTV_BASE = "https://cwwp2.dot.ca.gov/data/";
 const NSW_CCTV_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const CCTV_CATALOG_URLS = {
   ontario: "https://511on.ca/api/v2/get/cameras?format=json&lang=en",
   drivebc: "https://www.drivebc.ca/api/webcams/",
   nsw: "https://data.livetraffic.com/cameras/traffic-cam.json",
+  "caltrans-3": `${CALTRANS_CCTV_BASE}d3/cctv/cctvStatusD03.json`,
+  "caltrans-4": `${CALTRANS_CCTV_BASE}d4/cctv/cctvStatusD04.json`,
+  "caltrans-7": `${CALTRANS_CCTV_BASE}d7/cctv/cctvStatusD07.json`,
+  "caltrans-11": `${CALTRANS_CCTV_BASE}d11/cctv/cctvStatusD11.json`,
 } as const;
 const OVERPASS_EDGE_URL = "https://tiles.geolibre.app/overpass";
 const OVERPASS_MAX_REQUEST_BYTES = 20_000;
@@ -67,6 +84,7 @@ const aircraftCaches = new Map<
   keyof typeof AIRCRAFT_UPSTREAMS,
   { body: Buffer; expiresAt: number }
 >();
+const transitCaches = new Map<string, { body: Buffer; expiresAt: number }>();
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -553,6 +571,60 @@ export async function proxyAircraftRequestGuarded(
   res.end(entry.body);
 }
 
+/**
+ * Fixed, bounded GTFS-Realtime relays for local development.
+ *
+ * Status codes mirror `handleTransitFeed` in the edge worker — 404 for an
+ * unregistered provider, 502 for any upstream failure — so tooling that reads
+ * them sees the same shape in dev and production.
+ */
+export async function proxyTransitRequestGuarded(
+  feedId: string,
+  res: ServerResponse,
+): Promise<void> {
+  if (!Object.hasOwn(TRANSIT_UPSTREAMS, feedId)) {
+    res.statusCode = 404;
+    res.setHeader("content-type", "text/plain");
+    res.end("Unknown transit provider");
+    return;
+  }
+  let entry = transitCaches.get(feedId);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    const upstream = TRANSIT_UPSTREAMS[feedId as keyof typeof TRANSIT_UPSTREAMS];
+    const response = await fetchWithGuard(upstream, {
+      headers: {
+        accept: "application/x-protobuf,application/octet-stream",
+        "user-agent": "GeoLibre-Transit-Proxy/1.0 (+https://geolibre.org)",
+      },
+    });
+    if (!response.ok) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end(`Transit provider returned HTTP ${response.status}`);
+      return;
+    }
+    const body = await readBodyWithLimit(response, TRANSIT_MAX_BODY_BYTES);
+    if (body.byteLength === 0) {
+      res.statusCode = 502;
+      res.setHeader("content-type", "text/plain");
+      res.end("Transit provider returned an empty response");
+      return;
+    }
+    const cacheTtlMs = feedId === "ovapi-nl" ? OVAPI_TRANSIT_CACHE_TTL_MS : TRANSIT_CACHE_TTL_MS;
+    entry = { body, expiresAt: Date.now() + cacheTtlMs };
+    transitCaches.set(feedId, entry);
+  }
+  res.statusCode = 200;
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader(
+    "cache-control",
+    feedId === "ovapi-nl" ? "public, max-age=60" : "public, max-age=15",
+  );
+  res.setHeader("content-type", "application/x-protobuf");
+  res.setHeader("content-length", String(entry.body.byteLength));
+  res.end(entry.body);
+}
+
 /** Normalize ADSBDB's ordinary not-found response so it stays out of diagnostics. */
 export async function proxyAdsbdbAircraftRequestGuarded(
   icao: string,
@@ -662,6 +734,23 @@ export async function proxyNswCctvFrameRequestGuarded(
   });
 }
 
+/** Fixed, bounded image relay for Caltrans public traffic-camera snapshots. */
+export async function proxyCaltransCctvFrameRequestGuarded(
+  district: string,
+  slug: string,
+  res: ServerResponse,
+): Promise<void> {
+  if (!/^(?:3|4|7|11)$/.test(district) || !/^[a-z0-9-]{1,100}$/i.test(slug)) {
+    res.statusCode = 400;
+    res.end("Invalid Caltrans camera id");
+    return;
+  }
+  await proxyCctvFrameRequestGuarded(
+    `${CALTRANS_CCTV_BASE}d${district}/cctv/image/${slug}/${slug}.jpg`,
+    res,
+  );
+}
+
 /** Fixed, bounded JSON relay for public camera catalogs without browser CORS. */
 export async function proxyCctvCatalogRequestGuarded(
   provider: string,
@@ -673,7 +762,9 @@ export async function proxyCctvCatalogRequestGuarded(
     return;
   }
   const url = CCTV_CATALOG_URLS[provider as keyof typeof CCTV_CATALOG_URLS];
-  const response = await fetchWithGuard(url, { headers: { accept: "application/json" } });
+  const response = await fetchWithGuard(url, {
+    headers: { accept: "application/json" },
+  });
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     res.statusCode = 502;
@@ -682,10 +773,17 @@ export async function proxyCctvCatalogRequestGuarded(
   }
   const body = await readBodyWithLimit(response, 4 * 1024 * 1024);
   try {
-    const payload = JSON.parse(body.toString("utf8")) as { features?: unknown } | unknown[];
+    const payload = JSON.parse(body.toString("utf8")) as
+      | { features?: unknown; data?: unknown }
+      | unknown[];
     const features =
       payload && typeof payload === "object" && !Array.isArray(payload) ? payload.features : null;
-    const valid = provider === "nsw" ? Array.isArray(features) : Array.isArray(payload);
+    const valid =
+      provider === "nsw"
+        ? Array.isArray(features)
+        : provider.startsWith("caltrans-")
+          ? !Array.isArray(payload) && Array.isArray(payload.data)
+          : Array.isArray(payload);
     if (!valid) throw new Error();
   } catch {
     res.statusCode = 502;

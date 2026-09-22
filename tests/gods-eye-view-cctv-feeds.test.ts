@@ -3,9 +3,11 @@ import { describe, it } from "node:test";
 import {
   CCTV_CATALOG_FAILURE_CACHE_MS,
   cctvCamerasToCzml,
+  cctvPreviewsVisibleAtZoom,
   fetchCctvCzml,
   normalizeAustinCameras,
   normalizeCalgaryCameras,
+  normalizeCaltransCameras,
   normalizeDriveBcCameras,
   normalizeFintrafficCameras,
   normalizeOntarioCameras,
@@ -71,8 +73,16 @@ const ontario = [
     Latitude: 42.9143,
     Longitude: -78.958,
     Views: [
-      { Url: "https://511on.ca/map/Cctv/2", Status: "Enabled", Description: "Looking Down" },
-      { Url: "https://511on.ca/map/Cctv/1", Status: "Enabled", Description: "Toronto Bound" },
+      {
+        Url: "https://511on.ca/map/Cctv/2",
+        Status: "Enabled",
+        Description: "Looking Down",
+      },
+      {
+        Url: "https://511on.ca/map/Cctv/1",
+        Status: "Enabled",
+        Description: "Toronto Bound",
+      },
     ],
   },
 ];
@@ -102,7 +112,36 @@ const nsw = {
   ],
 };
 
+const caltrans = {
+  data: [
+    {
+      cctv: {
+        inService: "true",
+        location: {
+          district: "4",
+          locationName: "TV102 -- I-580 : West of SR-24",
+          longitude: "-122.27291",
+          latitude: "37.82539",
+        },
+        imageData: {
+          static: {
+            currentImageUpdateFrequency: "5",
+            currentImageURL:
+              "https://cwwp2.dot.ca.gov/data/d4/cctv/image/TV102i580WestOfSR24/TV102i580WestOfSR24.jpg",
+          },
+        },
+      },
+    },
+  ],
+};
+
 describe("God's Eye View CCTV feeds", () => {
+  it("shows ambient previews only above zoom 13", () => {
+    assert.equal(cctvPreviewsVisibleAtZoom(null), false);
+    assert.equal(cctvPreviewsVisibleAtZoom(13), false);
+    assert.equal(cctvPreviewsVisibleAtZoom(13.0001), true);
+  });
+
   it("normalizes pinned TfL, Austin, Calgary, and Fintraffic frame sources", () => {
     assert.equal(normalizeTflCameras(tfl)[0].id, "tfl-00001.00001");
     assert.equal(
@@ -164,6 +203,20 @@ describe("God's Eye View CCTV feeds", () => {
     assert.match(fallback.name, /^Live Traffic NSW Camera /);
   });
 
+  it("normalizes pinned Caltrans frame sources", () => {
+    const edge = normalizeCaltransCameras(caltrans, false)[0];
+    assert.equal(edge.provider, "Caltrans District 4");
+    assert.equal(
+      edge.snapshotUrl,
+      "https://tiles.geolibre.app/cctv/caltrans/4/TV102i580WestOfSR24.jpg",
+    );
+    assert.equal(edge.refreshMs, 10_000, "very fast upstream cadences are bounded");
+    assert.equal(
+      normalizeCaltransCameras(caltrans, true)[0].snapshotUrl,
+      "http://localhost/cctv/caltrans/4/TV102i580WestOfSR24.jpg",
+    );
+  });
+
   it("rejects off-host and inactive camera records", () => {
     assert.deepEqual(
       normalizeTflCameras([
@@ -180,15 +233,26 @@ describe("God's Eye View CCTV feeds", () => {
     assert.deepEqual(
       normalizeAustinCameras([
         { ...austin[0], camera_status: "REMOVED" },
-        { ...austin[0], camera_id: "87", location: { type: "Point", coordinates: [-80, 25] } },
-        { ...austin[0], camera_id: "88", location: { type: "LineString", coordinates: [] } },
+        {
+          ...austin[0],
+          camera_id: "87",
+          location: { type: "Point", coordinates: [-80, 25] },
+        },
+        {
+          ...austin[0],
+          camera_id: "88",
+          location: { type: "LineString", coordinates: [] },
+        },
       ]),
       [],
     );
     assert.deepEqual(
       normalizeCalgaryCameras([
         { ...calgary[0], camera_url: { url: "https://example.com/loc86.jpg" } },
-        { ...calgary[0], camera_url: { url: "https://trafficcam.calgary.ca/loc12345.jpg" } },
+        {
+          ...calgary[0],
+          camera_url: { url: "https://trafficcam.calgary.ca/loc12345.jpg" },
+        },
       ]),
       [],
     );
@@ -197,7 +261,10 @@ describe("God's Eye View CCTV feeds", () => {
         features: [
           {
             ...fintraffic.features[0],
-            properties: { ...fintraffic.features[0].properties, collectionStatus: "REMOVED" },
+            properties: {
+              ...fintraffic.features[0].properties,
+              collectionStatus: "REMOVED",
+            },
           },
         ],
       }),
@@ -218,7 +285,10 @@ describe("God's Eye View CCTV feeds", () => {
         features: [
           {
             ...nsw.features[0],
-            properties: { ...nsw.features[0].properties, href: "https://example.com/camera.jpg" },
+            properties: {
+              ...nsw.features[0].properties,
+              href: "https://example.com/camera.jpg",
+            },
           },
         ],
       }),
@@ -234,23 +304,49 @@ describe("God's Eye View CCTV feeds", () => {
     );
     assert.deepEqual(
       normalizeFintrafficCameras({
-        features: [{ ...fintraffic.features[0], geometry: { coordinates: [24.94, false] } }],
+        features: [
+          {
+            ...fintraffic.features[0],
+            geometry: { coordinates: [24.94, false] },
+          },
+        ],
       }),
       [],
     );
   });
 
-  it("creates refreshable image billboards and an image popup property", () => {
+  it("creates camera previews with a high-contrast badge and refreshable popup", () => {
     const camera = normalizeTflCameras(tfl)[0];
     const result = cctvCamerasToCzml([camera], 120_000);
     const packet = result.packets[1] as {
-      billboard: { image: string; width: number };
+      billboard: { image: string; width: number; pixelOffset: { cartesian2: number[] } };
+      label: { text: string; backgroundColor: { rgba: number[] } };
+      point?: unknown;
       properties: { snapshot: string };
     };
     assert.match(packet.billboard.image, /geolibre_frame=2$/);
-    assert.equal(packet.billboard.width, 80);
+    assert.equal(packet.billboard.width, 96);
+    assert.deepEqual(packet.billboard.pixelOffset.cartesian2, [0, -24]);
+    assert.equal(packet.label.text, "CAM");
+    assert.deepEqual(packet.label.backgroundColor.rgba, [34, 211, 238, 255]);
+    assert.equal(packet.point, undefined);
     assert.equal(packet.properties.snapshot, packet.billboard.image);
     assert.equal(result.attributes.features[0].properties?.provider, "Transport for London");
+  });
+
+  it("keeps camera anchors but hides preview billboards at overview zooms", () => {
+    const camera = normalizeTflCameras(tfl)[0];
+    const result = cctvCamerasToCzml([camera], 120_000, false);
+    const packet = result.packets[1] as {
+      billboard?: unknown;
+      label?: unknown;
+      point: { pixelSize: number };
+      properties: { snapshot: string };
+    };
+    assert.equal(packet.billboard, undefined);
+    assert.equal(packet.label, undefined);
+    assert.equal(packet.point.pixelSize, 18);
+    assert.match(packet.properties.snapshot, /geolibre_frame=2$/);
   });
 
   it("stops reading a chunked catalog once it crosses the byte ceiling", async () => {
@@ -292,10 +388,13 @@ describe("God's Eye View CCTV feeds", () => {
         fetch: fetcher,
         nowMs: 60_000,
       });
-      assert.equal(requested.length, 7, "immediate repeats use every catalog cache");
+      assert.equal(requested.length, 11, "immediate repeats use every catalog cache");
       currentTime += CCTV_CATALOG_FAILURE_CACHE_MS + 1;
-      await fetchCctvCzml([-0.2, 51.45, 0, 51.65], { fetch: fetcher, nowMs: 120_000 });
-      assert.equal(requested.length, 8, "failed catalogs retry after the shorter failure TTL");
+      await fetchCctvCzml([-0.2, 51.45, 0, 51.65], {
+        fetch: fetcher,
+        nowMs: 120_000,
+      });
+      assert.equal(requested.length, 12, "failed catalogs retry after the shorter failure TTL");
       assert.equal(result.attributes.features.length, 1);
       assert.equal(result.attributes.features[0].properties?.provider, "Transport for London");
       assert.notEqual(

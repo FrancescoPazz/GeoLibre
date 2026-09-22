@@ -109,14 +109,14 @@ Give it a directory meant for maps, not your home directory.
 
 ### Editing
 
-| Tool                    | What it does                                                                                    |
-| ----------------------- | ----------------------------------------------------------------------------------------------- |
-| `update_layer`          | Rename, show/hide, set opacity, or reorder.                                                     |
-| `remove_layer`          | Drop a layer.                                                                                   |
-| `style_layer`           | Merge style keys (`fillColor`, `strokeWidth`, `circleRadius`, …).                               |
-| `set_layer_popup`       | Choose the fields a click popup shows, their labels and formats, and an optional hover tooltip. |
-| `classify_layer`        | Build a graduated choropleth from a numeric column.                                             |
-| `list_layer_properties` | List a layer's feature properties with sample values.                                           |
+| Tool                    | What it does                                                                                                                |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `update_layer`          | Rename, show/hide, set opacity, or reorder.                                                                                 |
+| `remove_layer`          | Drop a layer.                                                                                                               |
+| `style_layer`           | Merge style keys (`fillColor`, `strokeWidth`, `circleRadius`, …).                                                           |
+| `set_layer_popup`       | Choose the fields a click popup shows, their labels and formats, its width and image height, and an optional hover tooltip. |
+| `classify_layer`        | Build a graduated choropleth from a numeric column.                                                                         |
+| `list_layer_properties` | List a layer's feature properties with sample values.                                                                       |
 
 Layers are addressed by id **or** by display name, so a client can work from
 what `describe_project` showed it without tracking UUIDs.
