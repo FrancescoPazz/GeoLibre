@@ -429,7 +429,11 @@
       "kindImagery": "Görüntü",
       "altitudeOffset": "Yükseklik kaydırması (m)",
       "quickPicks": "Hızlı seçimler",
+      "quickPicksPlaceholder": "Bir varlık seçin…",
+      "quickPicksGlobal": "Her ion hesabında bulunur",
+      "quickPicksDepot": "Asset Depot örnekleri",
       "hint": "Varlık kimliklerini ion.cesium.com adresindeki My Assets altında bulabilirsiniz. Varlık, Ayarlar'da yapılandırılan belirteçle paylaşılmış olmalıdır.",
+      "depotHint": "Asset Depot örnekleri yalnızca ion.cesium.com → Asset Depot üzerinden hesabınıza ekledikten sonra yayınlanır.",
       "errorAssetId": "Bir Cesium Ion varlık kimliği girin (pozitif bir tam sayı).",
       "errorAltitude": "Yükseklik kaydırmasını metre cinsinden bir sayı olarak girin.",
       "tokenMissing": "Yapılandırılmış bir Cesium Ion belirteci yok. Ayarlar → Ortam değişkenleri (VITE_CESIUM_TOKEN) altından bir tane ekleyin, aksi halde varlık yüklenemez."
@@ -977,6 +981,9 @@
     "pmtiles": {
       "errorUrl": "Geçerli bir HTTP veya HTTPS PMTiles URL’si girin.",
       "errorMlt": "ArcGIS, MLT değil MVT vektör karoları gerektirir."
+    },
+    "lidar": {
+      "errorUrl": "Geçerli bir HTTP veya HTTPS LiDAR URL’si girin."
     },
     "zarr": {
       "errorUrl": "Geçerli bir HTTP veya HTTPS Zarr URL’si girin.",
@@ -4691,6 +4698,10 @@
       "errorStartSidecar": "GeoLibre sidecar'ı başlatılamadı.",
       "errorStopSidecar": "GeoLibre sidecar'ı durdurulamadı.",
       "noToolsFound": "Araç bulunamadı.",
+      "searchToolsByMeaning": "Araçları ara veya bir görev tanımla",
+      "searchingByMeaning": "Katalog anlama göre aranıyor",
+      "bestMatches": "En iyi eşleşmeler",
+      "otherMatches": "Diğer eşleşmeler",
       "noParameters": "Bu aracın parametresi yok.",
       "noOutput": "Henüz çıktı yok.",
       "enabled": "Etkin",

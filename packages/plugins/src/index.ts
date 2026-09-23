@@ -68,6 +68,11 @@ export {
 } from "./toolbar-menu-label";
 export { maplibreLayerControlPlugin } from "./plugins/layer-control";
 export { getStyleMap } from "./plugins/style-map";
+export {
+  createAnnotationMarker,
+  type AnnotationMarker,
+  type AnnotationMarkerOptions,
+} from "./plugins/annotation-marker";
 export { osmBasemapPlugin } from "./plugins/osm-basemap";
 export { cartoLightPlugin } from "./plugins/carto-light";
 export {
@@ -135,6 +140,7 @@ export {
   openLegendPanelWithItems,
   LIDAR_SOURCE_KIND,
   openLidarLayerPanel,
+  addLidarLayerFromUrl,
   restoreLidarLayers,
   openMeasurePanel,
   openMinimapPanel,

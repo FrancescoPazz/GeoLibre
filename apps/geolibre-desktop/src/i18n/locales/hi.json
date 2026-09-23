@@ -429,7 +429,11 @@
       "kindImagery": "इमेजरी",
       "altitudeOffset": "ऊँचाई ऑफ़सेट (मी)",
       "quickPicks": "त्वरित चयन",
+      "quickPicksPlaceholder": "एक एसेट चुनें…",
+      "quickPicksGlobal": "हर ion खाते में शामिल",
+      "quickPicksDepot": "Asset Depot नमूने",
       "hint": "एसेट id ion.cesium.com पर My Assets के अंतर्गत मिलते हैं। एसेट को सेटिंग्स में कॉन्फ़िगर किए गए टोकन के साथ साझा किया गया होना चाहिए।",
+      "depotHint": "Asset Depot नमूने तभी स्ट्रीम होते हैं जब आप उन्हें ion.cesium.com → Asset Depot से अपने खाते में जोड़ते हैं।",
       "errorAssetId": "एक Cesium Ion एसेट id दर्ज करें (एक धनात्मक पूर्ण संख्या)।",
       "errorAltitude": "ऊँचाई ऑफ़सेट को मीटर की संख्या के रूप में दर्ज करें।",
       "tokenMissing": "कोई Cesium Ion टोकन कॉन्फ़िगर नहीं है। सेटिंग्स → एनवायरनमेंट वेरिएबल (VITE_CESIUM_TOKEN) में एक जोड़ें, अन्यथा एसेट लोड नहीं होगा।"
@@ -977,6 +981,9 @@
     "pmtiles": {
       "errorUrl": "एक मान्य HTTP या HTTPS PMTiles URL दर्ज करें।",
       "errorMlt": "ArcGIS को MVT वेक्टर टाइलों की आवश्यकता है, MLT की नहीं।"
+    },
+    "lidar": {
+      "errorUrl": "एक मान्य HTTP या HTTPS LiDAR URL दर्ज करें।"
     },
     "zarr": {
       "errorUrl": "एक मान्य HTTP या HTTPS Zarr URL दर्ज करें।",
@@ -4691,6 +4698,10 @@
       "errorStartSidecar": "GeoLibre साइडकार शुरू नहीं हो सका।",
       "errorStopSidecar": "GeoLibre साइडकार रोका नहीं जा सका।",
       "noToolsFound": "कोई टूल नहीं मिला।",
+      "searchToolsByMeaning": "टूल खोजें या कोई कार्य बताएं",
+      "searchingByMeaning": "अर्थ के आधार पर कैटलॉग खोजा जा रहा है",
+      "bestMatches": "सर्वोत्तम मिलान",
+      "otherMatches": "अन्य मिलान",
       "noParameters": "इस टूल में कोई पैरामीटर नहीं है।",
       "noOutput": "अभी कोई आउटपुट नहीं।",
       "enabled": "सक्षम",

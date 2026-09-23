@@ -6,6 +6,7 @@ import {
   compileLayerFilters,
   czmlSource,
   DEFAULT_LAYER_STYLE,
+  extrusionColorValue,
   geojsonHasZCoordinates,
   getCesiumIonToken,
   isCzmlLayer,
@@ -50,8 +51,10 @@ import {
 } from "./cesium-points";
 import {
   hasRegisteredProtocol,
+  mercatorBbox,
   ProtocolImageryProvider,
   protocolScheme,
+  quadkey,
   webMercatorRectangle,
 } from "./cesium-protocol-imagery";
 import {
@@ -83,6 +86,7 @@ import type {
   ImageryProvider,
   PointPrimitiveCollection,
   PointPrimitive,
+  Rectangle,
   Resource,
   TilingScheme,
 } from "@cesium/engine";
@@ -112,6 +116,19 @@ const SELECTED_ORBIT_STEPS = 180;
 
 /** Ground metres one fill-pattern tile spans on a draped polygon. */
 const PATTERN_TILE_METERS = 20;
+
+/** Flight time for a zoom-to-layer, matching the engine's own fits. */
+const ZOOM_TO_LAYER_SECONDS = 0.8;
+
+/**
+ * Entry kinds whose handle is one of the targets `Viewer.flyTo` frames. It
+ * reads their extent for us — a tileset's bounding sphere, an imagery layer's
+ * rectangle, a data source's entities — which is the whole reason a fit goes
+ * through the handle rather than the store. The two point kinds are left out:
+ * a `PointPrimitiveCollection` is not a flyTo target, and those layers carry
+ * bounds in the store anyway.
+ */
+const FLY_TO_KINDS = new Set<EntryKind>(["imagery", "geojson", "kml", "czml", "3dtiles"]);
 
 /** The subset of a Cesium `Event` the camera watch needs. */
 interface CameraEvent {
@@ -368,6 +385,12 @@ export function extractTimeFilterDate(filter: unknown): Date | null {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value ? value : undefined;
+}
+
+/** A layer's attribution, escaped for a provider's `credit` option. */
+function layerCredit(layer: GeoLibreLayer): string | undefined {
+  const attribution = str(layer.source.attribution);
+  return attribution ? escapeCreditHtml(attribution) : undefined;
 }
 
 /** Treat project attribution as text before handing it to Cesium's HTML credit sink. */
@@ -831,6 +854,8 @@ function needsRebuild(prev: GeoLibreLayer, next: GeoLibreLayer): boolean {
         prev.source.maxzoom !== next.source.maxzoom ||
         prev.source.minzoom !== next.source.minzoom ||
         str(prev.source.url) !== str(next.source.url) ||
+        // Provider credits are fixed at construction.
+        str(prev.source.attribution) !== str(next.source.attribution) ||
         str(prev.metadata?.sourceKind) !== str(next.metadata?.sourceKind) ||
         str(prev.sourcePath) !== str(next.sourcePath) ||
         str(prev.metadata?.arcgisSublayers) !== str(next.metadata?.arcgisSublayers) ||
@@ -927,6 +952,13 @@ export interface CesiumLayerSyncDeps {
    * control-managed vector layers; omitted, the discovery is skipped.
    */
   onTilesetFields?: (layerId: string, fields: string[]) => void;
+  /**
+   * Reports a layer that failed to load, so the app can show it the way the 2D
+   * renderers show theirs (the Diagnostics panel). Without this a failure is
+   * invisible: the record stays in the Layers panel and the globe simply draws
+   * nothing — the shape an Ion asset takes when the account cannot stream it.
+   */
+  onLayerError?: (error: { layerId: string; layerName: string; message: string }) => void;
 }
 
 async function readSharedPMTilesHeader(url: string): Promise<PMTilesRasterHeader | undefined> {
@@ -1428,6 +1460,57 @@ export class CesiumLayerSync {
 
   private readonly entries = new Map<string, LayerEntry>();
   private scratchBoundingSphere?: BoundingSphere;
+  /** Layer whose fit is waiting for its Cesium object to finish loading. */
+  private pendingZoomLayerId: string | null = null;
+
+  /**
+   * Fly the camera to a layer's own extent, for the layers that have no bounds
+   * in the store: an Ion asset, a tileset by URL, CZML, KML. Their extent is a
+   * property of the loaded Cesium object (a tileset's bounding sphere, an
+   * imagery layer's rectangle, a data source's entities), so `getLayerBounds`
+   * has nothing to offer and `CesiumEngine.fitLayer` hands the fit here.
+   *
+   * A layer added a moment ago has no handle yet, so the request is remembered
+   * and runs when that entry finishes loading. Only one is kept: a second
+   * request replaces the first rather than queueing a flight behind it.
+   *
+   * @param layerId - The store id of the layer to frame.
+   */
+  zoomToLayer(layerId: string): void {
+    this.pendingZoomLayerId = layerId;
+    const entry = this.entries.get(layerId);
+    if (entry) this.flushPendingZoom(entry);
+  }
+
+  /** Runs a pending {@link zoomToLayer} once `entry` has something to fly to. */
+  private flushPendingZoom(entry: LayerEntry): void {
+    if (this.pendingZoomLayerId !== entry.layer.id) return;
+    if (this.flyToHandle(entry)) this.pendingZoomLayerId = null;
+  }
+
+  /**
+   * Fly to whatever `entry` put in the scene. Returns false when there is
+   * nothing to frame yet (still loading, already removed, or a handle kind
+   * that carries no extent), so the caller can leave the request pending.
+   */
+  private flyToHandle(entry: LayerEntry): boolean {
+    const handle = entry.handle;
+    if (!handle || entry.cancelled || !FLY_TO_KINDS.has(entry.kind)) return false;
+    const viewer = this.viewer;
+    // An I3S scene layer is a `3dtiles` entry, but an I3SDataProvider is not a
+    // target `Viewer.flyTo` accepts; it publishes its footprint as a rectangle.
+    const extent = (handle as { extent?: Rectangle }).extent;
+    if (extent) {
+      viewer.camera.flyTo({ destination: extent, duration: ZOOM_TO_LAYER_SECONDS });
+      return true;
+    }
+    void Promise.resolve(
+      viewer.flyTo(handle as ImageryLayer | DataSource | Cesium3DTileset, {
+        duration: ZOOM_TO_LAYER_SECONDS,
+      }),
+    ).catch(() => {});
+    return true;
+  }
 
   getRenderStatus(): { pending: string[]; errors: string[] } {
     const pending: string[] = [];
@@ -2065,13 +2148,31 @@ export class CesiumLayerSync {
     const kind = entryKind(layer);
     const entry: LayerEntry = { kind, layer, handle: null, cancelled: false };
     this.entries.set(layer.id, entry);
-    if (kind === "imagery") void this.createImagery(entry);
-    else if (kind === "geojson") void this.createGeoJson(entry);
-    else if (kind === "kml") void this.createKml(entry);
-    else if (kind === "czml") void this.createCzml(entry);
-    else if (kind === "pointcloud") void this.createPointCloud(entry);
+    let created: Promise<void> | null = null;
+    if (kind === "imagery") created = this.createImagery(entry);
+    else if (kind === "geojson") created = this.createGeoJson(entry);
+    else if (kind === "kml") created = this.createKml(entry);
+    else if (kind === "czml") created = this.createCzml(entry);
+    else if (kind === "pointcloud") created = this.createPointCloud(entry);
     else if (kind === "points") this.createPointBatch(entry);
-    else void this.createTileset(entry);
+    else created = this.createTileset(entry);
+    // Every create funnels through here, so this is where a fit requested
+    // before the handle existed runs (see zoomToLayer) and where a load
+    // failure is reported.
+    if (created) void created.then(() => this.settleEntry(entry));
+    else this.settleEntry(entry);
+  }
+
+  /** Runs the once-loaded work for `entry`: a pending fit, or a load failure. */
+  private settleEntry(entry: LayerEntry): void {
+    this.flushPendingZoom(entry);
+    if (entry.loadError && !entry.cancelled) {
+      this.deps.onLayerError?.({
+        layerId: entry.layer.id,
+        layerName: entry.layer.name,
+        message: entry.loadError,
+      });
+    }
   }
 
   /**
@@ -2295,6 +2396,7 @@ export class CesiumLayerSync {
             styles: str(layer.source.styles) ?? "",
             version: str(layer.source.version) ?? "1.1.1",
           },
+          credit: layerCredit(layer),
         });
       } else if (wmtsCaps) {
         const url = wmtsCaps.url;
@@ -2339,6 +2441,7 @@ export class CesiumLayerSync {
           minimumLevel: Number.isFinite(minLevel) ? minLevel : undefined,
           tilingScheme,
           tileMatrixLabels,
+          credit: layerCredit(layer),
         });
       } else if (isCogLayer(layer)) {
         // The WASM tiler renders the tiles itself (issue #2283), so neither
@@ -2370,7 +2473,7 @@ export class CesiumLayerSync {
           rectangle,
           minimumLevel: Number.isFinite(header?.minZoom) ? header?.minZoom : undefined,
           maximumLevel: Number.isFinite(header?.maxZoom) ? header?.maxZoom : undefined,
-          credit: str(layer.source.attribution),
+          credit: layerCredit(layer),
         });
       } else {
         const url = firstTile(layer);
@@ -2378,6 +2481,17 @@ export class CesiumLayerSync {
         const maxLevel = Number(layer.source.maxzoom);
         const minLevel = Number(layer.source.minzoom);
         const scheme = protocolScheme(url);
+        const bounds = layer.source.bounds;
+        const rectangle =
+          Array.isArray(bounds) &&
+          bounds.length === 4 &&
+          bounds.every((v) => typeof v === "number" && Number.isFinite(v))
+            ? webMercatorRectangle(Cesium, bounds as [number, number, number, number])
+            : undefined;
+        // The tile size drives Cesium's level selection the way it drives
+        // MapLibre's, so a 512 px source fetches the same zoom on both.
+        const tileSize = Number(layer.source.tileSize);
+        const tileWidth = Number.isFinite(tileSize) && tileSize > 0 ? tileSize : undefined;
         if (scheme) {
           // A custom-protocol template (local MBTiles, the desktop's native
           // XYZ/WMS fetcher, a KML super-overlay, the COG DEM): the tiles come
@@ -2387,17 +2501,6 @@ export class CesiumLayerSync {
           // nothing.
           if (!hasRegisteredProtocol(scheme))
             throw new Error(`no MapLibre protocol handler registered for "${scheme}://"`);
-          const bounds = layer.source.bounds;
-          const rectangle =
-            Array.isArray(bounds) &&
-            bounds.length === 4 &&
-            bounds.every((v) => typeof v === "number" && Number.isFinite(v))
-              ? webMercatorRectangle(Cesium, bounds as [number, number, number, number])
-              : undefined;
-          // The tile size drives Cesium's level selection the way it drives
-          // MapLibre's, so a 512 px source fetches the same zoom on both.
-          const tileSize = Number(layer.source.tileSize);
-          const tileWidth = Number.isFinite(tileSize) && tileSize > 0 ? tileSize : undefined;
           provider = new ProtocolImageryProvider(Cesium, {
             template: url,
             scheme: layer.source.scheme === "tms" ? "tms" : "xyz",
@@ -2406,14 +2509,30 @@ export class CesiumLayerSync {
             rectangle,
             maximumLevel: Number.isFinite(maxLevel) ? maxLevel : undefined,
             minimumLevel: Number.isFinite(minLevel) ? minLevel : undefined,
-            credit: str(layer.source.attribution),
+            credit: layerCredit(layer),
           });
         } else {
-          const resource = makeResource(url);
+          let finalUrl = url;
+          if (layer.source.scheme === "tms") {
+            finalUrl = finalUrl.replace(/\{y\}/g, "{-y}");
+          }
+          const resource = makeResource(finalUrl);
           provider = new Cesium.UrlTemplateImageryProvider({
             url: resource,
+            tileWidth,
+            tileHeight: tileWidth,
+            rectangle,
             maximumLevel: Number.isFinite(maxLevel) ? maxLevel : undefined,
             minimumLevel: Number.isFinite(minLevel) ? minLevel : undefined,
+            credit: layerCredit(layer),
+            customTags: {
+              "bbox-epsg-3857": (_p: unknown, x: number, y: number, level: number) =>
+                mercatorBbox(level, x, y),
+              quadkey: (_p: unknown, x: number, y: number, level: number) => quadkey(level, x, y),
+              "-y": (_p: unknown, _x: number, y: number, level: number) =>
+                String(2 ** level - 1 - y),
+              ratio: () => "",
+            },
           });
         }
       }
@@ -2639,7 +2758,11 @@ export class CesiumLayerSync {
             ? (style.extrusionHeightScale as number)
             : 1;
           const base = Number.isFinite(style.extrusionBase) ? (style.extrusionBase as number) : 0;
-          const extColorStr = style.extrusionColor || style.fillColor || "#3b82f6";
+          const extColorVal = extrusionColorValue(style);
+          const extColorStr =
+            typeof extColorVal === "string"
+              ? extColorVal
+              : style.extrusionColor || style.fillColor || "#3b82f6";
 
           let heightEvaluator: ((f: Feature) => unknown) | undefined;
           if (style.extrusionAdvancedStyleEnabled && style.extrusionHeightExpression) {
@@ -2650,8 +2773,14 @@ export class CesiumLayerSync {
           }
 
           let colorEvaluator: ((f: Feature) => unknown) | undefined;
-          if (style.extrusionAdvancedStyleEnabled && style.extrusionColorExpression) {
-            const res = compileFeatureExpression(style.extrusionColorExpression, {
+          let colorExprStr: string | null = null;
+          if (typeof extColorVal !== "string") {
+            colorExprStr = JSON.stringify(extColorVal);
+          } else if (style.extrusionAdvancedStyleEnabled && style.extrusionColorExpression) {
+            colorExprStr = style.extrusionColorExpression;
+          }
+          if (colorExprStr) {
+            const res = compileFeatureExpression(colorExprStr, {
               expectedType: "color",
             });
             if (res.ok && res.evaluate) colorEvaluator = res.evaluate;
@@ -3388,10 +3517,16 @@ export class CesiumLayerSync {
     // white+alpha only fades them.
     const marker = Cesium.Color.WHITE.withAlpha(opacity);
     const isExtruded = Boolean(style.extrusionEnabled);
-    const extColorStr = style.extrusionColor || style.fillColor || "#3b82f6";
+    const extColorVal = isExtruded ? extrusionColorValue(style) : null;
+    const extColorStr =
+      typeof extColorVal === "string"
+        ? extColorVal
+        : style.extrusionColor || style.fillColor || "#3b82f6";
     const extFill = Cesium.Color.fromCssColorString(extColorStr).withAlpha(extOpacity);
     const hasColorExpr =
-      isExtruded && style.extrusionAdvancedStyleEnabled && Boolean(style.extrusionColorExpression);
+      isExtruded &&
+      (typeof extColorVal !== "string" ||
+        (style.extrusionAdvancedStyleEnabled && Boolean(style.extrusionColorExpression)));
     const arrow =
       style.lineDecoration === "arrow" &&
       Boolean(
@@ -3554,6 +3689,8 @@ export class CesiumLayerSync {
    */
   private destroyEntry(entry: LayerEntry): void {
     entry.cancelled = true;
+    // A fit still waiting on this entry has nothing left to frame.
+    if (this.pendingZoomLayerId === entry.layer.id) this.pendingZoomLayerId = null;
     entry.abort?.abort();
     entry.documentCleanup?.();
     entry.documentCleanup = undefined;

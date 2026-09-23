@@ -34,6 +34,7 @@ import { getPrimaryCesiumControlHost } from "./cesium-control-host";
 import { pickDrawingLocation, placeCesiumPin, suspendCesiumNavigation } from "./cesium-drawing";
 import { drawExtentOnCanvas } from "./extent-drawing";
 import { captureEngineImage } from "./map-capture";
+import type { MapDiagnosticEvent } from "./map-diagnostic";
 import { TerrariumTerrainProvider } from "./cesium-terrarium";
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import type { MapRenderSurface } from "./map-engine";
@@ -223,8 +224,18 @@ export interface CesiumEngineOptions {
    * and whether per-pane visibility overrides apply — see `CesiumCanvas`.
    */
   viewId?: string;
+
   /** The globe's initial look (`getGlobeAppearanceDefaults()` in `@geolibre/core`). */
   globeAppearance?: GlobeAppearance;
+
+  /**
+   * Forwards a renderer failure to the app's Diagnostics panel, the way
+   * `MapCanvas` and `MapboxCanvas` forward theirs. The globe's own failures are
+   * layer loads: an Ion asset the account cannot stream, a tileset URL that
+   * 404s, a KML that will not parse.
+   */
+  onDiagnostic?: (event: MapDiagnosticEvent) => void;
+
 }
 
 /**
@@ -349,6 +360,12 @@ export class CesiumEngine implements MapEngine {
    */
   private minZoom = 0;
   private maxZoom = 24;
+  /**
+   * A projection preference that arrived mid-morph. It is applied once that
+   * morph lands; only a deferred change is replayed, so a scene-mode picker
+   * morph is never undone by the (unchanged) stored preference.
+   */
+  private pendingProjection: MapProjection | null = null;
 
   private readonly worldTerrainAvailable: boolean;
   private readonly terrainIonAssetId: number | undefined;
@@ -374,8 +391,11 @@ export class CesiumEngine implements MapEngine {
     this.terrainIonAssetId = options.terrainIonAssetId;
     this.capabilities =
       options.viewId === undefined ? CESIUM_CAPABILITIES : CESIUM_PANE_CAPABILITIES;
+    const onDiagnostic = options.onDiagnostic;
     this.layerSync = new CesiumLayerSync(Cesium, viewer, undefined, {
       onTilesetFields: publishTilesetFields,
+      onLayerError: ({ layerName, message }) =>
+        onDiagnostic?.({ message: `${layerName}: ${message}`, source: "cesium" }),
     });
     this.terrainExaggeration = viewer.scene.verticalExaggeration ?? 1;
     if (options.globeAppearance) this.setGlobeAppearance(options.globeAppearance);
@@ -445,6 +465,9 @@ export class CesiumEngine implements MapEngine {
     return new Promise((resolve) => {
       const remove = viewer.scene.postRender.addEventListener(() => {
         remove();
+        if (this.isPrimary && !useAppStore.getState().ui.storymapPresenting) {
+          useAppStore.getState().setCameraAltitude(this.readCameraAltitude());
+        }
         resolve();
       });
       viewer.scene.requestRender();
@@ -568,7 +591,15 @@ export class CesiumEngine implements MapEngine {
 
   fitLayer(layer: GeoLibreLayer): void {
     const bounds = getLayerBounds(layer);
-    if (bounds) this.fitBounds(bounds);
+    if (bounds) {
+      this.fitBounds(bounds);
+      return;
+    }
+    // An Ion asset, a tileset by URL, CZML and KML keep no bounds in the store:
+    // their extent belongs to the Cesium object the sync loads. Hand the fit
+    // over, including for a layer added a moment ago whose object is still
+    // loading — the sync flies as soon as it has one.
+    this.layerSync.zoomToLayer(layer.id);
   }
 
   readCameraAltitude(): number | null {
@@ -588,6 +619,37 @@ export class CesiumEngine implements MapEngine {
     return carto.height - ground;
   }
 
+  /**
+   * Morph the scene to a projection preference, deferring it while another
+   * morph is running (Cesium would otherwise cut that one short).
+   *
+   * Args:
+   *   projection: The preferred projection, if any.
+   */
+  private applyProjection(projection: MapProjection | undefined): void {
+    const viewer = this.live();
+    if (!viewer || !projection) return;
+    if (this.isMorphing()) {
+      this.pendingProjection = projection;
+      return;
+    }
+    this.pendingProjection = null;
+    const scene = viewer.scene as {
+      morphTo2D?: (duration: number) => void;
+      morphTo3D?: (duration: number) => void;
+    };
+    if (projection === "mercator") {
+      // Any settled non-2D mode (3D or Columbus view) morphs to 2D.
+      if (viewer.scene.mode === this.Cesium.SceneMode.SCENE2D) return;
+      if (typeof scene.morphTo2D === "function") scene.morphTo2D(0);
+      else viewer.scene.mode = this.Cesium.SceneMode.SCENE2D;
+    } else if (projection === "globe") {
+      if (viewer.scene.mode === this.Cesium.SceneMode.SCENE3D) return;
+      if (typeof scene.morphTo3D === "function") scene.morphTo3D(0);
+      else viewer.scene.mode = this.Cesium.SceneMode.SCENE3D;
+    }
+  }
+
   /** Both flat scene modes use the projected map instead of the 3D ellipsoid. */
   readProjection(): MapProjection {
     const mode = this.live()?.scene.mode;
@@ -599,6 +661,9 @@ export class CesiumEngine implements MapEngine {
   applyMapPreferences(preferences: MapPreferences): void {
     const viewer = this.live();
     if (!viewer) return;
+
+    this.applyProjection(preferences.projection);
+
     // MapLibre's min/max zoom become camera distance limits, which is the
     // closest Cesium analogue. The latitude the conversion needs is the camera's
     // own, so the limits track the scale the user actually sees. Bounds and
@@ -629,6 +694,19 @@ export class CesiumEngine implements MapEngine {
         1,
       );
     }
+    // A projection morph is still running; `installMorphHandling` clamps once
+    // it lands.
+    if (!this.isMorphing()) this.clampCameraToZoomRange();
+  }
+
+  /**
+   * The controller limits only bound user input, so pull a camera already
+   * outside the zoom range (a saved view, or a lowered maxZoom) back inside.
+   */
+  private clampCameraToZoomRange(): void {
+    const view = this.readView();
+    const zoom = Math.min(this.maxZoom, Math.max(this.minZoom, view.zoom));
+    if (zoom !== view.zoom) void this.applyView({ ...view, zoom });
   }
 
   // ------------------------------------------------------------------- layers
@@ -1535,7 +1613,10 @@ export class CesiumEngine implements MapEngine {
     const onMorphComplete = () => {
       // The native animation owns this camera, including any terrain settling.
       this.userOwnsCamera = true;
+      this.clampCameraToZoomRange();
       this.publishCameraView();
+      // A projection preference that landed mid-morph is applied now.
+      if (this.pendingProjection) this.applyProjection(this.pendingProjection);
     };
     viewer.scene.morphComplete.addEventListener(onMorphComplete);
     this.disposers.push(() => {
@@ -1588,6 +1669,7 @@ export class CesiumEngine implements MapEngine {
     const userDriven = this.userMoved;
     this.userMoved = false;
     const store = useAppStore.getState();
+    if (store.ui.storymapPresenting) return;
     // Write only when the view actually differs from the stored camera:
     // `setMapView` has no same-camera guard in the store, and
     // `setSecondaryMapView`'s guard uses exact equality (which Cesium's lossy
@@ -1598,6 +1680,7 @@ export class CesiumEngine implements MapEngine {
       // toggle governs the secondary panes, and the primary map is the camera
       // they follow.
       if (!isSameView(view, store.mapView)) store.setMapView(view, userDriven);
+      store.setCameraAltitude(this.readCameraAltitude());
       return;
     }
     if (store.mapLayout.syncView && !isSameView(view, store.mapView)) {

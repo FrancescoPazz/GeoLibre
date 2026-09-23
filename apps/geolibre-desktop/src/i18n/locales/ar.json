@@ -445,7 +445,11 @@
       "kindImagery": "الصور",
       "altitudeOffset": "إزاحة الارتفاع (م)",
       "quickPicks": "اختيارات سريعة",
+      "quickPicksPlaceholder": "اختر أصلًا…",
+      "quickPicksGlobal": "متاح مع كل حساب ion",
+      "quickPicksDepot": "عينات Asset Depot",
       "hint": "تجد معرّفات الأصول ضمن My Assets على ion.cesium.com. يجب أن يكون الأصل مشاركًا مع الرمز المضبوط في الإعدادات.",
+      "depotHint": "لا تُبث عينات Asset Depot إلا بعد إضافتها إلى حسابك من ion.cesium.com ← Asset Depot.",
       "errorAssetId": "أدخل معرّف أصل Cesium Ion (عدد صحيح موجب).",
       "errorAltitude": "أدخل إزاحة الارتفاع كرقم بالأمتار.",
       "tokenMissing": "لم يُضبط أي رمز Cesium Ion. أضف واحدًا من الإعدادات ← متغيرات البيئة (VITE_CESIUM_TOKEN) وإلا فسيفشل تحميل الأصل."
@@ -1061,6 +1065,9 @@
     "pmtiles": {
       "errorUrl": "أدخل عنوان URL صالحًا لـ PMTiles عبر HTTP أو HTTPS.",
       "errorMlt": "يتطلب ArcGIS بلاطات متجهة بتنسيق MVT وليس MLT."
+    },
+    "lidar": {
+      "errorUrl": "أدخل عنوان URL صالحًا لـ LiDAR عبر HTTP أو HTTPS."
     },
     "zarr": {
       "errorUrl": "أدخل عنوان URL صالحًا لـ Zarr عبر HTTP أو HTTPS.",
@@ -4982,6 +4989,10 @@
       "errorStartSidecar": "تعذّر تشغيل الخدمة المساعدة لـ GeoLibre.",
       "errorStopSidecar": "تعذّر إيقاف الخدمة المساعدة لـ GeoLibre.",
       "noToolsFound": "لم يُعثر على أدوات.",
+      "searchToolsByMeaning": "البحث في الأدوات أو وصف مهمة",
+      "searchingByMeaning": "جارٍ البحث في الفهرس حسب المعنى",
+      "bestMatches": "أفضل النتائج",
+      "otherMatches": "نتائج أخرى",
       "noParameters": "لا تحتوي هذه الأداة على معاملات.",
       "noOutput": "لا يوجد ناتج بعد.",
       "enabled": "مُفعّل",

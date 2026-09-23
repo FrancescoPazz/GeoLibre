@@ -233,6 +233,71 @@ def test_wms_layer_version_defaults_to_1_1_1():
     )
 
 
+def test_wms_layer_crs_for_a_server_without_web_mercator():
+    # The Agenzia delle Entrate cadastral WMS lists only EPSG:6706, EPSG:4258
+    # and UTM zones. The template names the geographic CRS and keeps the Web
+    # Mercator placeholder, which the desktop tile protocol converts per tile.
+    layer = project.wms_layer("x", "https://e/wms", "a", crs="epsg:6706")
+    tile = layer["source"]["tiles"][0]
+    assert "SRS=EPSG%3A6706" in tile
+    assert "EPSG%3A3857" not in tile
+    assert "BBOX={bbox-epsg-3857}" in tile
+    tile = project.wms_layer("x", "https://e/wms", "a", version="1.3.0", crs="CRS:84")["source"][
+        "tiles"
+    ][0]
+    assert "CRS=CRS%3A84" in tile
+    # None keeps Web Mercator.
+    assert (
+        "SRS=EPSG%3A3857"
+        in project.wms_layer("x", "https://e/wms", "a", crs=None)["source"]["tiles"][0]
+    )
+
+
+def test_wms_layer_replaces_getmap_keys_already_in_the_endpoint():
+    # A capabilities OnlineResource often carries the whole GetMap query.
+    tile = project.wms_layer(
+        "x",
+        "https://e/wms?map=/srv/a.map&service=WMS&version=1.1.1&request=GetMap&bbox=1,2,3,4",
+        "a",
+        version="1.3.0",
+        crs="EPSG:4326",
+    )["source"]["tiles"][0]
+    lowered = tile.lower()
+    for key in ("service=", "request=", "version=", "bbox="):
+        assert lowered.count(key) == 1, key
+    assert "VERSION=1.3.0" in tile and "CRS=EPSG%3A4326" in tile
+    assert tile.startswith("https://e/wms?map=/srv/a.map&SERVICE=WMS")
+
+
+def test_wms_layer_replaces_a_percent_encoded_getmap_key():
+    tile = project.wms_layer("x", "https://e/wms?%73RS=EPSG:3857&map=a", "a", crs="EPSG:6706")[
+        "source"
+    ]["tiles"][0]
+    assert "%73RS" not in tile and tile.count("SRS=") == 1
+
+
+def test_wms_layer_replaces_a_crs_already_in_the_endpoint():
+    for key in ("SRS", "crs"):
+        tile = project.wms_layer(
+            "x", f"https://e/wms?map=/srv/a.map&{key}=EPSG:3857", "a", crs="EPSG:6706"
+        )["source"]["tiles"][0]
+        assert tile.startswith("https://e/wms?map=/srv/a.map&SERVICE=WMS")
+        assert tile.count("SRS=") == 1 and "SRS=EPSG%3A6706" in tile
+        assert "EPSG:3857" not in tile and "crs=" not in tile
+
+
+def test_wms_layer_rejects_crs84_outside_wms_1_3_0():
+    with pytest.raises(ValueError, match="needs version='1.3.0'"):
+        project.wms_layer("x", "https://e/wms", "a", crs="CRS:84")
+    assert project.wms_layer("x", "https://e/wms", "a", version="1.3.0", crs="crs:84")
+
+
+def test_wms_layer_rejects_a_crs_the_desktop_cannot_redraw():
+    # A projected CRS would need a real reprojection, not a strip redraw.
+    with pytest.raises(ValueError, match="crs must be one of"):
+        project.wms_layer("x", "https://e/wms", "a", crs="EPSG:25833")
+
+
 def test_wms_layer_transparent_false():
     layer = project.wms_layer("x", "https://e/wms", "a", transparent=False, tile_size=512)
     tile = layer["source"]["tiles"][0]

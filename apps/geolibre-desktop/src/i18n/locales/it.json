@@ -433,7 +433,11 @@
       "kindImagery": "Immagini",
       "altitudeOffset": "Scostamento di altitudine (m)",
       "quickPicks": "Scelte rapide",
+      "quickPicksPlaceholder": "Scegli un asset…",
+      "quickPicksGlobal": "Inclusi in ogni account ion",
+      "quickPicksDepot": "Esempi dell'Asset Depot",
       "hint": "Gli id asset si trovano in «My Assets» su ion.cesium.com. L'asset deve essere condiviso con il token configurato nelle Impostazioni.",
+      "depotHint": "Gli esempi dell'Asset Depot vengono trasmessi solo dopo averli aggiunti al tuo account su ion.cesium.com → Asset Depot.",
       "errorAssetId": "Inserisci un id asset di Cesium Ion (un numero intero positivo).",
       "errorAltitude": "Inserisci lo scostamento di altitudine come numero di metri.",
       "tokenMissing": "Nessun token Cesium Ion configurato. Aggiungine uno in Impostazioni → Variabili d'ambiente (VITE_CESIUM_TOKEN), altrimenti l'asset non verrà caricato."
@@ -981,6 +985,9 @@
     "pmtiles": {
       "errorUrl": "Inserisci un URL HTTP o HTTPS valido di PMTiles.",
       "errorMlt": "ArcGIS richiede tile vettoriali MVT, non MLT."
+    },
+    "lidar": {
+      "errorUrl": "Inserisci un URL HTTP o HTTPS valido di LiDAR."
     },
     "zarr": {
       "errorUrl": "Inserisci un URL HTTP o HTTPS valido di Zarr.",
@@ -5150,6 +5157,10 @@
       "errorStartSidecar": "Impossibile avviare il sidecar di GeoLibre.",
       "errorStopSidecar": "Impossibile arrestare il sidecar di GeoLibre.",
       "noToolsFound": "Nessuno strumento trovato.",
+      "searchToolsByMeaning": "Cerca strumenti o descrivi un'attività",
+      "searchingByMeaning": "Ricerca nel catalogo per significato",
+      "bestMatches": "Risultati migliori",
+      "otherMatches": "Altri risultati",
       "noParameters": "Questo strumento non ha parametri.",
       "noOutput": "Nessun output ancora.",
       "enabled": "Attivato",

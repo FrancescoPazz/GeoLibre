@@ -429,7 +429,11 @@
       "kindImagery": "Beelden",
       "altitudeOffset": "Hoogteverschuiving (m)",
       "quickPicks": "Snelle keuzes",
+      "quickPicksPlaceholder": "Kies een asset…",
+      "quickPicksGlobal": "Bij elk ion-account inbegrepen",
+      "quickPicksDepot": "Asset Depot-voorbeelden",
       "hint": "Asset-id's vindt u onder ‘My Assets’ op ion.cesium.com. De asset moet gedeeld zijn met het token dat in Instellingen is ingesteld.",
+      "depotHint": "Asset Depot-voorbeelden streamen pas nadat je ze via ion.cesium.com → Asset Depot aan je account toevoegt.",
       "errorAssetId": "Voer een Cesium Ion-asset-id in (een positief geheel getal).",
       "errorAltitude": "Voer de hoogteverschuiving in als een aantal meters.",
       "tokenMissing": "Er is geen Cesium Ion-token ingesteld. Voeg er een toe via Instellingen → Omgevingsvariabelen (VITE_CESIUM_TOKEN), anders kan de asset niet worden geladen."
@@ -977,6 +981,9 @@
     "pmtiles": {
       "errorUrl": "Voer een geldige HTTP- of HTTPS-URL voor PMTiles in.",
       "errorMlt": "ArcGIS vereist MVT-vectortegels, geen MLT."
+    },
+    "lidar": {
+      "errorUrl": "Voer een geldige HTTP- of HTTPS-URL voor LiDAR in."
     },
     "zarr": {
       "errorUrl": "Voer een geldige HTTP- of HTTPS-URL voor Zarr in.",
@@ -4691,6 +4698,10 @@
       "errorStartSidecar": "Kon de GeoLibre-sidecar niet starten.",
       "errorStopSidecar": "Kon de GeoLibre-sidecar niet stoppen.",
       "noToolsFound": "Geen gereedschappen gevonden.",
+      "searchToolsByMeaning": "Hulpmiddelen zoeken of een taak beschrijven",
+      "searchingByMeaning": "Catalogus doorzoeken op betekenis",
+      "bestMatches": "Beste overeenkomsten",
+      "otherMatches": "Overige overeenkomsten",
       "noParameters": "Dit gereedschap heeft geen parameters.",
       "noOutput": "Nog geen uitvoer.",
       "enabled": "Ingeschakeld",

@@ -1,6 +1,7 @@
 import {
   CesiumCanvas,
   type CesiumWidgetControlLabels,
+  type MapDiagnosticEvent,
   type IdentifyPopupExtras,
   type MapEngine,
 } from "@geolibre/map";
@@ -56,8 +57,12 @@ export interface PrimaryCesiumCanvasProps {
   engineRef: RefObject<MapEngine | null>;
   /** Called once the engine is live, to re-arm anything keyed to map readiness. */
   onEngineReady: () => void;
+
   /** The identify popup's footer (coordinate, height, download), from the shell. */
   identifyPopupExtras?: IdentifyPopupExtras;
+  /** Forwards a globe layer that failed to load to the Diagnostics panel. */
+  onMapDiagnosticEvent?: (event: MapDiagnosticEvent) => void;
+
 }
 
 /**
@@ -79,6 +84,7 @@ export function PrimaryCesiumCanvas({
   engineRef,
   onEngineReady,
   identifyPopupExtras,
+  onMapDiagnosticEvent,
 }: PrimaryCesiumCanvasProps) {
   const { t } = useTranslation();
   const ionToken = useCesiumIonToken();
@@ -122,6 +128,7 @@ export function PrimaryCesiumCanvas({
         controlLabels={controlLabels}
         popupCloseLabel={t("common.close")}
         identifyPopupExtras={identifyPopupExtras}
+        onMapDiagnosticEvent={onMapDiagnosticEvent}
       />
       {ionToken ? null : <CesiumTokenHint />}
     </div>

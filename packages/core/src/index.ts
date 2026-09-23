@@ -223,6 +223,7 @@ export {
   CESIUM_ION_SOURCE_KIND,
   CESIUM_OSM_BUILDINGS_ASSET_ID,
   CESIUM_BING_AERIAL_ASSET_ID,
+  CESIUM_GOOGLE_PHOTOREALISTIC_ASSET_ID,
   cesiumIonAssetId,
   cesiumIonAssetKind,
   createCesiumIonLayer,
@@ -230,6 +231,8 @@ export {
   isCesiumOnlyLayer,
   parseCesiumIonAssetId,
   type CesiumIonAssetKind,
+  type CesiumIonQuickPick,
+  type CesiumIonQuickPickGroup,
   type CesiumIonLayerOptions,
 } from "./cesium-ion";
 export {

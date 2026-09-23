@@ -437,7 +437,11 @@
       "kindImagery": "Изображения",
       "altitudeOffset": "Смещение по высоте (м)",
       "quickPicks": "Быстрый выбор",
+      "quickPicksPlaceholder": "Выберите ресурс…",
+      "quickPicksGlobal": "Доступно в любом аккаунте ion",
+      "quickPicksDepot": "Примеры из Asset Depot",
       "hint": "Id ресурсов можно найти в разделе «My Assets» на ion.cesium.com. Доступ к ресурсу должен быть открыт для токена, указанного в настройках.",
+      "depotHint": "Примеры из Asset Depot начинают передаваться только после добавления в ваш аккаунт на ion.cesium.com → Asset Depot.",
       "errorAssetId": "Введите id ресурса Cesium Ion (положительное целое число).",
       "errorAltitude": "Введите смещение по высоте числом в метрах.",
       "tokenMissing": "Токен Cesium Ion не настроен. Добавьте его в разделе Настройки → Переменные среды (VITE_CESIUM_TOKEN), иначе ресурс не загрузится."
@@ -1019,6 +1023,9 @@
     "pmtiles": {
       "errorUrl": "Введите корректный URL PMTiles по протоколу HTTP или HTTPS.",
       "errorMlt": "ArcGIS требует векторные тайлы MVT, а не MLT."
+    },
+    "lidar": {
+      "errorUrl": "Введите корректный URL LiDAR по протоколу HTTP или HTTPS."
     },
     "zarr": {
       "errorUrl": "Введите корректный URL Zarr по протоколу HTTP или HTTPS.",
@@ -4837,6 +4844,10 @@
       "errorStartSidecar": "Не удалось запустить sidecar GeoLibre.",
       "errorStopSidecar": "Не удалось остановить sidecar GeoLibre.",
       "noToolsFound": "Инструменты не найдены.",
+      "searchToolsByMeaning": "Поиск инструментов или описание задачи",
+      "searchingByMeaning": "Поиск в каталоге по смыслу",
+      "bestMatches": "Лучшие совпадения",
+      "otherMatches": "Другие совпадения",
       "noParameters": "У этого инструмента нет параметров.",
       "noOutput": "Вывода пока нет.",
       "enabled": "Включено",

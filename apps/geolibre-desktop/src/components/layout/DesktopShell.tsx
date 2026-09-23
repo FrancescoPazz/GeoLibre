@@ -614,6 +614,16 @@ export function DesktopShell({
       loading: t("map.identifyAll.loading"),
       errorLabel: t("map.identifyAll.errorLabel"),
       error: t("map.identifyAll.error"),
+      noData: t("map.identifyAll.noData"),
+      pixelReadFailed: t("map.identifyAll.pixelReadFailed"),
+      wmsFailed: t("map.identifyAll.wmsFailed"),
+      photo: {
+        photo: t("map.identifyAll.photo"),
+        noPreview: t("map.identifyAll.photoNoPreview"),
+        viewFullResolution: t("map.identifyAll.photoViewFullResolution"),
+        viewFullscreen: t("map.identifyAll.photoViewFullscreen"),
+        close: t("map.identifyAll.photoClose"),
+      },
     }),
     [t],
   );
@@ -2769,6 +2779,8 @@ export function DesktopShell({
                 <PrimaryMapboxCanvas
                   canUseRemoteElevation={hasElevationConsent}
                   engineRef={mapControllerRef}
+                  identifyAllLabels={identifyAllLabels}
+                  identifyRasterLayerAt={identifyRasterLayerAt}
                   onEngineReady={handleMapControllerReady}
                   onMapDiagnosticEvent={handleMapDiagnosticEvent}
                 />
@@ -2782,6 +2794,7 @@ export function DesktopShell({
                   engineRef={mapControllerRef}
                   onEngineReady={handleMapControllerReady}
                   identifyPopupExtras={identifyPopupExtras}
+                  onMapDiagnosticEvent={handleMapDiagnosticEvent}
                 />
               ) : (
                 <>
@@ -2794,20 +2807,6 @@ export function DesktopShell({
                     onMapDiagnosticEvent={handleMapDiagnosticEvent}
                     onControllerReady={handleMapControllerReady}
                   />
-                  <MapModeBanner mapControllerRef={mapControllerRef} />
-                  <PixelTimeSeriesControl mapControllerRef={mapControllerRef} />
-                  <NetcdfSampleMarkers
-                    mapControllerRef={mapControllerRef}
-                    mapReadyGeneration={mapReadyGeneration}
-                  />
-                  {/* Its own boundary: the cube window builds a `WebGLRenderer`,
-                  whose constructor throws outright when the browser or driver
-                  gives it no context. Sharing the map's boundary would turn a
-                  failure to draw one panel into the loss of the whole map. */}
-                  <SilentErrorBoundary label="NetCDF 3D cube">
-                    <NetcdfCubeWindow mapControllerRef={mapControllerRef} />
-                  </SilentErrorBoundary>
-                  <NetcdfCubeSetupDialog mapControllerRef={mapControllerRef} />
                   <Suspense fallback={null}>
                     <ObjectDetectionDialog mapControllerRef={mapControllerRef} />
                   </Suspense>
@@ -2818,6 +2817,23 @@ export function DesktopShell({
               )}
               {/* Renderer-neutral: these use the store or `MapEngine`, so they
                   stay available on every renderer. */}
+              <MapModeBanner mapControllerRef={mapControllerRef} />
+              <PixelTimeSeriesControl
+                mapControllerRef={mapControllerRef}
+                mapReadyGeneration={mapReadyGeneration}
+              />
+              <NetcdfSampleMarkers
+                mapControllerRef={mapControllerRef}
+                mapReadyGeneration={mapReadyGeneration}
+              />
+              {/* Its own boundary: the cube window builds a `WebGLRenderer`,
+                  whose constructor throws outright when the browser or driver
+                  gives it no context. Sharing the map's boundary would turn a
+                  failure to draw one panel into the loss of the whole map. */}
+              <SilentErrorBoundary label="NetCDF 3D cube">
+                <NetcdfCubeWindow mapControllerRef={mapControllerRef} />
+              </SilentErrorBoundary>
+              <NetcdfCubeSetupDialog mapControllerRef={mapControllerRef} />
               <RemoteCursorsOverlay
                 mapControllerRef={mapControllerRef}
                 mapReadyGeneration={mapReadyGeneration}
