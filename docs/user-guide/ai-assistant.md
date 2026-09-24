@@ -181,16 +181,16 @@ never reads any other system variable (your `PATH`, `HOME`, and the like never
 reach the app), and this allowlist is enforced in the native backend, not just
 the UI:
 
-| Group                      | Variables read from the OS environment                                               |
-| -------------------------- | ------------------------------------------------------------------------------------ |
-| Provider / model overrides | `GEOLIBRE_ASSISTANT_PROVIDER`, `GEOLIBRE_ASSISTANT_MODEL`                            |
-| Google Gemini              | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_API_KEY`                           |
-| Anthropic                  | `ANTHROPIC_API_KEY`                                                                  |
-| OpenAI                     | `OPENAI_API_KEY`                                                                     |
-| Ollama                     | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`                                                    |
-| Custom (OpenAI-compatible) | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` |
-| Web search | `TAVILY_API_KEY` |
-| [Fast path](#fast-path-for-simple-commands-optional) and [tool search](#finding-the-right-whitebox-tool-optional) | `JEV_API_KEY` |
+| Group                                                                                                             | Variables read from the OS environment                                               |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Provider / model overrides                                                                                        | `GEOLIBRE_ASSISTANT_PROVIDER`, `GEOLIBRE_ASSISTANT_MODEL`                            |
+| Google Gemini                                                                                                     | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_API_KEY`                           |
+| Anthropic                                                                                                         | `ANTHROPIC_API_KEY`                                                                  |
+| OpenAI                                                                                                            | `OPENAI_API_KEY`                                                                     |
+| Ollama                                                                                                            | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`                                                    |
+| Custom (OpenAI-compatible)                                                                                        | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` |
+| Web search                                                                                                        | `TAVILY_API_KEY`                                                                     |
+| [Fast path](#fast-path-for-simple-commands-optional) and [tool search](#finding-the-right-whitebox-tool-optional) | `JEV_API_KEY`                                                                        |
 
 **Precedence:** a value you enter in **Settings → Environment Variables** always
 wins; the OS environment only fills in the gaps. In the AI settings, any field
@@ -244,14 +244,14 @@ hosted model (or **~0.8 s** on a local one) into **~190 ms**.
 
 It covers exactly six commands:
 
-| Command | Example |
-| --- | --- |
-| Switch the basemap style | "make the basemap dark" |
-| Add a named tile basemap | "add OpenTopoMap" |
-| Show or hide a layer | "hide the rivers" |
+| Command                  | Example                                    |
+| ------------------------ | ------------------------------------------ |
+| Switch the basemap style | "make the basemap dark"                    |
+| Add a named tile basemap | "add OpenTopoMap"                          |
+| Show or hide a layer     | "hide the rivers"                          |
 | Change a layer's opacity | "set the cities layer to half transparent" |
-| Zoom to a layer | "zoom to the counties layer" |
-| Remove a layer | "drop the elevation raster" |
+| Zoom to a layer          | "zoom to the counties layer"               |
+| Remove a layer           | "drop the elevation raster"                |
 
 Everything else — querying data, geoprocessing, styling by attribute, adding
 data, running code — is classified as complex and goes to your LLM exactly as
@@ -343,12 +343,12 @@ questions go to Jev — which part of the catalog, then which tool inside it —
 the ranked answer is merged in front of the substring hits, which keep working
 unchanged. Measured over 20 raster requests:
 
-| The assistant searches for | Right tool found | Right tool listed first |
-| --- | --- | --- |
-| a keyword, substring only (before) | 19/20 | 8/20 |
-| a keyword, merged | 19/20 | **15/20** |
-| the request in plain words, substring only (before) | 0/20 | 0/20 |
-| the request in plain words, merged | **19/20** | **19/20** |
+| The assistant searches for                          | Right tool found | Right tool listed first |
+| --------------------------------------------------- | ---------------- | ----------------------- |
+| a keyword, substring only (before)                  | 19/20            | 8/20                    |
+| a keyword, merged                                   | 19/20            | **15/20**               |
+| the request in plain words, substring only (before) | 0/20             | 0/20                    |
+| the request in plain words, merged                  | **19/20**        | **19/20**               |
 
 The lookup adds about **400 ms** to a tool call the model is already waiting on,
 and like the fast path it can only add candidates: if TypeSafe is unreachable,
@@ -376,18 +376,18 @@ typed request — so it is still auditable in the transcript and still undoable.
 
 There are two ways in, and they behave differently on purpose:
 
-| Gesture | Mode | How it ends |
-| --- | --- | --- |
-| **Click the microphone** | Open mic — it keeps listening, and each finished sentence is sent on its own | Click it again |
-| **Hold Space for half a second** | Push-to-talk — one turn | Release Space |
+| Gesture                          | Mode                                                                         | How it ends    |
+| -------------------------------- | ---------------------------------------------------------------------------- | -------------- |
+| **Click the microphone**         | Open mic — it keeps listening, and each finished sentence is sent on its own | Click it again |
+| **Hold Space for half a second** | Push-to-talk — one turn                                                      | Release Space  |
 
-Push-to-talk is deliberately a *hold*. A short tap on Space still activates
+Push-to-talk is deliberately a _hold_. A short tap on Space still activates
 whatever control has focus, and a space typed in the composer is always just a
 space, so the shortcut never gets in the way of ordinary use. The hold is only
 armed while the assistant panel is open.
 
 Answers are read back aloud, and the **speaker** button next to the microphone
-turns that off (the choice is remembered). Only *spoken* questions get spoken
+turns that off (the choice is remembered). Only _spoken_ questions get spoken
 answers — typing while the microphone happens to be open stays silent. Code
 blocks and URLs are skipped when reading, and long answers are trimmed to their
 first few sentences; the full reply is always in the transcript.

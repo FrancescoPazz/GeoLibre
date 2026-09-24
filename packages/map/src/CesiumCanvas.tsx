@@ -134,7 +134,6 @@ export interface CesiumCanvasProps {
    * way `MapCanvas` and `MapboxCanvas` forward their renderer failures.
    */
   onMapDiagnosticEvent?: (event: MapDiagnosticEvent) => void;
-
 }
 
 /**
@@ -183,8 +182,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   controlLabels,
   popupCloseLabel,
   identifyPopupExtras,
-  onMapDiagnosticEvent
-
+  onMapDiagnosticEvent,
 }: CesiumCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<CesiumWidget | null>(null);
@@ -439,8 +437,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
           worldTerrainAvailable: Boolean(token),
           terrainIonAssetId: terrainAssetIdRef.current,
 
-          onDiagnostic: (event) => onMapDiagnosticEventRef.current?.(event)
-
+          onDiagnostic: (event) => onMapDiagnosticEventRef.current?.(event),
         });
         engineInstanceRef.current = engine;
 

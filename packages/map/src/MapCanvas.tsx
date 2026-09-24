@@ -122,7 +122,6 @@ export type MapCanvasRasterIdentify = (
   options: { signal: AbortSignal },
 ) => Promise<MapCanvasRasterIdentifyResult | null>;
 
-
 /** The store's own copy of a feature, when the layer keeps its features inline. */
 function storedFeature(
   layer: GeoLibreLayer,
@@ -1353,7 +1352,10 @@ export const MapCanvas = memo(function MapCanvas({
           maxWidth: "280px",
         }).addTo(map);
       }
-      hoverTooltip.current.setLngLat(next.lngLat).setDOMContent(content);
+      hoverTooltip.current
+        .setMaxWidth(`min(${(resolvePopupMaxWidth(layer.popup) ?? 256) + 24}px, calc(100% - 24px))`)
+        .setLngLat(next.lngLat)
+        .setDOMContent(content);
     };
 
     const handleLeave = () => {
@@ -1439,5 +1441,16 @@ export const MapCanvas = memo(function MapCanvas({
     controller.current?.applyView(mapView);
   }, [mapView.center[0], mapView.center[1], mapView.zoom, mapView.bearing, mapView.pitch]);
 
-  return <div ref={containerRef} className="h-full w-full" data-testid="map-canvas" />;
+  // The map container sits inside a host element React owns. A control may
+  // reparent the container (the Time Slider wraps it in a flex column to dock
+  // its timeline below the map) and only undoes that when the map is torn down,
+  // which runs after React has already removed this component's DOM. React
+  // removes the host, which stays where it put it, instead of the container,
+  // so a renderer swap with such a control mounted no longer throws
+  // "removeChild: the node to be removed is not a child of this node".
+  return (
+    <div className="h-full w-full">
+      <div ref={containerRef} className="h-full w-full" data-testid="map-canvas" />
+    </div>
+  );
 });

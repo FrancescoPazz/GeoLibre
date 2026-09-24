@@ -8,24 +8,24 @@ workflow and [Projects](user-guide/projects.md) for saving and reopening data.
 
 ## Vector and tabular files
 
-| Format | Extensions or source | How to add it | Notes |
-| --- | --- | --- | --- |
-| GeoJSON | `.geojson`, `.json`, GeoJSON URL | Vector Layer | Geometry and feature attributes; also supports drag and drop. |
-| GeoParquet / Parquet | `.geoparquet`, `.parquet` | GeoParquet Layer or Vector Layer | Reads geometry and CRS metadata; supported coordinate-column tables can become points. |
-| FlatGeobuf | `.fgb`, `.flatgeobuf` | FlatGeobuf Layer or Vector Layer | Spatially indexed vector files, including remote URLs. |
-| GeoPackage | `.gpkg` | Vector Layer | Select feature tables from a multi-layer file. |
-| Shapefile | `.shp` with companion files, or `.zip` | Vector Layer | Keep `.shx`, `.dbf`, and `.prj` companions together; use a ZIP for browser imports. |
-| GML | `.gml` | Vector Layer | Imported through the vector reader. |
-| MapInfo TAB | `.tab` and companion files | Vector Layer | Requires access to the dataset's companion files. |
-| KML / KMZ | `.kml`, `.kmz` | KML / KMZ Layer or Vector Layer | Supports folders, styles, ground overlays, embedded models, and Super-Overlays; behavior depends on the renderer. |
-| GPX | `.gpx` | GPX Layer | Waypoints, tracks, and routes can become separate layers. |
-| LandXML | `.xml`, `.landxml`, LandXML URL | LandXML Layer | Imports TIN surfaces, horizontal alignments, vertical profile metadata, and survey points; projected data requires a source CRS. |
-| Delimited text | CSV, TSV, and custom-delimited text | Delimited Text Layer | Map coordinate columns, specify their CRS, or geocode address columns. CSV without coordinates can also be loaded as a table. |
-| Excel | Excel workbooks | File import | Select a worksheet and coordinate columns to create point features. |
-| AutoCAD | `.dxf`, `.dwg` | CAD (DXF/DWG) Layer | Select drawing layers and the source CRS. Coordinate Z values are kept and rendered in 3D unless you turn that off. |
-| Esri File Geodatabase | `.gdb` folder | File Geodatabase (GDB) | Desktop folder access; select a feature class. |
-| OpenStreetMap PBF | `.osm.pbf` | OSM PBF Layer | Reads an extract in the browser and adds the selected features. |
-| Encoded polyline | Encoded strings or text files | Encoded Polyline | Precision 5 and 6, including Google, OSRM, Valhalla, and Mapbox conventions. |
+| Format                | Extensions or source                   | How to add it                    | Notes                                                                                                                            |
+| --------------------- | -------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| GeoJSON               | `.geojson`, `.json`, GeoJSON URL       | Vector Layer                     | Geometry and feature attributes; also supports drag and drop.                                                                    |
+| GeoParquet / Parquet  | `.geoparquet`, `.parquet`              | GeoParquet Layer or Vector Layer | Reads geometry and CRS metadata; supported coordinate-column tables can become points.                                           |
+| FlatGeobuf            | `.fgb`, `.flatgeobuf`                  | FlatGeobuf Layer or Vector Layer | Spatially indexed vector files, including remote URLs.                                                                           |
+| GeoPackage            | `.gpkg`                                | Vector Layer                     | Select feature tables from a multi-layer file.                                                                                   |
+| Shapefile             | `.shp` with companion files, or `.zip` | Vector Layer                     | Keep `.shx`, `.dbf`, and `.prj` companions together; use a ZIP for browser imports.                                              |
+| GML                   | `.gml`                                 | Vector Layer                     | Imported through the vector reader.                                                                                              |
+| MapInfo TAB           | `.tab` and companion files             | Vector Layer                     | Requires access to the dataset's companion files.                                                                                |
+| KML / KMZ             | `.kml`, `.kmz`                         | KML / KMZ Layer or Vector Layer  | Supports folders, styles, ground overlays, embedded models, and Super-Overlays; behavior depends on the renderer.                |
+| GPX                   | `.gpx`                                 | GPX Layer                        | Waypoints, tracks, and routes can become separate layers.                                                                        |
+| LandXML               | `.xml`, `.landxml`, LandXML URL        | LandXML Layer                    | Imports TIN surfaces, horizontal alignments, vertical profile metadata, and survey points; projected data requires a source CRS. |
+| Delimited text        | CSV, TSV, and custom-delimited text    | Delimited Text Layer             | Map coordinate columns, specify their CRS, or geocode address columns. CSV without coordinates can also be loaded as a table.    |
+| Excel                 | Excel workbooks                        | File import                      | Select a worksheet and coordinate columns to create point features.                                                              |
+| AutoCAD               | `.dxf`, `.dwg`                         | CAD (DXF/DWG) Layer              | Select drawing layers and the source CRS. Coordinate Z values are kept and rendered in 3D unless you turn that off.              |
+| Esri File Geodatabase | `.gdb` folder                          | File Geodatabase (GDB)           | Desktop folder access; select a feature class.                                                                                   |
+| OpenStreetMap PBF     | `.osm.pbf`                             | OSM PBF Layer                    | Reads an extract in the browser and adds the selected features.                                                                  |
+| Encoded polyline      | Encoded strings or text files          | Encoded Polyline                 | Precision 5 and 6, including Google, OSRM, Valhalla, and Mapbox conventions.                                                     |
 
 Vector import generally reprojects a known source CRS to EPSG:4326. Multi-file
 formats need their companion files, and large feature collections may require

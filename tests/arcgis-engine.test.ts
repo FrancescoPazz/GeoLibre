@@ -23,7 +23,7 @@ import type {
   ArcgisSceneSdk,
   ArcgisSdk,
 } from "../packages/map/src/arcgis-sdk";
-import { ARCGIS_ID_FIELD } from "../packages/map/src/arcgis-layers";
+import { ARCGIS_ID_FIELD, zoomToScale } from "../packages/map/src/arcgis-layers";
 import { geojsonLayer } from "./helpers/layer-fixtures";
 
 // The engine never loads the SDK here: `arcgis-sdk.ts` only describes its
@@ -286,6 +286,7 @@ function makeSdk() {
       GeoJSONLayer: layerClass("geojson"),
       GraphicsLayer: layerClass("graphics"),
       WebTileLayer: layerClass("web-tile"),
+      BaseTileLayer: { createSubclass: () => layerClass("template-tile") },
       WMSLayer: layerClass("wms"),
       WMTSLayer: layerClass("wmts"),
       VectorTileLayer: layerClass("vector-tile"),
@@ -460,6 +461,53 @@ const SQUARE = geojsonLayer({
   },
 });
 
+describe("ArcgisEngine camera moves", () => {
+  it("frames an extent at the zoom that fits it, without a zoom-14 cap", async () => {
+    const { engine, goTo } = makeEngine();
+    engine.fitBounds([-0.001, -0.001, 0.001, 0.001]);
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(goTo.length, 1);
+    assert.ok("xmin" in (goTo[0] as { target: object }).target);
+  });
+  it("flies to a point-sized extent at zoom 14 or closer", () => {
+    const { engine, goTo, rawView } = makeEngine();
+    engine.fitBounds([3, 4, 3, 4]);
+    assert.deepEqual((goTo[0] as { target: unknown }).target, { center: [3, 4], zoom: 14 });
+    rawView.zoom = 17;
+    engine.fitBounds([3, 4, 3, 4]);
+    assert.deepEqual((goTo[1] as { target: unknown }).target, { center: [3, 4], zoom: 17 });
+  });
+  it("turns a story chapter once, and not when a later chapter superseded it", async () => {
+    const { engine, goTo } = makeEngine();
+    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 5 }, "flyTo", true);
+    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 6 }, "flyTo", false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(goTo.length, 2);
+    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 6 }, "flyTo", true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const turns = goTo.filter((call) => "rotation" in (call as { target: object }).target);
+    assert.equal(turns.length, 1);
+    assert.deepEqual(turns[0], {
+      target: { rotation: -180 },
+      options: { duration: 30000, easing: "linear" },
+    });
+  });
+  it("reads and steps the zoom of a view with no tiling scheme through its scale", () => {
+    const { engine, goTo, rawView } = makeEngine();
+    rawView.zoom = -1;
+    rawView.scale = zoomToScale(3);
+    assert.ok(Math.abs(engine.readView().zoom - 3) < 1e-9);
+    // A view with no scale yet reads as zoom 0, never a non-finite level.
+    rawView.scale = 0;
+    assert.equal(engine.readView().zoom, 0);
+    rawView.scale = zoomToScale(3);
+    engine.zoomIn();
+    const target = (goTo[0] as { target: { scale: number } }).target;
+    assert.ok(Math.abs(target.scale - zoomToScale(4)) < 1e-6);
+  });
+});
+
 describe("ArcgisEngine camera conventions", () => {
   it("publishes geographic map clicks and removes the listener on cleanup", () => {
     const { engine, fireViewEvent, rawView } = makeEngine();
@@ -632,6 +680,20 @@ describe("ArcgisEngine controls", () => {
     assert.equal(engine.addControl(), false);
     assert.equal(engine.capabilities.domControls, true);
   });
+  it("mounts moved controls in the corners an earlier view reported", () => {
+    const moves: [string, string][] = [];
+    const { engine, uiAdds } = makeEngine({
+      controlPositions: { compass: "bottom-left" },
+      onControlPositionChange: (control, position) => moves.push([control, position]),
+    });
+    // Fullscreen, compass, scale: the compass lands where it was moved to.
+    assert.deepEqual(
+      uiAdds.map((entry) => entry.position),
+      ["top-right", "bottom-left", "bottom-left"],
+    );
+    engine.setBuiltInControlPosition("scale", "top-left");
+    assert.deepEqual(moves, [["scale", "top-left"]]);
+  });
   it("forwards the scale unit and compass label to the widgets", () => {
     const { engine, widgets } = makeEngine();
     engine.applyMapPreferences({
@@ -736,11 +798,78 @@ describe("ArcgisEngine layer sync", () => {
     );
     assert.equal(layers.items[1].props.urlTemplate, "https://t/{level}/{col}/{row}.png");
     assert.equal(layers.items[1].props.copyright, "© T");
+    // Story exports rebuild the layer in MapLibre, so they get the store template.
     assert.deepEqual(engine.getLayerRasterSource("xyz"), {
       type: "raster",
-      tiles: ["https://t/{level}/{col}/{row}.png"],
+      tiles: ["https://t/{z}/{x}/{y}.png"],
       attribution: "© T",
     });
+  });
+  it("draws TMS and bounding-box templates through a custom tile layer", () => {
+    const { engine, layers } = makeEngine();
+    engine.syncLayers([
+      {
+        ...geojsonLayer({ id: "tms", name: "TMS", geojson: undefined }),
+        type: "xyz",
+        source: { type: "raster", tiles: ["https://t/{z}/{x}/{y}.png"], scheme: "tms" },
+      },
+    ]);
+    assert.deepEqual(
+      layers.items.map((l) => l.kind),
+      ["template-tile"],
+    );
+    assert.equal(engine.getRenderStatus().errors.length, 0);
+    assert.deepEqual(engine.getLayerRasterSource("tms"), {
+      type: "raster",
+      tiles: ["https://t/{z}/{x}/{y}.png"],
+      scheme: "tms",
+      tileSize: 256,
+      minzoom: 0,
+      maxzoom: 22,
+    });
+  });
+  it("applies the raster effect and blend mode in place, the effect to rasters only", () => {
+    const { engine, created, layers } = makeEngine();
+    const tiles = {
+      ...geojsonLayer({ id: "xyz", name: "Tiles", geojson: undefined }),
+      type: "xyz" as const,
+      source: { type: "raster", tiles: ["https://t/{z}/{x}/{y}.png"] },
+    };
+    engine.syncLayers([tiles, SQUARE]);
+    const count = created.length;
+    engine.syncLayers([
+      { ...tiles, style: { ...DEFAULT_LAYER_STYLE, rasterSaturation: -1, blendMode: "multiply" } },
+      { ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, rasterSaturation: -1 } },
+    ]);
+    const raster = layers.items.find((l) => l.kind === "web-tile")!;
+    assert.equal(raster.effect, "brightness(1) contrast(1) saturate(0) hue-rotate(0deg)");
+    assert.equal(raster.blendMode, "multiply");
+    assert.ok(layers.items.filter((l) => l.kind === "geojson").every((l) => l.effect === null));
+    // The tile layer was not rebuilt for a slider change.
+    assert.ok(layers.items.includes(created.find((l) => l.kind === "web-tile")!));
+    assert.ok(created.length >= count);
+  });
+  it("changes a GeoJSON layer's blend mode in place", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([SQUARE]);
+    const count = created.length;
+    engine.syncLayers([{ ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, blendMode: "multiply" } }]);
+    assert.equal(created.length, count, "no native layer was rebuilt");
+    assert.ok(created.slice(-2).every((layer) => layer.blendMode === "multiply"));
+  });
+  it("reuses a GeoJSON plan across opacity, visibility and name changes", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([SQUARE]);
+    const count = created.length;
+    const native = created[count - 1];
+    engine.syncLayers([{ ...SQUARE, opacity: 0.4, visible: false, name: "Renamed" }]);
+    assert.equal(created.length, count);
+    assert.equal(native.opacity, 0.4);
+    assert.equal(native.visible, false);
+    assert.equal(native.title, "Renamed");
+    // A re-style still rebuilds.
+    engine.syncLayers([{ ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, fillColor: "#00ff00" } }]);
+    assert.ok(created.length > count);
   });
   it("recompiles zoom-dependent layers when the integer zoom changes", () => {
     const { engine, created, rawView, fireWatchers } = makeEngine();
@@ -812,6 +941,22 @@ describe("ArcgisEngine picking and highlight", () => {
     assert.equal(engine.identifyFeatures([0.5, 0.5]).length, 1);
     assert.equal(engine.identifyFeatures([3, 3]).length, 0);
     assert.equal(engine.identifyFeatures([0.5, 0.5], "other").length, 0);
+  });
+  it("skips cluster graphics instead of reporting their object id as a feature", async () => {
+    const { engine, layers, setHitResults } = makeEngine();
+    engine.syncLayers([SQUARE]);
+    const pointLayer = layers.items.find((l) => l.props.geometryType === "point")!;
+    setHitResults([
+      {
+        type: "graphic",
+        graphic: {
+          attributes: { OBJECTID: 1, cluster_count: 12 },
+          layer: pointLayer,
+          isAggregate: true,
+        },
+      },
+    ]);
+    assert.deepEqual(await engine.identifyFeaturesAt({ x: 5, y: 5 }), []);
   });
   it("answers an arbitrary coordinate synchronously from the store's geometry", () => {
     const { engine } = makeEngine();

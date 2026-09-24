@@ -90,6 +90,8 @@ export interface ArcgisGraphic {
   geometry: ArcgisGeometryJson | ArcgisPoint | ArcgisExtent | null;
   layer: ArcgisLayer | null;
   symbol?: unknown;
+  /** Whether the graphic is a cluster or bin summarizing several features. */
+  isAggregate?: boolean;
 }
 
 export interface ArcgisCollection<T> {
@@ -116,6 +118,13 @@ export interface ArcgisLayer {
   opacity: number;
   visible: boolean;
   listMode?: "show" | "hide" | "hide-children";
+  /** CSS filter functions applied to the layer (a `MapView` only; a `SceneView` ignores it). */
+  effect?: string | null;
+  /**
+   * How the layer composites with the layers beneath it: every layer on a
+   * `MapView`, tiled and imagery layers only in a `SceneView`.
+   */
+  blendMode?: string;
   minScale: number;
   maxScale: number;
   loaded: boolean;

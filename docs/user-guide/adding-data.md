@@ -10,19 +10,19 @@ To collect supported dataset links from a catalog or other webpage and open seve
 
 ## Files
 
-| Item | Notes |
-| --- | --- |
-| **Vector Layer** | Opens the Add Vector panel (backed by `maplibre-gl-vector`). Loads GeoJSON, GeoParquet, FlatGeobuf, zipped Shapefile, GeoPackage, KML/KMZ, GML, and other vector formats from a file or URL. |
-| **Raster Layer** | Opens the Add Raster panel (backed by `maplibre-gl-raster`). Loads GeoTIFF and Cloud-Optimized GeoTIFF (COG) from a file or URL. |
-| **Delimited Text Layer** | Loads CSV/TSV from a file or URL, using longitude and latitude columns to build point features, or by geocoding one or more address columns (see [Geocoding](data-integrations.md#geocoding)). |
-| **CAD (DXF/DWG) Layer** | Loads AutoCAD drawings, converting their entities to vector features. Coordinate Z values (contours, 3D polylines, surveyed points) are kept and rendered in 3D unless **Render Z values in 3D** is unchecked. |
-| **File Geodatabase (GDB)** | Opens an Esri file geodatabase and adds one of its feature classes as a layer. |
-| **Geotagged Photos** | Reads the EXIF GPS tags from a set of photos and places each one on the map as a point with a thumbnail. |
-| **GPX Layer** | Loads a GPX file or URL and splits it into separate waypoint, track, and route layers. |
-| **LandXML Layer** | Loads a LandXML file or URL and imports selected TIN surfaces, horizontal alignments, vertical profile metadata, and survey points. Projected coordinates are reprojected from the selected or embedded source CRS. |
-| **Encoded Polyline** | Loads Google (precision 5) or Valhalla/Mapbox (precision 6) encoded polyline strings from pasted text or uploaded text files. |
-| **MBTiles Layer** | Loads a local MBTiles tile archive (desktop app). |
-| **OSM PBF Layer** | Reads an OpenStreetMap `.osm.pbf` extract and adds the features you select from it. |
+| Item                       | Notes                                                                                                                                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Vector Layer**           | Opens the Add Vector panel (backed by `maplibre-gl-vector`). Loads GeoJSON, GeoParquet, FlatGeobuf, zipped Shapefile, GeoPackage, KML/KMZ, GML, and other vector formats from a file or URL.                        |
+| **Raster Layer**           | Opens the Add Raster panel (backed by `maplibre-gl-raster`). Loads GeoTIFF and Cloud-Optimized GeoTIFF (COG) from a file or URL.                                                                                    |
+| **Delimited Text Layer**   | Loads CSV/TSV from a file or URL, using longitude and latitude columns to build point features, or by geocoding one or more address columns (see [Geocoding](data-integrations.md#geocoding)).                      |
+| **CAD (DXF/DWG) Layer**    | Loads AutoCAD drawings, converting their entities to vector features. Coordinate Z values (contours, 3D polylines, surveyed points) are kept and rendered in 3D unless **Render Z values in 3D** is unchecked.      |
+| **File Geodatabase (GDB)** | Opens an Esri file geodatabase and adds one of its feature classes as a layer.                                                                                                                                      |
+| **Geotagged Photos**       | Reads the EXIF GPS tags from a set of photos and places each one on the map as a point with a thumbnail.                                                                                                            |
+| **GPX Layer**              | Loads a GPX file or URL and splits it into separate waypoint, track, and route layers.                                                                                                                              |
+| **LandXML Layer**          | Loads a LandXML file or URL and imports selected TIN surfaces, horizontal alignments, vertical profile metadata, and survey points. Projected coordinates are reprojected from the selected or embedded source CRS. |
+| **Encoded Polyline**       | Loads Google (precision 5) or Valhalla/Mapbox (precision 6) encoded polyline strings from pasted text or uploaded text files.                                                                                       |
+| **MBTiles Layer**          | Loads a local MBTiles tile archive (desktop app).                                                                                                                                                                   |
+| **OSM PBF Layer**          | Reads an OpenStreetMap `.osm.pbf` extract and adds the features you select from it.                                                                                                                                 |
 
 Vector files are reprojected to EPSG:4326 on load. In the browser, vector import relies on DuckDB-WASM Spatial, with direct handling for GeoJSON, zipped Shapefiles, and KMZ archives. The source CRS is read from the file itself — the layer metadata for the GDAL-read formats, a Shapefile's `.prj` sidecar, or a GeoParquet's `geo` metadata — so a national grid such as EPSG:2100 (GGRS87 / Greek Grid) lands in the right place with nothing to configure.
 

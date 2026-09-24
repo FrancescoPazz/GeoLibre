@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { applyGroupEffects, useAppStore, type MapProjection } from "@geolibre/core";
-import type { MapEngine } from "./map-engine";
+import type { BuiltInMapControl, MapEngine } from "./map-engine";
+import type * as maplibregl from "maplibre-gl";
 import { CogDemError } from "./cog-dem-source";
 import {
   ArcgisEngine,
@@ -30,6 +31,8 @@ export interface ArcgisCanvasProps {
   onEngineReady?: () => void;
   /** Translated accessible name for the identify popup's close button. */
   closeLabel?: string;
+  /** Translated label for the button that retries a failed SDK load. */
+  retryLabel?: string;
 }
 
 /**
@@ -56,10 +59,15 @@ export function ArcgisCanvas({
   engineRef,
   onEngineReady,
   closeLabel = "Close",
+  retryLabel = "Retry",
 }: ArcgisCanvasProps) {
   const container = useRef<HTMLDivElement>(null);
   // Views replaced by a 2D/3D switch, kept on screen until the new view draws.
   const retiring = useRef<{ element: HTMLElement; engine: ArcgisEngine }[]>([]);
+  // Moved control corners outlive the engine, which a 2D/3D switch rebuilds.
+  const controlPositions = useRef<Partial<Record<BuiltInMapControl, maplibregl.ControlPosition>>>(
+    {},
+  );
   const terrainSource = useRef<{ source: string | Blob | null; band: number }>({
     source: null,
     band: 1,
@@ -73,6 +81,9 @@ export function ArcgisCanvas({
   closeLabelRef.current = closeLabel;
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  // Whether mounting failed (the SDK or its modules could not load), which
+  // offers a retry.
+  const [loadFailed, setLoadFailed] = useState(false);
   const sharedProjection = useAppStore((s) => s.preferences.map.projection);
   const terrainEnabled = useAppStore((s) => s.preferences.map.terrainEnabled);
   // A split pane's toggle overrides the shared projection for that pane only.
@@ -83,8 +94,10 @@ export function ArcgisCanvas({
     let cancelled = false;
     let terrainRestoreError: string | null = null;
     let engine: ArcgisEngine | undefined;
+    let loaded = false;
     let cleanup = () => {};
     setError(null);
+    setLoadFailed(false);
     setReady(false);
     // Each view gets its own element: the SDK owns its container's contents,
     // and the outgoing view must keep drawing in its own until this one is up.
@@ -105,6 +118,9 @@ export function ArcgisCanvas({
     ])
       .then(([sdk, scene]) => {
         if (cancelled || !element.isConnected) return;
+        // Past this point the modules are in; a failure below is not one a
+        // reload fixes, so it gets no Retry.
+        loaded = true;
         sdk.config.apiKey = apiKey?.trim() || null;
         const state = useAppStore.getState();
         const pane = state.secondaryMapViews.find((p) => p.id === viewId);
@@ -162,6 +178,10 @@ export function ArcgisCanvas({
             else store.setLayerVisibility(id, visible);
           },
           controlVisibility: viewId ? { "layer-control": false } : undefined,
+          controlPositions: controlPositions.current,
+          onControlPositionChange: (control, position) => {
+            controlPositions.current = { ...controlPositions.current, [control]: position };
+          },
           ...(scene ? { scene } : {}),
           onProjectionToggle: (next) => {
             if (cancelled) return;
@@ -222,6 +242,7 @@ export function ArcgisCanvas({
         // Until the initial camera has landed, `stationary` reports the view's
         // default camera, which must not be written back to the store.
         let settled = false;
+        let readyError: string | null = null;
         let selectionKey: string | null = null;
         let popupDispose: (() => void) | null = null;
         const removePopup = () => {
@@ -328,19 +349,80 @@ export function ArcgisCanvas({
         update(state);
         update(useAppStore.getState(), state);
         const handles: ArcgisHandle[] = [];
+        // Only a move the user made marks the project dirty, as MapLibre's
+        // `originalEvent` does: a fit, a search result or a story flight is the
+        // app's own. A move counts as the user's when it starts while a pointer
+        // is down or within moments of a wheel, key or press on the view (its
+        // built-in widgets included).
+        let pointerDown = false;
+        let lastInput = -Infinity;
+        let userMove = false;
+        const noteInput = () => {
+          lastInput = performance.now();
+        };
+        const notePointerDown = () => {
+          pointerDown = true;
+          noteInput();
+        };
+        // Released anywhere, but only a press that began on the view is input
+        // (a click in the layer panel that fits a layer is not).
+        const notePointerUp = () => {
+          if (!pointerDown) return;
+          pointerDown = false;
+          noteInput();
+        };
+        // A press released outside the window (or cancelled by the browser)
+        // never delivers a pointerup; without this the press would stay "down"
+        // and every later programmatic move would count as the user's.
+        const clearPointer = () => {
+          pointerDown = false;
+        };
+        const inputTarget = mapView.container;
+        inputTarget?.addEventListener("pointerdown", notePointerDown, true);
+        inputTarget?.addEventListener("wheel", noteInput, { capture: true, passive: true });
+        inputTarget?.addEventListener("keydown", noteInput, true);
+        window.addEventListener("pointerup", notePointerUp, true);
+        window.addEventListener("pointercancel", clearPointer, true);
+        window.addEventListener("blur", clearPointer);
+        handles.push({
+          remove: () => {
+            window.removeEventListener("pointercancel", clearPointer, true);
+            window.removeEventListener("blur", clearPointer);
+            inputTarget?.removeEventListener("pointerdown", notePointerDown, true);
+            inputTarget?.removeEventListener("wheel", noteInput, true);
+            inputTarget?.removeEventListener("keydown", noteInput, true);
+            window.removeEventListener("pointerup", notePointerUp, true);
+          },
+        });
+        handles.push(
+          sdk.reactiveUtils.watch(
+            () => mapView.stationary,
+            (stationary) => {
+              if (!stationary) userMove = pointerDown || performance.now() - lastInput < 500;
+            },
+            // Synchronously, so a move that starts and settles within one
+            // task is still seen starting.
+            { sync: true },
+          ),
+        );
         // `stationary` flips true at the end of every pan, zoom and rotation,
         // which is the SDK's `moveend`.
         handles.push(
           sdk.reactiveUtils.when(
             () => mapView.stationary,
             () => {
+              const byUser = userMove;
+              userMove = false;
               if (applying || cancelled || !settled || !mapView.ready) return;
+              // While presenting a story map the presenter owns the camera;
+              // its chapter flights must not overwrite the saved project view.
+              if (useAppStore.getState().ui.storymapPresenting) return;
               const next = useAppStore.getState(),
                 camera = current.readView();
               // Shared view first (as the other canvases do), so a synchronized
               // pane never reads the changed pane against a stale `mapView`.
-              if (!viewId || next.mapLayout.syncView) next.setMapView(camera, true);
-              if (viewId) next.setSecondaryMapView(viewId, camera, true);
+              if (!viewId || next.mapLayout.syncView) next.setMapView(camera, byUser);
+              if (viewId) next.setSecondaryMapView(viewId, camera, byUser);
               // A MapView reports null, which clears a value an earlier
               // renderer (or scene) left in the status bar.
               else next.setCameraAltitude(current.readCameraAltitude());
@@ -448,11 +530,14 @@ export function ArcgisCanvas({
             if (cancelled) return;
             retire();
             setReady(true);
-            setError(redactArcgisError(error instanceof Error ? error.message : String(error)));
+            readyError = redactArcgisError(error instanceof Error ? error.message : String(error));
+            setError(readyError);
           });
         const status = window.setInterval(() => {
           if (cancelled) return;
-          const errors = [...current.getRenderStatus().errors];
+          // The view-ready failure stays up alongside the engine's own errors;
+          // the next tick would otherwise erase it.
+          const errors = [...(readyError ? [readyError] : []), ...current.getRenderStatus().errors];
           if (terrainRestoreError && useAppStore.getState().preferences.map.terrainEnabled)
             errors.push(terrainRestoreError);
           setError(errors.length ? errors.join("; ") : null);
@@ -463,6 +548,10 @@ export function ArcgisCanvas({
           void ensureArcgisCss(
             document.documentElement.classList.contains("dark") ? "dark" : "light",
           ).catch(() => {});
+          // With no chosen colour the Blank basemap follows the theme, which
+          // the engine samples when the colour is applied.
+          if (!cancelled)
+            current.setBlankBackgroundColor(useAppStore.getState().blankBackgroundColor);
         });
         theme.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
         cleanup = () => {
@@ -478,6 +567,7 @@ export function ArcgisCanvas({
         // A frozen old view would hide that the new one failed.
         retire();
         setReady(true);
+        setLoadFailed(!loaded);
         setError(redactArcgisError(error instanceof Error ? error.message : String(error)));
       });
     return () => {
@@ -520,6 +610,19 @@ export function ArcgisCanvas({
           className="absolute bottom-10 end-2 z-10 max-h-32 max-w-[75%] overflow-auto rounded border border-input bg-background p-2 text-xs text-foreground shadow"
         >
           {error}
+          {loadFailed && (
+            <button
+              type="button"
+              className="ms-2 rounded border border-input px-1.5 py-0.5 hover:bg-accent"
+              // Mounting again cannot recover: the browser keeps a failed
+              // module import for the life of the page, and the SDK's modules
+              // import one another by those same URLs. A reload starts clean;
+              // the app's unsaved-work recovery covers the open project.
+              onClick={() => window.location.reload()}
+            >
+              {retryLabel}
+            </button>
+          )}
         </div>
       )}
     </div>

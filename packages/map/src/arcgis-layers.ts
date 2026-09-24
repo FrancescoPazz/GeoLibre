@@ -1,6 +1,8 @@
 import { cogSourceUrl, cogRenderSignature } from "./cog-imagery";
 import {
+  BLEND_MODES,
   compileLayerFilters,
+  DEFAULT_BLEND_MODE,
   DEFAULT_LAYER_STYLE,
   extrusionColorValue,
   extrusionHeightValue,
@@ -21,6 +23,12 @@ import { KML_ICON_URL_PROPERTY } from "./markers";
 import { compileMapboxLayer } from "./mapbox-layers";
 import { arcgisVectorStyle } from "./arcgis-vector-style";
 import { proxyWmsTiles } from "./wms-proxy";
+import {
+  isTileTemplate,
+  needsTemplateTileLayer,
+  type ArcgisTileTemplateSource,
+} from "./arcgis-template-tiles";
+import { imageryColorAdjustments } from "./raster-color-adjustments";
 
 /**
  * Translate a store layer into what the ArcGIS Maps SDK can draw (issue #2421).
@@ -155,6 +163,78 @@ interface ArcgisPlanBase {
    * the engine should recompile when the integer zoom changes.
    */
   zoomDependent: boolean;
+  /**
+   * The raster brightness, contrast, saturation and hue sliders as the SDK's
+   * CSS-filter `effect`, or null when they are neutral. Only raster plans
+   * apply it, as MapLibre applies them only to raster layers.
+   */
+  effect: string | null;
+  /** The SDK's `blendMode` for the layer's blend mode. */
+  blendMode: ArcgisBlendMode;
+}
+
+/** The SDK blend modes GeoLibre's {@link BlendMode}s translate to. */
+export type ArcgisBlendMode = "normal" | "multiply" | "screen" | "lighten" | "plus";
+
+/**
+ * Plan kinds drawn as raster imagery, which take the raster colour effect. A
+ * tile archive is raster only when its tiles are; see {@link isArcgisRasterPlan}.
+ */
+const ARCGIS_RASTER_PLAN_KINDS: ReadonlySet<ArcgisLayerPlan["kind"]> = new Set([
+  "web-tile",
+  "template-tile",
+  "wms",
+  "tile-service",
+  "map-image",
+  "imagery",
+  "cog",
+  "zarr",
+  "archive",
+  "media-image",
+]);
+
+/**
+ * Whether a plan draws raster imagery, which the raster colour sliders apply
+ * to (MapLibre applies them to `raster` layers only, never a vector archive's).
+ */
+export function isArcgisRasterPlan(plan: ArcgisLayerPlan): boolean {
+  if (plan.kind === "archive") return plan.tileType === "raster";
+  return ARCGIS_RASTER_PLAN_KINDS.has(plan.kind);
+}
+
+/**
+ * The raster colour sliders as an SDK `effect`. The SDK takes CSS filter
+ * functions; `brightness` then `contrast` compose into the same affine map
+ * MapLibre's brightness window and contrast produce (the solve is shared with
+ * the Cesium engine), and `saturate` and `hue-rotate` follow.
+ */
+export function arcgisRasterEffect(style: LayerStyle): string | null {
+  // The shared solve returns the hue in radians (Cesium's unit); CSS wants degrees.
+  const { brightness, contrast, saturation, hue } = imageryColorAdjustments(style);
+  const round = (value: number) => Number(value.toFixed(4));
+  if (
+    round(brightness) === 1 &&
+    round(contrast) === 1 &&
+    round(saturation) === 1 &&
+    round(hue) === 0
+  )
+    return null;
+  return [
+    `brightness(${round(brightness)})`,
+    `contrast(${round(contrast)})`,
+    `saturate(${round(saturation)})`,
+    `hue-rotate(${round((hue * 180) / Math.PI)}deg)`,
+  ].join(" ");
+}
+
+/**
+ * GeoLibre's blend mode as the SDK's; MapLibre's additive `add` is the SDK's
+ * `plus`. The membership check guards a hand-edited project whose value the
+ * type does not describe.
+ */
+export function arcgisBlendMode(style: Partial<LayerStyle> | undefined): ArcgisBlendMode {
+  const mode = style?.blendMode ?? DEFAULT_BLEND_MODE;
+  return mode === "add" ? "plus" : BLEND_MODES.includes(mode) ? mode : "normal";
 }
 
 export type ArcgisLayerPlan = ArcgisPlanBase &
@@ -177,6 +257,7 @@ export type ArcgisLayerPlan = ArcgisPlanBase &
         subDomains?: string[];
         copyright?: string;
       }
+    | ({ kind: "template-tile"; copyright?: string } & ArcgisTileTemplateSource)
     | {
         kind: "wms";
         url: string;
@@ -440,6 +521,9 @@ function activeFilters(layer: GeoLibreLayer): unknown[] | null {
     layer.timeFilter,
     layer.embedFilter,
     ruleBasedVisibilityFilter(layer.style),
+    // Hidden annotations stay in the collection, as MapLibre's layer sync
+    // filters them out rather than dropping them.
+    layer.metadata.sourceKind === "annotation" ? ["!=", ["get", "visible"], false] : null,
   ].filter(Boolean) as unknown[][];
   if (filters.length === 0) return null;
   return filters.length === 1 ? filters[0] : ["all", ...filters];
@@ -1071,6 +1155,25 @@ const WMS_STRUCTURAL = new Set([
 ]);
 
 /**
+ * Whether a tile template is a WMS GetMap request naming the layers to draw:
+ * it says `REQUEST=GetMap`, or `SERVICE=WMS` with no other request. An ArcGIS
+ * `/export` template also carries `layers` (`show:3`), but neither of those.
+ */
+function isWmsGetMap(template: string): boolean {
+  const params = new URLSearchParams(template.split("?", 2)[1] ?? "");
+  let request: string | undefined;
+  let wms = false;
+  let layers = false;
+  for (const [key, value] of params) {
+    const name = key.toLowerCase();
+    if (name === "request") request = value.toLowerCase();
+    if (name === "service") wms = value.toLowerCase() === "wms";
+    if (name === "layers") layers = value.trim() !== "";
+  }
+  return layers && (request === "getmap" || (request === undefined && wms));
+}
+
+/**
  * Split a MapLibre WMS GetMap tile template (`...?SERVICE=WMS&REQUEST=GetMap&
  * LAYERS=...&BBOX={bbox-epsg-3857}`) into the SDK's WMSLayer description: the
  * service endpoint, the sublayers to draw, the image format, and every other
@@ -1106,6 +1209,51 @@ export function wmsLayerFromTemplate(template: string): {
     ...(get("format") ? { imageFormat: get("format") } : {}),
     imageTransparency: transparent === undefined || transparent.toLowerCase() !== "false",
     ...(Object.keys(custom).length ? { customParameters: custom } : {}),
+  };
+}
+
+/**
+ * The tile source for a raster record `WebTileLayer` cannot draw as MapLibre
+ * would: a TMS scheme, a tile size other than 256 px, a source zoom range, more
+ * than one template, or a placeholder it has no form for. Null when the plain
+ * `WebTileLayer` path draws it the same.
+ */
+function templateTileSource(
+  layer: GeoLibreLayer,
+  templates: string[],
+): ArcgisTileTemplateSource | null {
+  const { scheme, tileSize, minzoom, maxzoom } = layer.source as {
+    scheme?: unknown;
+    tileSize?: unknown;
+    minzoom?: unknown;
+    maxzoom?: unknown;
+  };
+  const finite = (value: unknown): value is number =>
+    typeof value === "number" && Number.isFinite(value);
+  const size = finite(tileSize) && tileSize > 0 ? tileSize : 256;
+  // MapLibre's own defaults (0 and 22) change nothing the plain path draws.
+  if (
+    scheme !== "tms" &&
+    size === 256 &&
+    !(finite(minzoom) && minzoom > 0) &&
+    !(finite(maxzoom) && maxzoom < 22) &&
+    templates.length === 1 &&
+    !needsTemplateTileLayer(templates[0])
+  )
+    return null;
+  for (const template of templates) {
+    if (/\{(?:bbox-(?!epsg-3857\})[^}]*|switch:[^}]*)\}/.test(template))
+      throw new Error("Tile template placeholders are not supported by the ArcGIS renderer");
+    if (!isTileTemplate(template)) throw new Error("Tile template has no {z}/{x}/{y} placeholders");
+  }
+  const layerBounds = bounds(layer);
+  return {
+    templates,
+    scheme: scheme === "tms" ? "tms" : "xyz",
+    tileSize: size,
+    minzoom: finite(minzoom) ? Math.max(0, minzoom) : 0,
+    maxzoom: finite(maxzoom) ? Math.max(0, maxzoom) : 22,
+    ...(layerBounds ? { bounds: layerBounds } : {}),
   };
 }
 
@@ -1225,6 +1373,8 @@ export function compileArcgisLayer(
     ...zoomRangeToScales(style.minZoom, style.maxZoom),
     ...(bounds(layer) ? { bounds: bounds(layer) } : {}),
     zoomDependent: false,
+    effect: arcgisRasterEffect(style),
+    blendMode: arcgisBlendMode(style),
   };
   if (isArcgisExternalDeckLayer(layer)) {
     if (options.deckOverlay === false)
@@ -1345,27 +1495,27 @@ export function compileArcgisLayer(
       tileOptions,
     };
   }
-  if (layer.type === "wms" && tiles.length) {
-    const [template] = proxyWmsTiles(layer.type, tiles);
-    return { ...base, kind: "wms", ...wmsLayerFromTemplate(template) };
-  }
+  // A GetMap template naming its layers is a WMS service the SDK can draw
+  // natively. Other bounding-box templates typed `wms` (an ArcGIS
+  // `/exportImage`, say) are plain image requests, drawn tile by tile below.
+  // WMS tiles go through the dev server's proxy, as on MapLibre.
+  const proxied = proxyWmsTiles(layer.type, tiles);
+  if (layer.type === "wms" && tiles.length && isWmsGetMap(tiles[0]))
+    return { ...base, kind: "wms", ...wmsLayerFromTemplate(proxied[0]) };
   if (RASTER_TILE_TYPES.has(layer.type) && (tiles.length || url)) {
-    const template = tiles[0] ?? url!;
+    const templates = proxied.length ? proxied : [url!];
     // `cog://`, `pmtiles://`, `mbtiles://` and friends are MapLibre protocol
     // handlers registered with maplibre-gl only.
-    if (/^[\w+-]+:/.test(template) && !/^(?:https?|data|blob):/i.test(template))
+    if (templates.some((t) => /^[\w+-]+:/.test(t) && !/^(?:https?|data|blob):/i.test(t)))
       throw new Error("MapLibre custom tile protocols are not supported by the ArcGIS renderer");
+    const copyright =
+      typeof layer.source.attribution === "string" ? { copyright: layer.source.attribution } : {};
+    const tileSource = templateTileSource(layer, templates);
     // An ArcGIS export/tile template (the ArcGIS Layer panel's raster path) is
     // still a plain tile template; the SDK's own service classes are used only
     // for records that name the service itself (the `arcgis` type above).
-    return {
-      ...base,
-      kind: "web-tile",
-      ...webTileTemplate(template),
-      ...(typeof layer.source.attribution === "string"
-        ? { copyright: layer.source.attribution }
-        : {}),
-    };
+    if (tileSource) return { ...base, kind: "template-tile", ...tileSource, ...copyright };
+    return { ...base, kind: "web-tile", ...webTileTemplate(templates[0]), ...copyright };
   }
   if (layer.type === "geojson" && url) {
     // A remote GeoJSON URL the store never materialized: the SDK can fetch it,

@@ -235,7 +235,6 @@ export interface CesiumEngineOptions {
    * 404s, a KML that will not parse.
    */
   onDiagnostic?: (event: MapDiagnosticEvent) => void;
-
 }
 
 /**

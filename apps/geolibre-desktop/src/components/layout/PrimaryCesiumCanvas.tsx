@@ -62,7 +62,6 @@ export interface PrimaryCesiumCanvasProps {
   identifyPopupExtras?: IdentifyPopupExtras;
   /** Forwards a globe layer that failed to load to the Diagnostics panel. */
   onMapDiagnosticEvent?: (event: MapDiagnosticEvent) => void;
-
 }
 
 /**

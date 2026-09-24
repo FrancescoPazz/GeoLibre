@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { BLANK_BASEMAP, DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "@geolibre/core";
 import {
+  arcgisRasterEffect,
+  isArcgisRasterPlan,
   ARCGIS_HEIGHT_FIELD,
   ARCGIS_ID_FIELD,
   ARCGIS_LABEL_FIELD,
@@ -365,6 +367,89 @@ describe("ArcGIS GeoJSON compilation", () => {
       style: { ...DEFAULT_LAYER_STYLE, strokeWidthUnit: "meters", strokeWidth: 50 },
     });
     assert.equal(metres.zoomDependent, true);
+  });
+});
+
+describe("ArcGIS raster colour effect and blend mode", () => {
+  it("draws neutral sliders with no effect", () => {
+    assert.equal(arcgisRasterEffect(DEFAULT_LAYER_STYLE), null);
+  });
+  it("turns the sliders into CSS filter functions", () => {
+    assert.equal(
+      arcgisRasterEffect({ ...DEFAULT_LAYER_STYLE, rasterSaturation: -1, rasterHueRotate: 90 }),
+      "brightness(1) contrast(1) saturate(0) hue-rotate(90deg)",
+    );
+    // A 0.25-0.75 window is out = 0.5 * in + 0.25: half the contrast about mid-grey.
+    assert.equal(
+      arcgisRasterEffect({
+        ...DEFAULT_LAYER_STYLE,
+        rasterBrightnessMin: 0.25,
+        rasterBrightnessMax: 0.75,
+      }),
+      "brightness(1) contrast(0.5) saturate(1) hue-rotate(0deg)",
+    );
+  });
+  it("treats a tile archive as raster only when its tiles are", () => {
+    const archive = (tileType: string) =>
+      compileArcgisLayer(
+        geojsonLayer({
+          geojson: undefined,
+          type: "pmtiles",
+          source: { url: "https://x/a.pmtiles", tileType, sourceLayers: ["roads"] },
+        }),
+      );
+    assert.equal(isArcgisRasterPlan(archive("raster")), true);
+    assert.equal(isArcgisRasterPlan(archive("vector")), false);
+  });
+  it("carries the blend mode, with MapLibre's add as the SDK's plus", () => {
+    const tiles = geojsonLayer({
+      geojson: undefined,
+      type: "xyz",
+      source: { type: "raster", tiles: ["https://t/{z}/{x}/{y}.png"] },
+    });
+    assert.equal(compileArcgisLayer(tiles).blendMode, "normal");
+    const add = compileArcgisLayer({
+      ...tiles,
+      style: { ...DEFAULT_LAYER_STYLE, blendMode: "add" },
+    });
+    assert.equal(add.blendMode, "plus");
+    const multiply = compileArcgisLayer({
+      ...tiles,
+      style: { ...DEFAULT_LAYER_STYLE, blendMode: "multiply" },
+    });
+    assert.equal(multiply.blendMode, "multiply");
+  });
+});
+
+describe("ArcGIS annotation layers", () => {
+  it("leaves hidden annotations out, as MapLibre's layer sync does", () => {
+    const layer = geojsonLayer({
+      metadata: { sourceKind: "annotation" },
+      geojson: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            id: "shown",
+            properties: { visible: true },
+            geometry: { type: "Point", coordinates: [0, 0] },
+          },
+          {
+            type: "Feature",
+            id: "hidden",
+            properties: { visible: false },
+            geometry: { type: "Point", coordinates: [1, 1] },
+          },
+        ],
+      },
+    });
+    const plan = compileArcgisLayer(layer);
+    assert.equal(plan.kind, "geojson");
+    if (plan.kind !== "geojson") return;
+    const ids = plan.parts.flatMap(
+      (part) => part.features?.features.map((f) => f.properties?.[ARCGIS_ID_FIELD]) ?? [],
+    );
+    assert.deepEqual(ids, ["shown"]);
   });
 });
 

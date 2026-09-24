@@ -103,8 +103,8 @@ const app = {
 } as unknown as GeoLibreAppAPI;
 
 function installStubModule(): void {
-  __setComponentsModuleLoaderForTests(
-    (): Promise<ComponentsModules> => Promise.resolve([fakeComponentsModule, null]),
+  __setComponentsModuleLoaderForTests((): Promise<ComponentsModules> =>
+    Promise.resolve([fakeComponentsModule, null]),
   );
 }
 
