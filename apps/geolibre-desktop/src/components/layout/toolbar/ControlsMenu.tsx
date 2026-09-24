@@ -159,6 +159,9 @@ export function ControlsMenu({
     panels.flightSimulator.visible,
   );
   const graticuleDisabled = unsupported(maplibreGraticulePlugin, graticuleActive);
+  // The measure control draws its sketch through the MapLibre/Mapbox style
+  // API, which the ArcGIS view has no equivalent of.
+  const measureDisabled = primaryRenderer === "arcgis" && !panels.measure.visible;
   const effectsSupported = isPluginEngineSupported(maplibreEffectsPlugin, primaryRenderer);
   const reverseGeocodeDisabled = !reverseGeocodeSupported && !reverseGeocodeActive;
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
@@ -512,7 +515,12 @@ export function ControlsMenu({
             </DropdownMenuItem>
           )}
           {show("controls.measure") && (
-            <DropdownMenuItem onSelect={panels.measure.toggle}>
+            <DropdownMenuItem
+              disabled={measureDisabled}
+              className={REASON_ON_HOVER}
+              title={measureDisabled ? t("renderer.pluginUnsupported") : undefined}
+              onSelect={panels.measure.toggle}
+            >
               {t("toolbar.item.measure")}
               {panels.measure.visible ? " ✓" : ""}
             </DropdownMenuItem>

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { BLANK_BASEMAP, DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "@geolibre/core";
 import {
   arcgisRasterEffect,
+  arcgisUnsupportedStyleSettings,
   isArcgisRasterPlan,
   ARCGIS_HEIGHT_FIELD,
   ARCGIS_ID_FIELD,
@@ -418,6 +419,99 @@ describe("ArcGIS raster colour effect and blend mode", () => {
       style: { ...DEFAULT_LAYER_STYLE, blendMode: "multiply" },
     });
     assert.equal(multiply.blendMode, "multiply");
+  });
+});
+
+describe("arcgisUnsupportedStyleSettings", () => {
+  it("names nothing for a default style", () => {
+    assert.deepEqual(arcgisUnsupportedStyleSettings(geojsonLayer({}), false), []);
+  });
+  it("names what no view draws, and what depends on the view", () => {
+    const layer = geojsonLayer({
+      style: {
+        ...DEFAULT_LAYER_STYLE,
+        lineDecoration: "arrow",
+        invertedFillEnabled: true,
+        pointRenderer: "cluster",
+        extrusionEnabled: true,
+        blendMode: "multiply",
+      },
+    });
+    assert.deepEqual(arcgisUnsupportedStyleSettings(layer, false), [
+      "lineDecoration",
+      "invertedFill",
+      "extrusionFlat",
+    ]);
+    assert.deepEqual(arcgisUnsupportedStyleSettings(layer, true), [
+      "lineDecoration",
+      "invertedFill",
+      "blendModeScene",
+      "clusterScene",
+    ]);
+  });
+});
+
+describe("ArcGIS service records", () => {
+  it("loads a MapServer sublayer as a feature layer, not a map image", () => {
+    const record = (url: string) =>
+      compileArcgisLayer(
+        geojsonLayer({ geojson: undefined, type: "arcgis", source: { type: "geojson", url } }),
+      );
+    assert.equal(record("https://h/rest/services/USA/MapServer/2").kind, "feature-service");
+    assert.equal(record("https://h/rest/services/USA/MapServer").kind, "map-image");
+    assert.equal(record("https://h/rest/services/USA/FeatureServer/0").kind, "feature-service");
+  });
+});
+
+describe("ArcGIS text markers", () => {
+  it("draws Geo Editor text markers as their own text, one class per colour", () => {
+    const layer = geojsonLayer({
+      geojson: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            id: "t1",
+            properties: { __gm_shape: "text_marker", __gm_text: "Hello" },
+            geometry: { type: "Point", coordinates: [0, 0] },
+          },
+          {
+            type: "Feature",
+            id: "t2",
+            properties: { shape: "text_marker", text: "Note", "text-color": "#ff0000" },
+            geometry: { type: "Point", coordinates: [1, 1] },
+          },
+          {
+            type: "Feature",
+            id: "dot",
+            properties: {},
+            geometry: { type: "Point", coordinates: [2, 2] },
+          },
+        ],
+      },
+    });
+    const plan = compileArcgisLayer(layer);
+    assert.equal(plan.kind, "geojson");
+    if (plan.kind !== "geojson") return;
+    // The ordinary point part keeps only the plain point.
+    const [points, text] = plan.parts;
+    assert.deepEqual(
+      points.features?.features.map((f) => f.properties?.[ARCGIS_ID_FIELD]),
+      ["dot"],
+    );
+    assert.deepEqual(
+      text.features?.features.map((f) => f.properties?.[ARCGIS_LABEL_FIELD]),
+      ["Hello", "Note"],
+    );
+    assert.equal(text.labelingInfo?.length, 2);
+    assert.deepEqual(
+      text.labelingInfo?.map((info) => info.where),
+      [`${ARCGIS_SYMBOL_FIELD} = 't0'`, `${ARCGIS_SYMBOL_FIELD} = 't1'`],
+    );
+    assert.deepEqual(
+      (text.labelingInfo?.[1].symbol as { color: number[] }).color.slice(0, 3),
+      [255, 0, 0],
+    );
   });
 });
 

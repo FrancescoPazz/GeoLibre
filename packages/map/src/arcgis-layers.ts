@@ -3,6 +3,7 @@ import {
   BLEND_MODES,
   compileLayerFilters,
   DEFAULT_BLEND_MODE,
+  documentLocale,
   DEFAULT_LAYER_STYLE,
   extrusionColorValue,
   extrusionHeightValue,
@@ -23,12 +24,14 @@ import { KML_ICON_URL_PROPERTY } from "./markers";
 import { compileMapboxLayer } from "./mapbox-layers";
 import { arcgisVectorStyle } from "./arcgis-vector-style";
 import { proxyWmsTiles } from "./wms-proxy";
+import { hasRegisteredProtocol, protocolScheme } from "./cesium-protocol-imagery";
 import {
   isTileTemplate,
   needsTemplateTileLayer,
   type ArcgisTileTemplateSource,
 } from "./arcgis-template-tiles";
 import { imageryColorAdjustments } from "./raster-color-adjustments";
+import { GEOMAN_TEXT_PROPERTY, isTextMarkerFeature } from "./label-style";
 
 /**
  * Translate a store layer into what the ArcGIS Maps SDK can draw (issue #2421).
@@ -119,6 +122,8 @@ export interface ArcgisLabelingJson {
   minScale: number;
   maxScale: number;
   deconflictionStrategy: "none" | "static";
+  /** SQL where clause limiting the class to some features. */
+  where?: string;
 }
 
 /** One GeoJSONLayer: the features of a single geometry kind, symbolized. */
@@ -271,6 +276,11 @@ export type ArcgisLayerPlan = ArcgisPlanBase &
     | {
         kind: "feature-service";
         url: string;
+        /**
+         * The layer's own symbol per geometry kind; the engine picks the one
+         * matching the service's geometry type once loaded.
+         */
+        symbols?: Record<ArcgisGeometryKind, ArcgisSymbolJson>;
         /** The layer's filters as an SQL where clause, when they translate. */
         definitionExpression?: string;
         /** Filters are active but have no SQL form; the service draws unfiltered. */
@@ -744,7 +754,8 @@ function compileLabelText(
 ): { read: (feature: Feature, zoom: number) => string; zoomDependent: boolean } | null {
   const labels = style.labels;
   if (!labels.enabled || (!labels.field && !labels.expression.trim())) return null;
-  let value: unknown = labelFieldTextField(labels);
+  // Number formatting follows the app's locale, as on the 2D map.
+  let value: unknown = labelFieldTextField(labels, documentLocale());
   if (labels.expression.trim()) {
     try {
       value = JSON.parse(labels.expression);
@@ -752,8 +763,14 @@ function compileLabelText(
       // An unparseable expression keeps the field text, as on Mapbox.
     }
   }
+  const transform = (text: string) =>
+    labels.transform === "uppercase"
+      ? text.toUpperCase()
+      : labels.transform === "lowercase"
+        ? text.toLowerCase()
+        : text;
   if (typeof value === "string") {
-    const text = value;
+    const text = transform(value);
     return { read: () => text, zoomDependent: false };
   }
   if (!Array.isArray(value)) return null;
@@ -764,12 +781,6 @@ function compileLabelText(
   } as never);
   if (compiled.result === "error") return null;
   const expression = compiled.value;
-  const transform = (text: string) =>
-    labels.transform === "uppercase"
-      ? text.toUpperCase()
-      : labels.transform === "lowercase"
-        ? text.toLowerCase()
-        : text;
   return {
     zoomDependent: ZOOM_OPERAND.test(JSON.stringify(value)),
     read: (feature, zoom) => {
@@ -811,6 +822,8 @@ function labelingFor(
         haloColor: cssToArcgisColor(labels.haloColor),
         haloSize: `${Math.max(0, labels.haloWidth)}px`,
         font: { size: `${Math.max(1, labels.size)}px`, family: "sans-serif" },
+        // MapLibre wraps at `text-max-width` ems of the text size.
+        lineWidth: `${Math.max(1, labels.maxWidth ?? 10) * Math.max(1, labels.size)}px`,
         // MapLibre offsets are in ems of the text size, y down; the SDK's are
         // in points or pixels, y up.
         xoffset: `${labels.offsetX * labels.size}px`,
@@ -978,10 +991,41 @@ function compileGeoJson(
       symbols: Map<string, { id: string; symbol: ArcgisSymbolJson | ArcgisMarkerPlaceholder }>;
     }
   >();
+  // Geo Editor text markers (and annotation text) are drawn as their own
+  // text, not as points with the layer's label; each distinct colour is one
+  // label class, keyed through the symbol field.
+  const textMarkers: Feature[] = [];
+  const textColors = new Map<string, string>();
   data.features.forEach((feature, index) => {
     if (!feature.geometry) return;
     if (filter.test && !filter.test(feature, zoom)) return;
     const id = String(feature.id ?? index);
+    if (isTextMarkerFeature(feature)) {
+      const props = feature.properties ?? {};
+      const color =
+        typeof props["text-color"] === "string" && props["text-color"]
+          ? props["text-color"]
+          : style.textColor;
+      let colorId = textColors.get(color);
+      if (colorId === undefined) {
+        colorId = `t${textColors.size}`;
+        textColors.set(color, colorId);
+      }
+      const text = String(props[GEOMAN_TEXT_PROPERTY] ?? props.text ?? "");
+      for (const geometry of explodePoints(feature.geometry)) {
+        if (GEOMETRY_KIND[geometry.type] !== "point") continue;
+        textMarkers.push({
+          type: "Feature",
+          geometry,
+          properties: {
+            [ARCGIS_ID_FIELD]: id,
+            [ARCGIS_SYMBOL_FIELD]: colorId,
+            [ARCGIS_LABEL_FIELD]: text,
+          },
+        });
+      }
+      return;
+    }
     let symbol: ReturnType<typeof resolver.resolve> | undefined;
     const text = label ? label.read(feature, zoom) : "";
     for (const geometry of explodePoints(feature.geometry)) {
@@ -1024,87 +1068,121 @@ function compileGeoJson(
   // A stable order — polygons under lines under points — so the SDK draws the
   // kinds the way the 2D map stacks its fill, line and circle layers.
   const order: ArcgisGeometryKind[] = ["polygon", "polyline", "point"];
+  const textPart: ArcgisGeoJsonPart[] = textMarkers.length
+    ? [
+        {
+          geometryType: "point",
+          features: { type: "FeatureCollection", features: textMarkers },
+          // The text is the marker: the point itself draws nothing.
+          // Transparent but sized, so a click on the marker still hits it.
+          renderer: {
+            type: "simple",
+            symbol: { type: "simple-marker", color: [0, 0, 0, 0], size: 12, outline: null },
+          } as unknown as ArcgisRendererJson,
+          labelingInfo: [...textColors].map(([color, colorId]) => ({
+            labelExpressionInfo: { expression: `$feature.${ARCGIS_LABEL_FIELD}` },
+            labelPlacement: "center-center",
+            where: `${ARCGIS_SYMBOL_FIELD} = '${colorId}'`,
+            symbol: {
+              type: "text",
+              color: cssToArcgisColor(color),
+              haloColor: cssToArcgisColor(style.textHaloColor),
+              haloSize: `${Math.max(0, style.textHaloWidth)}px`,
+              font: { size: `${Math.max(1, style.textSize)}px`, family: "sans-serif" },
+            } as unknown as ArcgisSymbolJson,
+            ...scales,
+            // Text markers always show, as MapLibre allows their overlap.
+            deconflictionStrategy: "none" as const,
+          })),
+        },
+      ]
+    : [];
   return {
     zoomDependent:
       resolver.zoomDependent ||
       filter.zoomDependent ||
       Boolean(label?.zoomDependent) ||
       Boolean(extrusion?.zoomDependent),
-    parts: order
-      .filter((kind) => parts.has(kind))
-      .map((kind) => {
-        const { features, symbols } = parts.get(kind)!;
-        const entries = [...symbols.values()];
-        const extruded = extrusion !== null && kind === "polygon";
-        // The extrusion's height varies per feature; a size visual variable
-        // reads it from the baked field instead of one symbol per height.
-        const visualVariables: ArcgisVisualVariableJson[] | undefined = extruded
-          ? [{ type: "size", field: ARCGIS_HEIGHT_FIELD, valueUnit: "meters" }]
-          : undefined;
-        let renderer = (
-          entries.length === 1
-            ? {
-                type: "simple",
-                symbol: entries[0].symbol,
-                ...(visualVariables && { visualVariables }),
-              }
-            : {
-                type: "unique-value",
-                field: ARCGIS_SYMBOL_FIELD,
-                uniqueValueInfos: entries.map(({ id, symbol }) => ({ value: id, symbol })),
-                ...(visualVariables && { visualVariables }),
-              }
-        ) as ArcgisRendererJson;
-        const heatmap = kind === "point" && style.pointRenderer === "heatmap";
-        if (heatmap) renderer = heatmapRenderer(style, scene);
-        const markers = !heatmap && entries.some(({ symbol }) => isMarkerPlaceholder(symbol));
-        return {
-          geometryType: kind,
-          features: { type: "FeatureCollection", features },
-          renderer,
-          ...(label && !(heatmap && scene)
-            ? { labelingInfo: labelingFor(kind, style, scales) }
-            : {}),
-          ...(markers ? { markerStyle: style } : {}),
-          ...(kind === "polygon" && !scene && style.fillPattern !== "none"
-            ? { patternStyle: style }
-            : {}),
-          ...(extruded
-            ? { elevationInfo: { mode: "relative-to-ground" as const, offset: extrusion.base } }
-            : {}),
-          ...(elevated
-            ? { hasZ: true, elevationInfo: { mode: "absolute-height" as const, offset: 0 } }
-            : {}),
-          ...(kind === "point" && style.pointRenderer === "cluster" && !scene
-            ? {
-                featureReduction: {
-                  type: "cluster",
-                  clusterRadius: `${style.clusterRadius}px`,
-                  clusterMinSize: "32px",
-                  clusterMaxSize: "60px",
-                  // MapLibre clusters through the inclusive integer clusterMaxZoom;
-                  // the native scale cutoff is the start of the next zoom level.
-                  maxScale: zoomToScale(style.clusterMaxZoom + 1),
-                  labelingInfo: [
-                    {
-                      labelExpressionInfo: { expression: "Text($feature.cluster_count, '#,###')" },
-                      labelPlacement: "center-center",
-                      deconflictionStrategy: "none",
-                      symbol: {
-                        type: "text",
-                        color: "white",
-                        font: { size: "12px" },
-                        haloColor: "black",
-                        haloSize: "1px",
+    parts: [
+      ...order
+        .filter((kind) => parts.has(kind))
+        .map((kind): ArcgisGeoJsonPart => {
+          const { features, symbols } = parts.get(kind)!;
+          const entries = [...symbols.values()];
+          const extruded = extrusion !== null && kind === "polygon";
+          // The extrusion's height varies per feature; a size visual variable
+          // reads it from the baked field instead of one symbol per height.
+          const visualVariables: ArcgisVisualVariableJson[] | undefined = extruded
+            ? [{ type: "size", field: ARCGIS_HEIGHT_FIELD, valueUnit: "meters" }]
+            : undefined;
+          let renderer = (
+            entries.length === 1
+              ? {
+                  type: "simple",
+                  symbol: entries[0].symbol,
+                  ...(visualVariables && { visualVariables }),
+                }
+              : {
+                  type: "unique-value",
+                  field: ARCGIS_SYMBOL_FIELD,
+                  uniqueValueInfos: entries.map(({ id, symbol }) => ({ value: id, symbol })),
+                  ...(visualVariables && { visualVariables }),
+                }
+          ) as ArcgisRendererJson;
+          const heatmap = kind === "point" && style.pointRenderer === "heatmap";
+          if (heatmap) renderer = heatmapRenderer(style, scene);
+          const markers = !heatmap && entries.some(({ symbol }) => isMarkerPlaceholder(symbol));
+          return {
+            geometryType: kind,
+            features: { type: "FeatureCollection", features },
+            renderer,
+            ...(label && !(heatmap && scene)
+              ? { labelingInfo: labelingFor(kind, style, scales) }
+              : {}),
+            ...(markers ? { markerStyle: style } : {}),
+            ...(kind === "polygon" && !scene && style.fillPattern !== "none"
+              ? { patternStyle: style }
+              : {}),
+            ...(extruded
+              ? { elevationInfo: { mode: "relative-to-ground" as const, offset: extrusion.base } }
+              : {}),
+            ...(elevated
+              ? { hasZ: true, elevationInfo: { mode: "absolute-height" as const, offset: 0 } }
+              : {}),
+            ...(kind === "point" && style.pointRenderer === "cluster" && !scene
+              ? {
+                  featureReduction: {
+                    type: "cluster",
+                    clusterRadius: `${style.clusterRadius}px`,
+                    clusterMinSize: "32px",
+                    clusterMaxSize: "60px",
+                    // MapLibre clusters through the inclusive integer clusterMaxZoom;
+                    // the native scale cutoff is the start of the next zoom level.
+                    maxScale: zoomToScale(style.clusterMaxZoom + 1),
+                    labelingInfo: [
+                      {
+                        labelExpressionInfo: {
+                          expression: "Text($feature.cluster_count, '#,###')",
+                        },
+                        labelPlacement: "center-center",
+                        deconflictionStrategy: "none",
+                        symbol: {
+                          type: "text",
+                          color: "white",
+                          font: { size: "12px" },
+                          haloColor: "black",
+                          haloSize: "1px",
+                        },
                       },
-                    },
-                  ],
-                  popupEnabled: false,
-                },
-              }
-            : {}),
-        };
-      }),
+                    ],
+                    popupEnabled: false,
+                  },
+                }
+              : {}),
+          };
+        }),
+      ...textPart,
+    ],
   };
 }
 
@@ -1221,6 +1299,7 @@ export function wmsLayerFromTemplate(template: string): {
 function templateTileSource(
   layer: GeoLibreLayer,
   templates: string[],
+  viaProtocol = false,
 ): ArcgisTileTemplateSource | null {
   const { scheme, tileSize, minzoom, maxzoom } = layer.source as {
     scheme?: unknown;
@@ -1233,6 +1312,7 @@ function templateTileSource(
   const size = finite(tileSize) && tileSize > 0 ? tileSize : 256;
   // MapLibre's own defaults (0 and 22) change nothing the plain path draws.
   if (
+    !viaProtocol &&
     scheme !== "tms" &&
     size === 256 &&
     !(finite(minzoom) && minzoom > 0) &&
@@ -1255,6 +1335,49 @@ function templateTileSource(
     maxzoom: finite(maxzoom) ? Math.max(0, maxzoom) : 22,
     ...(layerBounds ? { bounds: layerBounds } : {}),
   };
+}
+
+/** Style settings the ArcGIS renderer does not draw, named in the Style panel. */
+export type ArcgisUnsupportedStyleSetting =
+  | "lineDecoration"
+  | "geometryGenerator"
+  | "invertedFill"
+  | "diagram"
+  | "labelDedupe"
+  | "blendModeScene"
+  | "clusterScene"
+  | "fillPatternScene"
+  | "extrusionFlat";
+
+/**
+ * The {@link ArcgisUnsupportedStyleSetting}s this layer's style turns on, for
+ * the view it would draw in: the SDK draws clusters, fill patterns and blend
+ * modes on a flat `MapView` only, and extrusion in a `SceneView` only.
+ *
+ * @param layer - The store layer whose style is checked.
+ * @param scene - Whether the ArcGIS map is a 3D `SceneView`.
+ * @returns The settings that turn on something the renderer ignores.
+ */
+export function arcgisUnsupportedStyleSettings(
+  layer: GeoLibreLayer,
+  scene: boolean,
+): ArcgisUnsupportedStyleSetting[] {
+  const style: LayerStyle = { ...DEFAULT_LAYER_STYLE, ...layer.style };
+  const labels = { ...DEFAULT_LAYER_STYLE.labels, ...style.labels };
+  const settings: ArcgisUnsupportedStyleSetting[] = [];
+  if (style.lineDecoration && style.lineDecoration !== "none") settings.push("lineDecoration");
+  if (style.geometryGenerator && style.geometryGenerator !== "none")
+    settings.push("geometryGenerator");
+  if (style.invertedFillEnabled) settings.push("invertedFill");
+  if (style.diagramType && style.diagramType !== "none") settings.push("diagram");
+  if (labels.enabled && labels.dedupe && labels.dedupe !== "off") settings.push("labelDedupe");
+  if (scene) {
+    if ((style.blendMode ?? DEFAULT_BLEND_MODE) !== DEFAULT_BLEND_MODE)
+      settings.push("blendModeScene");
+    if (style.pointRenderer === "cluster") settings.push("clusterScene");
+    if (style.fillPattern && style.fillPattern !== "none") settings.push("fillPatternScene");
+  } else if (style.extrusionEnabled) settings.push("extrusionFlat");
+  return settings;
 }
 
 /** Store layer types the engine draws as a raster tile source. */
@@ -1434,15 +1557,35 @@ export function compileArcgisLayer(
     const serviceUrl = url ?? (typeof layer.sourcePath === "string" ? layer.sourcePath : undefined);
     if (!serviceUrl || !ARCGIS_SERVICE.test(serviceUrl))
       throw new Error("ArcGIS layer has no service URL the ArcGIS renderer can load");
-    if (/FeatureServer/i.test(serviceUrl)) {
+    // A FeatureServer, or one MapServer sublayer (`MapServer/2`): a feature
+    // layer the SDK's FeatureLayer loads and queries directly. A MapImageLayer
+    // pointed at a sublayer would request `/export` from it and fail.
+    if (/FeatureServer/i.test(serviceUrl) || /\/MapServer\/\d+\/?(?:\?|$)/i.test(serviceUrl)) {
       // The service filters server-side: the layer's MapLibre filters become
       // an SQL where clause where one exists.
       const filter = activeFilters(layer);
       const sql = filter ? filterToSql(filter) : null;
+      // The layer draws with its style, as the 2D map draws the same
+      // service's features (Add Data gives every service layer one).
+      const resolver = createFeatureStyleResolver(style);
+      const symbol = resolver.resolve(undefined, zoom);
+      // Points read the point channels (their outline width is not a line's).
+      const pointSymbol = resolver.resolve(
+        { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [0, 0] } },
+        zoom,
+      );
       return {
         ...base,
         kind: "feature-service",
         url: serviceUrl,
+        // A zoom-dependent style (metre-unit strokes, zoom rules) is resolved
+        // again when the integer zoom changes, as for GeoJSON.
+        zoomDependent: resolver.zoomDependent,
+        symbols: {
+          point: symbolForKind("point", pointSymbol),
+          polyline: symbolForKind("polyline", symbol),
+          polygon: symbolForKind("polygon", symbol),
+        },
         ...(sql ? { definitionExpression: sql } : {}),
         ...(filter && !sql ? { filterUnsupported: true } : {}),
       };
@@ -1504,13 +1647,16 @@ export function compileArcgisLayer(
     return { ...base, kind: "wms", ...wmsLayerFromTemplate(proxied[0]) };
   if (RASTER_TILE_TYPES.has(layer.type) && (tiles.length || url)) {
     const templates = proxied.length ? proxied : [url!];
-    // `cog://`, `pmtiles://`, `mbtiles://` and friends are MapLibre protocol
-    // handlers registered with maplibre-gl only.
-    if (templates.some((t) => /^[\w+-]+:/.test(t) && !/^(?:https?|data|blob):/i.test(t)))
+    // `geolibre-wms://` (the desktop's CORS-exempt WMS fetcher), `cog://` and
+    // friends are MapLibre protocol handlers. The template-tile layer asks the
+    // registered handler for each tile, as the globe does; a scheme with no
+    // handler cannot be drawn.
+    const protocols = templates.map(protocolScheme);
+    if (protocols.some((scheme) => scheme && !hasRegisteredProtocol(scheme)))
       throw new Error("MapLibre custom tile protocols are not supported by the ArcGIS renderer");
     const copyright =
       typeof layer.source.attribution === "string" ? { copyright: layer.source.attribution } : {};
-    const tileSource = templateTileSource(layer, templates);
+    const tileSource = templateTileSource(layer, templates, protocols.some(Boolean));
     // An ArcGIS export/tile template (the ArcGIS Layer panel's raster path) is
     // still a plain tile template; the SDK's own service classes are used only
     // for records that name the service itself (the `arcgis` type above).

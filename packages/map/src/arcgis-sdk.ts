@@ -64,6 +64,8 @@ export interface ArcgisPoint {
   y: number;
   longitude: number;
   latitude: number;
+  /** Height of the point; a SceneView's `toMap` gives the ground's here. */
+  z?: number;
   spatialReference: ArcgisSpatialReference;
 }
 
@@ -142,6 +144,10 @@ export interface ArcgisLayer {
   labelingInfo?: unknown[];
   /** `WebTileLayer` only. */
   urlTemplate?: string;
+  /** `FeatureLayer` only: query the service. */
+  queryFeatures?(
+    query: Record<string, unknown>,
+  ): Promise<{ features: ArcgisGraphic[]; exceededTransferLimit?: boolean }>;
 }
 
 export interface ArcgisBasemap {

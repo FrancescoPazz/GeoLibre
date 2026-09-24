@@ -478,6 +478,19 @@ describe("ArcgisEngine camera moves", () => {
     engine.fitBounds([3, 4, 3, 4]);
     assert.deepEqual((goTo[1] as { target: unknown }).target, { center: [3, 4], zoom: 17 });
   });
+  it("fits a tile layer at its minimum render zoom when its extent is wider", () => {
+    const { engine, goTo } = makeEngine();
+    const tiles = {
+      ...geojsonLayer({ id: "t", geojson: undefined }),
+      type: "vector-tiles" as const,
+      source: { type: "vector", minzoom: 15, bounds: [-10, -10, 10, 10] },
+    };
+    engine.fitLayer(tiles);
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { center: [0, 0], zoom: 15 });
+    // A small enough extent is framed as usual.
+    engine.fitLayer({ ...tiles, source: { ...tiles.source, bounds: [0, 0, 0.001, 0.001] } });
+    assert.ok("xmin" in (goTo.at(-1) as { target: object }).target);
+  });
   it("turns a story chapter once, and not when a later chapter superseded it", async () => {
     const { engine, goTo } = makeEngine();
     engine.applyStoryChapterCamera({ center: [1, 2], zoom: 5 }, "flyTo", true);
@@ -492,6 +505,22 @@ describe("ArcgisEngine camera moves", () => {
       target: { rotation: -180 },
       options: { duration: 30000, easing: "linear" },
     });
+  });
+  it("marks the settle that ends a story move as scripted", async () => {
+    const { engine, fireWatchers, fireViewEvent } = makeEngine();
+    const seen: (boolean | undefined)[] = [];
+    engine.onCameraIdle((event) => seen.push(event?.storyCamera));
+    fireWatchers();
+    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 5 });
+    fireWatchers();
+    await Promise.resolve();
+    fireWatchers();
+    // A drag during a story move makes the next settle the user's.
+    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 6 });
+    fireViewEvent("drag", { x: 1, y: 1, action: "start" });
+    fireWatchers();
+    engine.destroy();
+    assert.deepEqual(seen, [false, true, false, false]);
   });
   it("reads and steps the zoom of a view with no tiling scheme through its scale", () => {
     const { engine, goTo, rawView } = makeEngine();
@@ -778,6 +807,19 @@ describe("ArcgisEngine layer sync", () => {
     engine.syncLayers([{ ...archive, visible: false }]);
     assert.deepEqual(engine.getRenderStatus().errors, []);
   });
+  it("names a plugin-drawn layer it cannot show in the banner, while visible", () => {
+    const { engine } = makeEngine();
+    const mirror = {
+      ...geojsonLayer({ id: "pc", name: "Sentinel-2", geojson: undefined }),
+      type: "raster" as const,
+      source: { sourceId: "pc" },
+      metadata: { externalNativeLayer: true, nativeLayerIds: ["pc-layer"] },
+    };
+    engine.syncLayers([mirror]);
+    assert.match(engine.getRenderStatus().errors.join(), /Sentinel-2: drawn by a plugin/);
+    engine.syncLayers([{ ...mirror, visible: false }]);
+    assert.deepEqual(engine.getRenderStatus().errors, []);
+  });
   it("draws raster and service records through the SDK's layer classes", () => {
     const { engine, layers } = makeEngine();
     engine.syncLayers([
@@ -856,6 +898,61 @@ describe("ArcgisEngine layer sync", () => {
     engine.syncLayers([{ ...SQUARE, style: { ...DEFAULT_LAYER_STYLE, blendMode: "multiply" } }]);
     assert.equal(created.length, count, "no native layer was rebuilt");
     assert.ok(created.slice(-2).every((layer) => layer.blendMode === "multiply"));
+  });
+  it("hands story exports plain HTTP tile templates for service and desktop WMS layers", () => {
+    const { engine } = makeEngine();
+    const service = (id: string, url: string, metadata = {}) => ({
+      ...geojsonLayer({ id, name: id, geojson: undefined }),
+      type: "arcgis" as const,
+      source: { url },
+      metadata,
+    });
+    engine.syncLayers([
+      service("tiled", "https://h/rest/services/A/MapServer/", { arcgisTiled: true }),
+      service("dynamic", "https://h/rest/services/B/MapServer"),
+      service("imagery", "https://h/rest/services/C/ImageServer"),
+    ]);
+    assert.deepEqual(engine.getLayerRasterSource("tiled")?.tiles, [
+      "https://h/rest/services/A/MapServer/tile/{z}/{y}/{x}",
+    ]);
+    assert.match(
+      String((engine.getLayerRasterSource("dynamic")?.tiles as string[])[0]),
+      /^https:\/\/h\/rest\/services\/B\/MapServer\/export\?bbox=\{bbox-epsg-3857\}/,
+    );
+    assert.match(
+      String((engine.getLayerRasterSource("imagery")?.tiles as string[])[0]),
+      /ImageServer\/exportImage\?/,
+    );
+  });
+  it("fades a story chapter's layer opacity over the transition", () => {
+    const { engine, created } = makeEngine();
+    const frames: FrameRequestCallback[] = [];
+    const previous = {
+      requestAnimationFrame: globalThis.requestAnimationFrame,
+      cancelAnimationFrame: globalThis.cancelAnimationFrame,
+    };
+    Object.assign(globalThis, {
+      requestAnimationFrame: (cb: FrameRequestCallback) => frames.push(cb),
+      cancelAnimationFrame: () => {},
+    });
+    try {
+      engine.syncLayers([SQUARE]);
+      const native = created.at(-1)!;
+      const start = performance.now();
+      engine.setStoryLayerOpacity(SQUARE.id, 0, 1000);
+      // Still where it was until frames run.
+      assert.equal(native.opacity, 1);
+      frames.shift()!(start + 500);
+      assert.ok(native.opacity > 0.3 && native.opacity < 0.7, String(native.opacity));
+      frames.shift()!(start + 2000);
+      assert.equal(native.opacity, 0);
+      assert.equal(frames.length, 0);
+      // No duration applies at once.
+      engine.setStoryLayerOpacity(SQUARE.id, 0.5);
+      assert.equal(native.opacity, 0.5);
+    } finally {
+      Object.assign(globalThis, previous);
+    }
   });
   it("reuses a GeoJSON plan across opacity, visibility and name changes", () => {
     const { engine, created } = makeEngine();
@@ -1014,6 +1111,102 @@ describe("ArcgisEngine picking and highlight", () => {
     assert.equal(feature.featureId, "7");
     assert.deepEqual(feature.properties, { OBJECTID: 7, NAME: "Parcel" });
     assert.equal(feature.geometry?.type, "Polygon");
+  });
+  it("styles, highlights and reads back a native FeatureServer layer", async () => {
+    const { engine, layers, setHitResults, map } = makeEngine();
+    const record = {
+      ...geojsonLayer({ id: "fs", name: "Service", geojson: undefined }),
+      type: "arcgis" as const,
+      source: { type: "geojson", url: "https://h/rest/services/X/FeatureServer/0" },
+    };
+    // The layer draws with its style once the service's geometry type is known.
+    engine.syncLayers([{ ...record, style: { ...DEFAULT_LAYER_STYLE, fillColor: "#ff0000" } }]);
+    const service = layers.items[0] as (typeof layers.items)[0] & {
+      geometryType?: string;
+      queryFeatures?: unknown;
+    };
+    service.geometryType = "polygon";
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const renderer = service.renderer as { symbol: { type: string; color: number[] } };
+    assert.equal(renderer.symbol.type, "simple-fill");
+    assert.deepEqual(renderer.symbol.color.slice(0, 3), [255, 0, 0]);
+    // A hit leaves the feature's geometry behind for its highlight.
+    setHitResults([
+      {
+        type: "graphic",
+        graphic: {
+          attributes: { OBJECTID: 7 },
+          layer: service,
+          geometry: {
+            type: "polygon",
+            rings: [
+              [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 0],
+              ],
+            ],
+            spatialReference: { wkid: 4326 },
+          },
+        },
+      },
+    ]);
+    await engine.identifyFeaturesAt({ x: 0, y: 0 });
+    const before = (map.layers as unknown as { items: unknown[] }).items.length;
+    engine.highlightFeature(engine["layers"][0], "7");
+    assert.equal((map.layers as unknown as { items: unknown[] }).items.length, before + 1);
+    // GeoJSON comes from a service query.
+    service.queryFeatures = async () => ({
+      features: [
+        {
+          attributes: { OBJECTID: 1, NAME: "A" },
+          geometry: { type: "point", x: 3, y: 4, spatialReference: { wkid: 4326 } },
+          layer: null,
+        },
+      ],
+    });
+    (service as { objectIdField?: string }).objectIdField = "OBJECTID";
+    const collection = await engine.getLayerGeoJson("fs");
+    assert.equal(collection?.features.length, 1);
+    assert.equal(collection?.features[0].id, 1);
+    assert.deepEqual(collection?.features[0].properties, { OBJECTID: 1, NAME: "A" });
+    // A service past its record limit is paged.
+    const starts: unknown[] = [];
+    service.queryFeatures = async (query: { start?: number; num?: number }) => {
+      starts.push(query.start === undefined ? undefined : [query.start, query.num]);
+      const start = query.start ?? 0;
+      return {
+        exceededTransferLimit: start === 0,
+        features: [
+          {
+            attributes: { OBJECTID: start + 1 },
+            geometry: { type: "point", x: 3, y: 4, spatialReference: { wkid: 4326 } },
+            layer: null,
+          },
+        ],
+      };
+    };
+    assert.equal((await engine.getLayerGeoJson("fs"))?.features.length, 2);
+    // Later pages ask for as many rows as the first page returned.
+    assert.deepEqual(starts, [undefined, [1, 1]]);
+    // A service that ignores the offset keeps sending its first page: stop.
+    let calls = 0;
+    service.queryFeatures = async () => {
+      calls++;
+      return {
+        exceededTransferLimit: true,
+        features: [
+          {
+            attributes: { OBJECTID: 1 },
+            geometry: { type: "point", x: 3, y: 4, spatialReference: { wkid: 4326 } },
+            layer: null,
+          },
+        ],
+      };
+    };
+    assert.equal((await engine.getLayerGeoJson("fs"))?.features.length, 1);
+    assert.equal(calls, 2);
   });
   it("keeps synchronous control results when a native hit test outlives the engine", async () => {
     const { setArcgisControlPicker } = await import("../packages/map/src/arcgis-control-adapters");
@@ -1506,7 +1699,7 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
   const { document, HTMLElement } = parseHTML("<html><body></body></html>").window;
   const previous = { document: globalThis.document, HTMLElement: globalThis.HTMLElement };
   Object.assign(globalThis, { document, HTMLElement });
-  const { engine, rawView, goTo, uiAdds, fireWatchers } = makeEngine();
+  const { engine, rawView, goTo, uiAdds, fireWatchers, fireViewEvent } = makeEngine();
   rawView.container = document.body;
   const builtInCount = uiAdds.length;
   let facade!: MapLibreMap;
@@ -1547,6 +1740,22 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
     rawView.stationary = true;
     fireWatchers();
     assert.deepEqual(events, ["movestart", "moveend", "idle"]);
+    // Camera frames and pointer events reach the facade as MapLibre's.
+    const live: string[] = [];
+    let clicked: number[] = [];
+    facade.on("move", () => live.push("move"));
+    facade.on("zoom", () => live.push("zoom"));
+    facade.on("click", (event: { lngLat: { toArray(): number[] } }) => {
+      clicked = event.lngLat.toArray();
+    });
+    rawView.toMap = (p: { x: number; y: number }) => ({ longitude: p.x, latitude: p.y }) as never;
+    rawView.zoom = 11;
+    fireWatchers();
+    assert.ok(live.includes("move") && live.includes("zoom"));
+    // The fake SDK re-runs every watcher, so the stationary one fired again.
+    events.splice(3);
+    fireViewEvent("click", { x: 5, y: 6 });
+    assert.deepEqual(clicked, [5, 6]);
     engine.removeControl(control);
     assert.equal(facade.hasControl(control), false);
     assert.equal(removed, 1);
