@@ -3,6 +3,7 @@ import type { CesiumSceneHandle } from "@geolibre/map";
 import type { GeoLibreAppAPI } from "../../types";
 import {
   computeLineOfSight,
+  computeLineOfSightSampled,
   fromLngLatAlt,
   lineOfSightResultEqual,
   pickGroundPosition,
@@ -96,6 +97,7 @@ interface Binding {
   dragging: { which: "observer" | "target"; restoreInputs: () => void } | null;
 }
 let binding: Binding | null = null;
+let recomputeRequest = 0;
 
 let snapshot: LineOfSightState = buildSnapshot();
 const listeners = new Set<() => void>();
@@ -260,7 +262,34 @@ function recompute(b: Binding): boolean {
   return true;
 }
 
+async function recomputeSampled(b: Binding): Promise<void> {
+  const request = ++recomputeRequest;
+  const { Cesium: C, viewer } = b.handle;
+  const ends = raisedEnds(C);
+  if (!ends) {
+    if (result !== null) result = null;
+    return;
+  }
+  const provider = viewer.terrainProvider;
+  if (!provider?.availability) {
+    recompute(b);
+    return;
+  }
+  const next = await computeLineOfSightSampled(C, provider, ends.observer, ends.target);
+  if (request !== recomputeRequest) return;
+  result = next;
+}
+
 function refresh(b: Binding): void {
+  const provider = b.handle.viewer.terrainProvider;
+  if (provider?.availability) {
+    void recomputeSampled(b).then(() => {
+      if (live() !== b) return;
+      drawEntities(b);
+      publish();
+    });
+    return;
+  }
   recompute(b);
   drawEntities(b);
   publish();
@@ -385,10 +414,7 @@ function attach(app: GeoLibreAppAPI): void {
   // so the answer is re-asked once loading settles rather than every frame.
   b.releaseTiles = watchTiles(handle, () => {
     if (live() !== b || !observer || !target) return;
-    if (recompute(b)) {
-      drawEntities(b);
-      publish();
-    }
+    refresh(b);
   });
   applyCursor(b);
   refresh(b);

@@ -5,6 +5,7 @@ import type { CesiumSceneHandle } from "@geolibre/map";
 import {
   LINE_OF_SIGHT_ORIGIN_SKIP_METERS,
   computeLineOfSight,
+  computeLineOfSightSampled,
   lineOfSightResultEqual,
   raiseByMeters,
   targetTolerance,
@@ -77,6 +78,32 @@ describe("line-of-sight geometry", () => {
     const same = raiseByMeters(Cesium, ground, 0);
     assert.notEqual(same, ground);
     assert.ok(Cartesian3.equals(same, ground));
+  });
+
+  it("detects a blocker through sampled terrain when globe.pick is blind", async () => {
+    const observer = at(ORIGIN.lng, ORIGIN.lat, 500);
+    const target = at(ORIGIN.lng + 0.05, ORIGIN.lat, 500);
+    const provider = { availability: {} };
+    const C = {
+      ...Cesium,
+      sampleTerrainMostDetailed: async (_p: unknown, positions: Cesium.Cartographic[]) => {
+        for (const c of positions) {
+          // A ridge taller than the sight line along the whole span.
+          c.height = 900;
+        }
+        return positions;
+      },
+    };
+    const pickBlind = computeLineOfSight(Cesium, makeScene(), observer, target);
+    assert.equal(pickBlind.occluded, false);
+    const result = await computeLineOfSightSampled(
+      C as typeof Cesium,
+      provider as never,
+      observer,
+      target,
+    );
+    assert.equal(result.occluded, true);
+    assert.ok(result.visibleMeters < result.totalMeters);
   });
 
   it("reports a clear line when nothing is in the way", () => {

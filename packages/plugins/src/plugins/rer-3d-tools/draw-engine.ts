@@ -378,7 +378,6 @@ export class CesiumDrawing {
           color: C.Color.fromCssColorString(FIRST_VERTEX_COLOR),
           outlineColor: C.Color.WHITE,
           outlineWidth: 2,
-          heightReference: C.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -464,7 +463,6 @@ export class CesiumDrawing {
           color: C.Color.fromCssColorString(color),
           outlineColor: C.Color.WHITE,
           outlineWidth: 2,
-          heightReference: C.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -491,7 +489,6 @@ export class CesiumDrawing {
           outlineColor: C.Color.fromCssColorString(LABEL_OUTLINE),
           outlineWidth: 3,
           pixelOffset: new C.Cartesian2(0, -14),
-          heightReference: C.HeightReference.CLAMP_TO_GROUND,
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });

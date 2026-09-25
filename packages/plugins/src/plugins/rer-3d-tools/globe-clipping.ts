@@ -21,6 +21,9 @@ import { geodesicMeters } from "./draw-geometry";
 
 export const GLOBE_CLIPPING_TOOL_ID = "globe-clipping";
 
+/** Refuse to cut a hole wider than this half-width (metres). */
+export const GLOBE_CLIPPING_MAX_HALF_WIDTH_METERS = 50_000;
+
 /** Layer kinds the hole can be sized from. */
 export const CLIPPABLE_LAYER_TYPES: ReadonlySet<GeoLibreLayer["type"]> = new Set([
   "3d-tiles",
@@ -169,7 +172,13 @@ export function findTilesetForLayer(
     return false;
   });
   if (byUrl) return byUrl;
-  return candidates.length === 1 ? candidates[0] : null;
+  return null;
+}
+
+function acceptableHalfWidth(radius: number): number | null {
+  if (!Number.isFinite(radius) || radius < 1) return null;
+  if (radius > GLOBE_CLIPPING_MAX_HALF_WIDTH_METERS) return null;
+  return radius;
 }
 
 /** The four vertical planes of a square hole of `halfWidth` metres around `center`. */
@@ -211,6 +220,12 @@ function releaseHole(): void {
 }
 
 function cutHole(layer: GeoLibreLayer, sphere: BoundingSphere): void {
+  const halfWidth = acceptableHalfWidth(sphere.radius);
+  if (halfWidth === null) {
+    releaseHole();
+    publish();
+    return;
+  }
   releaseHole();
   const C = handle!.Cesium;
   const globe = handle!.scene.globe;
@@ -219,12 +234,12 @@ function cutHole(layer: GeoLibreLayer, sphere: BoundingSphere): void {
     backFaceCulling: globe.backFaceCulling,
     showSkirts: globe.showSkirts,
   };
-  globe.clippingPlanes = squareClippingPlanes(C, sphere.center, sphere.radius);
+  globe.clippingPlanes = squareClippingPlanes(C, sphere.center, halfWidth);
   globe.backFaceCulling = false;
   globe.showSkirts = false;
   applied = {
     layerId: layer.id,
-    halfWidth: sphere.radius,
+    halfWidth,
     restore: () => {
       if (!isLive()) return;
       const g = handle!.scene.globe;

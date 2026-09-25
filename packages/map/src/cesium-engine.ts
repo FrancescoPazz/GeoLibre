@@ -205,6 +205,12 @@ export interface CesiumSceneHandle {
    * a plugin can seed from the current view without the camera maths.
    */
   readView(): MapViewState;
+  /**
+   * Run work while the camera is treated as externally owned (Play Path and
+   * similar). Suppresses {@link CesiumEngine}'s terrain correction from
+   * re-applying the stored view mid-flight.
+   */
+  runWithOwnedCamera?<T>(work: () => T | Promise<T>): Promise<T>;
 }
 
 export interface CesiumEngineOptions {
@@ -344,6 +350,9 @@ export class CesiumEngine implements MapEngine {
    * terrain correction from fighting live navigation.
    */
   private userOwnsCamera = false;
+  /** Nesting depth for {@link runWithOwnedCamera}. */
+  private ownedCameraDepth = 0;
+  private userOwnsCameraBeforeOwnedRun = false;
 
   /**
    * Zoom bounds from the project's `MapPreferences`, in MapLibre zoom levels.
@@ -1440,6 +1449,24 @@ export class CesiumEngine implements MapEngine {
    * The native scene, or `null` once the widget is gone. See
    * {@link CesiumSceneHandle} for who this is for.
    */
+  /**
+   * Run plugin-owned camera work without the terrain correction re-applying
+   * {@link applyView} when tiles settle mid-flight.
+   */
+  runWithOwnedCamera<T>(work: () => T | Promise<T>): Promise<T> {
+    if (this.ownedCameraDepth === 0) {
+      this.userOwnsCameraBeforeOwnedRun = this.userOwnsCamera;
+      this.userOwnsCamera = true;
+    }
+    this.ownedCameraDepth += 1;
+    return Promise.resolve(work()).finally(() => {
+      this.ownedCameraDepth -= 1;
+      if (this.ownedCameraDepth === 0) {
+        this.userOwnsCamera = this.userOwnsCameraBeforeOwnedRun;
+      }
+    });
+  }
+
   getCesiumScene(): CesiumSceneHandle | null {
     const viewer = this.live();
     if (!viewer) return null;
@@ -1457,6 +1484,7 @@ export class CesiumEngine implements MapEngine {
       registerMovingPointLayer: (layerId, collection, descriptions) =>
         this.layerSync.registerMovingPointLayer(layerId, collection, descriptions),
       readView: () => this.readView(),
+      runWithOwnedCamera: (work) => this.runWithOwnedCamera(work),
     };
   }
 

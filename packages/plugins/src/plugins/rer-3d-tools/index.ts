@@ -148,6 +148,7 @@ export {
   LINE_OF_SIGHT_TARGET_TOLERANCE_MIN_METERS,
   LINE_OF_SIGHT_TARGET_TOLERANCE_RATIO,
   computeLineOfSight,
+  computeLineOfSightSampled,
   lineOfSightResultEqual,
   pickGroundPosition,
   raiseByMeters,
@@ -210,8 +211,10 @@ export {
   DEFAULT_PITCH_THRESHOLD_DEG,
   DEFAULT_PLAY_SPEED,
   PLAY_COUNTDOWN_SECONDS,
+  PLAY_MAX_RANGE_METERS,
   PLAY_MIN_RANGE_METERS,
   PLAY_PATH_TOOL_ID,
+  pathForFlight,
   PLAY_RETURN_SECONDS,
   PLAY_SPEED_MAX,
   PLAY_SPEED_MIN,
@@ -259,6 +262,7 @@ export {
 } from "./egm96";
 export {
   CLIPPABLE_LAYER_TYPES,
+  GLOBE_CLIPPING_MAX_HALF_WIDTH_METERS,
   GLOBE_CLIPPING_TOOL_ID,
   closeGlobeClippingPanel,
   featuresBoundingSphere,

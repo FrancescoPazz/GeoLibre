@@ -1,4 +1,4 @@
-import type { Cartesian3, CesiumWidget, Scene } from "@cesium/engine";
+import type { Cartesian3, CesiumWidget, Scene, TerrainProvider } from "@cesium/engine";
 
 type CesiumNs = typeof import("@cesium/engine");
 
@@ -56,6 +56,9 @@ export const LINE_OF_SIGHT_TARGET_TOLERANCE_MIN_METERS = 1;
  * skipping anything a person could stand behind.
  */
 export const LINE_OF_SIGHT_ORIGIN_SKIP_METERS = 0.5;
+
+/** Step when sampling terrain heights along the sight line. */
+export const LINE_OF_SIGHT_SAMPLE_STEP_METERS = 50;
 
 /** The tolerance in metres at which a hit is treated as the target itself. */
 export function targetTolerance(totalMeters: number): number {
@@ -128,6 +131,62 @@ export function computeLineOfSight(
     return { totalMeters, visibleMeters: totalMeters, occluded: false, hit: null };
   }
   return { totalMeters, visibleMeters: hitMeters, occluded: true, hit: toLngLatAlt(C, hit) };
+}
+
+/**
+ * Walk the sight line and compare it to {@link sampleTerrainMostDetailed}
+ * heights. Used when a terrain provider is available — Ion and Terrarium do
+ * not always answer {@link Scene.globe.pick} even though the heights are
+ * known.
+ */
+export async function computeLineOfSightSampled(
+  C: CesiumNs,
+  terrainProvider: TerrainProvider,
+  observer: Cartesian3,
+  target: Cartesian3,
+): Promise<LineOfSightResult> {
+  const totalMeters = C.Cartesian3.distance(observer, target);
+  if (!(totalMeters > LINE_OF_SIGHT_ORIGIN_SKIP_METERS)) {
+    return { totalMeters, visibleMeters: totalMeters, occluded: false, hit: null };
+  }
+  const endDist = totalMeters - targetTolerance(totalMeters);
+  const step = Math.min(LINE_OF_SIGHT_SAMPLE_STEP_METERS, Math.max(1, endDist / 10));
+  const dists: number[] = [];
+  const cartographics = [];
+  for (let d = LINE_OF_SIGHT_ORIGIN_SKIP_METERS; d < endDist; d += step) {
+    const t = d / totalMeters;
+    const onChord = C.Cartesian3.lerp(observer, target, t, new C.Cartesian3());
+    cartographics.push(C.Cartographic.fromCartesian(onChord));
+    dists.push(d);
+  }
+  if (cartographics.length === 0) {
+    return { totalMeters, visibleMeters: totalMeters, occluded: false, hit: null };
+  }
+  const positions = cartographics.map((c) => C.Cartographic.clone(c));
+  try {
+    await C.sampleTerrainMostDetailed(terrainProvider, positions);
+  } catch {
+    // Keep the chord heights where tiles failed.
+  }
+  for (let i = 0; i < positions.length; i += 1) {
+    const t = dists[i] / totalMeters;
+    const chord = C.Cartesian3.lerp(observer, target, t, new C.Cartesian3());
+    const chordCarto = C.Cartographic.fromCartesian(chord);
+    const terrainH = positions[i].height;
+    if (terrainH > chordCarto.height + 0.25) {
+      const hitCarto = positions[i];
+      return {
+        totalMeters,
+        visibleMeters: dists[i],
+        occluded: true,
+        hit: toLngLatAlt(
+          C,
+          C.Cartesian3.fromRadians(hitCarto.longitude, hitCarto.latitude, terrainH),
+        ),
+      };
+    }
+  }
+  return { totalMeters, visibleMeters: totalMeters, occluded: false, hit: null };
 }
 
 /**

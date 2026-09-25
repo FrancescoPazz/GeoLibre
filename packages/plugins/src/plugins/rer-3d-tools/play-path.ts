@@ -44,6 +44,12 @@ export const PLAY_COUNTDOWN_SECONDS = 3;
 export const DEFAULT_PITCH_THRESHOLD_DEG = 30;
 /** Never look at a sample from closer than this, whatever the view was. */
 export const PLAY_MIN_RANGE_METERS = 50;
+/** Never look at a sample from farther than this, whatever the view was. */
+export const PLAY_MAX_RANGE_METERS = 50_000;
+/** Profile samples must start/end near the drawn vertices or they are ignored. */
+export const PLAY_PATH_PROFILE_VERTEX_TOLERANCE_M = 500;
+/** If the camera is farther than this from the path, profile samples are not trusted. */
+export const PLAY_PATH_CAMERA_SANITY_METERS = 500_000;
 
 export interface PlayPathState {
   open: boolean;
@@ -105,14 +111,35 @@ let unsubscribeMeasure: (() => void) | null = null;
 let snapshot: PlayPathState = buildSnapshot();
 const listeners = new Set<() => void>();
 
+function profileMatchesVertices(samples: LngLatAlt[], vertices: LngLatAlt[]): boolean {
+  if (vertices.length < 2 || samples.length < 2) return false;
+  const Cesium = C();
+  const start = geodesicMeters(Cesium, samples[0], vertices[0]);
+  const end = geodesicMeters(Cesium, samples[samples.length - 1], vertices[vertices.length - 1]);
+  return (
+    start <= PLAY_PATH_PROFILE_VERTEX_TOLERANCE_M && end <= PLAY_PATH_PROFILE_VERTEX_TOLERANCE_M
+  );
+}
+
+/** The path Play Path flies: profile samples when they match the figure, else vertices. */
+export function pathForFlight(measure = getMeasure3dSnapshot()): LngLatAlt[] {
+  if (measure.mode !== "line" && measure.mode !== "polygon") return [];
+  const vertices = measure.geometry.points;
+  if (vertices.length < 2) return [];
+  let source = vertices.map((p) => ({ ...p }));
+  if (handle && measure.profile && measure.profile.samples.length >= 2) {
+    const samples = measure.profile.samples.map((s) => ({
+      lng: s.lng,
+      lat: s.lat,
+      alt: s.alt,
+    }));
+    if (profileMatchesVertices(samples, vertices)) source = samples;
+  }
+  return source;
+}
+
 function livePath(): LngLatAlt[] {
-  const m = getMeasure3dSnapshot();
-  if (m.mode !== "line" && m.mode !== "polygon") return [];
-  const source =
-    m.profile && m.profile.samples.length >= 2
-      ? m.profile.samples.map((s) => ({ lng: s.lng, lat: s.lat, alt: s.alt }))
-      : m.geometry.points;
-  return source.length >= 2 ? source : [];
+  return pathForFlight();
 }
 
 function pathLength(points: LngLatAlt[]): number {
@@ -124,6 +151,12 @@ function pathLength(points: LngLatAlt[]): number {
 function C(): CesiumSceneHandle["Cesium"] {
   if (!handle) throw new Error("play-path: no globe");
   return handle.Cesium;
+}
+
+/** Keep terrain correction from re-applying the store view during a flight. */
+async function withOwnedCamera(work: () => Promise<void>): Promise<void> {
+  if (handle?.runWithOwnedCamera) await handle.runWithOwnedCamera(work);
+  else await work();
 }
 
 function isLive(): boolean {
@@ -343,36 +376,38 @@ function metersPerPixel(): number {
 async function run(id: number): Promise<void> {
   const f = flight;
   if (!f || f.id !== id) return;
-  playing = true;
-  paused = false;
-  publish();
-  const stepSeconds = PLAY_STEP_SECONDS / speed;
-  while (flight && flight.id === id && isLive()) {
-    const i = flight.index;
-    const pts = flight.points;
-    const last = flight.reverse ? 0 : pts.length - 1;
-    const next = flight.reverse ? i - 1 : i + 1;
-    const heading =
-      i === last
-        ? headingBetween(pts[flight.reverse ? i + 1 : i - 1], pts[i])
-        : headingBetween(pts[i], pts[next]);
-    const outcome = await flyTo(pts[i], heading, flight.pitch, flight.range, stepSeconds);
-    if (!flight || flight.id !== id) return;
-    if (outcome === "cancel") {
-      // A pause or stop interrupted the flight; they have already published.
-      return;
-    }
-    await waitForTiles();
-    if (!flight || flight.id !== id) return;
-    if (i === last) {
-      playing = false;
-      paused = false;
-      publish();
-      return;
-    }
-    flight.index = next;
+  await withOwnedCamera(async () => {
+    playing = true;
+    paused = false;
     publish();
-  }
+    const stepSeconds = PLAY_STEP_SECONDS / speed;
+    while (flight && flight.id === id && isLive()) {
+      const i = flight.index;
+      const pts = flight.points;
+      const last = flight.reverse ? 0 : pts.length - 1;
+      const next = flight.reverse ? i - 1 : i + 1;
+      const heading =
+        i === last
+          ? headingBetween(pts[flight.reverse ? i + 1 : i - 1], pts[i])
+          : headingBetween(pts[i], pts[next]);
+      const outcome = await flyTo(pts[i], heading, flight.pitch, flight.range, stepSeconds);
+      if (!flight || flight.id !== id) return;
+      if (outcome === "cancel") {
+        // A pause or stop interrupted the flight; they have already published.
+        return;
+      }
+      await waitForTiles();
+      if (!flight || flight.id !== id) return;
+      if (i === last) {
+        playing = false;
+        paused = false;
+        publish();
+        return;
+      }
+      flight.index = next;
+      publish();
+    }
+  });
 }
 
 function clearCountdown(): void {
@@ -409,19 +444,30 @@ export function playPath(): boolean {
     void run(id);
     return true;
   }
-  const source = livePath();
+  let source = livePath();
   if (source.length < 2) return false;
   const Cesium = C();
   const h = handle!;
+  const cameraPos = Cesium.Cartesian3.clone(h.camera.positionWC);
+  const vertices = getMeasure3dSnapshot().geometry.points;
+  if (
+    vertices.length >= 2 &&
+    Cesium.Cartesian3.distance(cameraPos, fromLngLatAlt(Cesium, source[0])) >
+      PLAY_PATH_CAMERA_SANITY_METERS
+  ) {
+    source = vertices.map((p) => ({ ...p }));
+  }
   samplingStepM = resolveSamplingStep(source);
   const points = resamplePathForFlight(Cesium, source, samplingStepM);
-  const cameraPos = Cesium.Cartesian3.clone(h.camera.positionWC);
   const first = fromLngLatAlt(Cesium, points[0]);
   const lastPt = fromLngLatAlt(Cesium, points[points.length - 1]);
   const distFirst = Cesium.Cartesian3.distance(cameraPos, first);
   const distLast = Cesium.Cartesian3.distance(cameraPos, lastPt);
   const reverse = distFirst > distLast;
-  const range = Math.max(PLAY_MIN_RANGE_METERS, reverse ? distLast : distFirst);
+  const range = Math.min(
+    PLAY_MAX_RANGE_METERS,
+    Math.max(PLAY_MIN_RANGE_METERS, reverse ? distLast : distFirst),
+  );
   const pitch = Math.min(0, h.camera.pitch);
   const id = ++flightId;
   flight = { id, points, index: reverse ? points.length - 1 : 0, reverse, range, pitch };
@@ -463,12 +509,14 @@ export function stopPath(): void {
   if (f && isLive() && f.points.length >= 2) {
     const start = f.reverse ? f.points.length - 1 : 0;
     const neighbour = f.reverse ? start - 1 : start + 1;
-    void flyTo(
-      f.points[start],
-      headingBetween(f.points[start], f.points[neighbour]),
-      f.pitch,
-      f.range,
-      PLAY_RETURN_SECONDS / speed,
+    void withOwnedCamera(() =>
+      flyTo(
+        f.points[start],
+        headingBetween(f.points[start], f.points[neighbour]),
+        f.pitch,
+        f.range,
+        PLAY_RETURN_SECONDS / speed,
+      ).then(() => {}),
     );
   }
 }

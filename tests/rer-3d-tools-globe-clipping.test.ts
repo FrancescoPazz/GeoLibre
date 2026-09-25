@@ -5,6 +5,7 @@ import { DEFAULT_LAYER_STYLE, useAppStore, type GeoLibreLayer } from "@geolibre/
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { Feature, Geometry } from "geojson";
 import {
+  GLOBE_CLIPPING_MAX_HALF_WIDTH_METERS,
   closeGlobeClippingPanel,
   featuresBoundingSphere,
   findTilesetForLayer,
@@ -194,7 +195,7 @@ describe("featuresBoundingSphere", () => {
 });
 
 describe("findTilesetForLayer", () => {
-  it("matches by URL, then by Ion asset id, then falls back to a lone tileset", () => {
+  it("matches by URL or Ion asset id, and returns null when nothing matches", () => {
     const globe = makeGlobe();
     const a = new FakeTileset("https://tiles.example/a/tileset.json", sphereAt(11, 44, 10));
     const b = new FakeTileset(
@@ -244,7 +245,7 @@ describe("findTilesetForLayer", () => {
     lone.addPrimitive(a);
     assert.equal(
       findTilesetForLayer(C, lone.handle.scene, layer({ id: "z", type: "3d-tiles", source: {} })),
-      a,
+      null,
     );
   });
 });
@@ -415,6 +416,58 @@ describe("globe clipping tool", () => {
     assert.equal(restoreGlobeClipping(mapLessApp, undefined), false);
     assert.equal(isGlobeClippingPanelVisible(), false);
     assert.equal(again.globe.clippingPlanes, undefined);
+  });
+
+  it("does not cut when the bounding sphere is unreasonably large", () => {
+    useAppStore.setState({
+      layers: [
+        layer({
+          id: "tiles",
+          type: "3d-tiles",
+          source: { url: "https://tiles.example/huge/tileset.json" },
+        }),
+      ],
+    });
+    const globe = makeGlobe();
+    globe.addPrimitive(
+      new FakeTileset(
+        "https://tiles.example/huge/tileset.json",
+        sphereAt(BOLOGNA.lng, BOLOGNA.lat, GLOBE_CLIPPING_MAX_HALF_WIDTH_METERS + 1000),
+      ),
+    );
+    openGlobeClippingPanel(globeApp(globe));
+    setGlobeClippingLayer("tiles");
+    assert.equal(globe.globe.clippingPlanes, undefined);
+    assert.equal(getGlobeClippingSnapshot().halfWidthMeters, null);
+  });
+
+  it("does not guess a tileset when several are loaded and none match the layer", () => {
+    useAppStore.setState({
+      layers: [
+        layer({
+          id: "tiles",
+          type: "3d-tiles",
+          source: { url: "https://tiles.example/wanted/tileset.json" },
+        }),
+      ],
+    });
+    const globe = makeGlobe();
+    globe.addPrimitive(
+      new FakeTileset(
+        "https://tiles.example/other-a/tileset.json",
+        sphereAt(BOLOGNA.lng, BOLOGNA.lat, 200),
+      ),
+    );
+    globe.addPrimitive(
+      new FakeTileset(
+        "https://tiles.example/other-b/tileset.json",
+        sphereAt(BOLOGNA.lng + 0.1, BOLOGNA.lat, 200),
+      ),
+    );
+    openGlobeClippingPanel(globeApp(globe));
+    setGlobeClippingLayer("tiles");
+    assert.equal(globe.globe.clippingPlanes, undefined);
+    assert.equal(getGlobeClippingSnapshot().pending, true);
   });
 
   it("is part of the composite plugin's state and is closed on deactivate", () => {

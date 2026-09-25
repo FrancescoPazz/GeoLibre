@@ -781,6 +781,24 @@ describe("CesiumEngine terrain", () => {
     assert.equal(fakes.viewer.scene.verticalExaggeration, 2.5);
     engine.destroy();
   });
+
+  it("runWithOwnedCamera blocks terrain correction from re-applying the view", async () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView({ ...VIEW, center: [11, 44] });
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    await engine.runWithOwnedCamera(async () => {
+      fakes.nudge(40);
+      fakes.tileLoadProgressEvent.emit(0);
+    });
+    assert.equal(
+      fakes.placements,
+      placements,
+      "terrain correction must not run while the camera is owned",
+    );
+    engine.destroy();
+  });
 });
 
 describe("CesiumEngine zoom bounds", () => {

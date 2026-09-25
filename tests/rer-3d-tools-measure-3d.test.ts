@@ -281,6 +281,30 @@ describe("CesiumDrawing", () => {
     assert.equal(m.areaSqm, null);
   });
 
+  it("places vertex markers at the same positions as the polyline (no ground clamp on points)", () => {
+    const globe = makeGlobe();
+    const { d } = drawing(globe);
+    globe.click(A);
+    globe.click(B);
+    const line = globe.entity("geolibre-draw-line") as {
+      polyline: { positions: Cesium.Cartesian3[] };
+    };
+    const linePositions = line.polyline.positions;
+    assert.equal(linePositions.length, 2);
+    for (let i = 0; i < 2; i += 1) {
+      const vertex = globe.entity(`geolibre-draw-vertex-${i}`) as {
+        position: Cesium.Cartesian3;
+        point: { heightReference?: unknown };
+      };
+      assert.ok(vertex, `vertex ${i}`);
+      assert.equal(vertex.point.heightReference, undefined);
+      assert.ok(
+        Cesium.Cartesian3.equalsEpsilon(vertex.position, linePositions[i], 1e-6),
+        `vertex ${i} matches polyline`,
+      );
+    }
+  });
+
   it("hides labels and undrapes the line on request", () => {
     const globe = makeGlobe();
     const { d } = drawing(globe);
