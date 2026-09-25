@@ -143,7 +143,40 @@ def base64url_sha256(value: str) -> str:
 
 def account_json(account: Account) -> dict:
     """Serialize an account with the API's camelCase field names."""
-    return {"id": account.id, "username": account.username, "createdAt": account.created_at}
+    return {
+        "id": account.id,
+        "username": account.username,
+        "email": account.email,
+        "createdAt": account.created_at,
+    }
+
+
+def normalize_email(value: str | None) -> str | None:
+    """Lower-case and validate an optional email address.
+
+    Args:
+        value: The submitted address, or ``None`` to clear it.
+
+    Returns:
+        The normalized address, or ``None`` when no address was given.
+
+    Raises:
+        HTTPException: 422 when the address is not a plausible email.
+    """
+    if value is None:
+        return None
+    email = value.strip().lower()
+    if (
+        len(email) > 320
+        or not re.fullmatch(
+            r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+            r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?\.[a-z]{2,63}",
+            email,
+        )
+        or ".." in email
+    ):
+        raise HTTPException(422, "email must be a valid email address")
+    return email
 
 
 # ---------------------------------------------------------------------------
@@ -929,6 +962,20 @@ class TokenIssueRequest(BaseModel):
     expiresInDays: int | None = None
 
 
+class AccountCreateRequest(TokenIssueRequest):
+    """Account-creation body: the token-login fields plus an optional email."""
+
+    email: str | None = Field(default=None, max_length=320)
+
+
+class AccountPatch(BaseModel):
+    """Editable account settings. Only the email address is mutable today."""
+
+    email: str | None = Field(max_length=320)
+
+    model_config = {"extra": "forbid"}
+
+
 def _validate_pat_lifetime(days: int | None) -> None:
     """Reject an explicit token lifetime outside the accepted 1-365 day range."""
     if days is not None and not (1 <= days <= PAT_MAX_DAYS):
@@ -941,7 +988,7 @@ def build_identity_router() -> APIRouter:
 
     @router.post("/api/accounts", status_code=201)
     def create_account(
-        body: TokenIssueRequest,
+        body: AccountCreateRequest,
         request: Request,
         session: Session = Depends(get_session),
     ):
@@ -955,12 +1002,16 @@ def build_identity_router() -> APIRouter:
             raise HTTPException(422, "username must be 3-39 lowercase letters, digits, or hyphens")
         if len(body.password) < 8:
             raise HTTPException(422, "password must be at least 8 characters")
+        email = normalize_email(body.email)
         if session.scalar(select(Account.id).where(Account.username == username)):
             raise HTTPException(409, "username already exists")
+        if email and session.scalar(select(Account.id).where(Account.email == email)):
+            raise HTTPException(409, "email already exists")
 
         account = Account(
             id=str(uuid.uuid4()),
             username=username,
+            email=email,
             password_hash=password_hash(body.password),
             created_at=now(),
         )
@@ -972,7 +1023,7 @@ def build_identity_router() -> APIRouter:
             # racing for one username can both pass it. The loser rolls the
             # whole account/token transaction back and receives the stable 409.
             session.rollback()
-            raise HTTPException(409, "username already exists") from None
+            raise HTTPException(409, "username or email already exists") from None
         token, extra = issue_token(
             session,
             account,
@@ -1038,13 +1089,46 @@ def build_identity_router() -> APIRouter:
         session.commit()
 
     @router.get("/api/account")
-    def get_account(principal: AuthPrincipal = Depends(required_principal)):
+    def get_account(response: Response, principal: AuthPrincipal = Depends(required_principal)):
         """Return the authenticated account."""
+        response.headers["Cache-Control"] = "private, no-store"
         return {"account": account_json(principal.account)}
 
+    @router.patch("/api/account")
+    def patch_account(
+        body: AccountPatch,
+        response: Response,
+        principal: AuthPrincipal = Depends(require_scope("write:projects")),
+        session: Session = Depends(get_session),
+    ):
+        """Change the account's email address (``null`` clears it).
+
+        The email decides which email-addressed invitations the account may
+        accept, so changing it is a write and needs write:projects, the only
+        write scope a token can hold.
+        """
+        email = normalize_email(body.email)
+        account = session.get(Account, principal.account.id)
+        assert account is not None
+        if email and session.scalar(
+            select(Account.id).where(Account.email == email, Account.id != account.id)
+        ):
+            raise HTTPException(409, "email already exists")
+        account.email = email
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(409, "email already exists") from None
+        response.headers["Cache-Control"] = "private, no-store"
+        return {"account": account_json(account)}
+
     @router.get("/api/users/me")
-    def get_current_user(principal: AuthPrincipal = Depends(required_principal)):
+    def get_current_user(
+        response: Response, principal: AuthPrincipal = Depends(required_principal)
+    ):
         """Return the account, effective scopes, and OAuth session ID when present."""
+        response.headers["Cache-Control"] = "private, no-store"
         return {
             "user": account_json(principal.account),
             "sessionId": principal.session_id,

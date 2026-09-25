@@ -20,6 +20,8 @@ import {
   Search,
   Star,
   User,
+  UserPlus,
+  Users,
 } from "lucide-react";
 import {
   useCallback,
@@ -35,6 +37,7 @@ import { observeGalleryEnd } from "../../lib/gallery-auto-load";
 import { openExternalLink } from "../../lib/open-external";
 import {
   getShareAccessToken,
+  resolveShareRequestToken,
   ShareOAuthError,
   shareOAuthErrorKey,
   signInToShare,
@@ -43,16 +46,22 @@ import {
 } from "../../lib/share-oauth";
 import {
   fetchMyProjects,
+  fetchMyGroups,
+  fetchMyOrganizations,
+  fetchProjectsSharedWithMe,
   fetchSharedProjects,
   GalleryError,
   type GalleryErrorCode,
+  loadSharedProjectThumbnail,
   projectOpenToken,
   type SharedProject,
+  type ShareOrganization,
+  type ShareGroup,
 } from "../../lib/share-gallery";
-import { shareHostLabel } from "../../lib/share-geolibre";
+import { resolveShareBaseUrl, shareHostLabel } from "../../lib/share-geolibre";
 import type { TFunction } from "i18next";
 
-type GalleryScope = "featured" | "all" | "mine";
+type GalleryScope = "featured" | "all" | "mine" | "organizations" | "groups";
 
 interface ProjectGalleryDialogProps {
   open: boolean;
@@ -66,7 +75,16 @@ interface ProjectGalleryDialogProps {
   onOpenProject: (
     rawJsonUrl: string,
     authToken?: string,
-    options?: { asCopy?: boolean },
+    options?: {
+      asCopy?: boolean;
+      remoteProject?: {
+        id: string;
+        versionCount: number;
+        canEdit: boolean;
+        token: string;
+        baseUrl: string;
+      };
+    },
   ) => Promise<void>;
 }
 
@@ -99,7 +117,9 @@ function galleryErrorMessage(error: unknown, t: TFunction, oauthSupported: boole
           ? t("gallery.errorUnauthorizedOAuth", { shareHost: shareHostLabel() })
           : t("gallery.errorUnauthorized", { shareHost: shareHostLabel() });
       case "username-required":
-        return t("gallery.errorUsernameRequired", { shareHost: shareHostLabel() });
+        return t("gallery.errorUsernameRequired", {
+          shareHost: shareHostLabel(),
+        });
       case "not-configured":
         return t("gallery.errorNotConfigured");
       case "http":
@@ -142,18 +162,30 @@ export function ProjectGalleryDialog({
   // otherwise undershoot the offset and re-deliver already-seen entries).
   const [rawOffset, setRawOffset] = useState(0);
   const [query, setQuery] = useState("");
-  const [openingState, setOpeningState] = useState<{ id: string; action: "open" | "copy" } | null>(
-    null,
-  );
+  const [openingState, setOpeningState] = useState<{
+    id: string;
+    action: "open" | "copy";
+  } | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const membershipAbortRef = useRef<AbortController | null>(null);
+  const defaultScopePendingRef = useRef(true);
   const reloadGenerationRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  // The resolved Bearer credential (OAuth access token when signed in, else
+  // the pasted personal token) used for thumbnail loads, which render
+  // synchronously per card. Requests that start from a user action resolve a
+  // fresh token instead, so a short-lived OAuth access token never goes stale.
+  const [requestToken, setRequestToken] = useState("");
 
-  // Without a token, the "My projects" scope isn't available; fall back to the
-  // featured tab.
-  const effectiveScope: GalleryScope = scope === "mine" && !hasToken ? "featured" : scope;
+  const [organizations, setOrganizations] = useState<ShareOrganization[]>([]);
+  const [groups, setGroups] = useState<ShareGroup[]>([]);
+
+  // Authenticated scopes disappear with the token; fall back instead of making
+  // an empty-token request if Settings changes while the dialog is open.
+  const authenticatedScope = scope === "mine" || scope === "organizations" || scope === "groups";
+  const effectiveScope: GalleryScope = authenticatedScope && !hasToken ? "featured" : scope;
 
   // Explicit dialog size once the user drags the corner grip (null = the
   // default responsive size). `dialogRef` reads the live element size at the
@@ -165,6 +197,13 @@ export function ProjectGalleryDialog({
   } | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
   useEffect(() => () => resizeCleanupRef.current?.(), []);
+
+  useEffect(() => {
+    if (open) {
+      defaultScopePendingRef.current = true;
+      setScope("featured");
+    }
+  }, [open]);
 
   // Resize the whole dialog from its bottom-right grip. The dialog is centred
   // via a -50% transform, so each edge moves by half the size change; growing
@@ -255,6 +294,19 @@ export function ProjectGalleryDialog({
           if (controller.signal.aborted) return;
           setProjects(mine);
           setHasMore(false);
+        } else if (effectiveScope === "organizations" || effectiveScope === "groups") {
+          const token = await resolveShareRequestToken(trimmedToken);
+          const result = await fetchProjectsSharedWithMe({
+            token,
+            source: effectiveScope,
+            limit: PAGE_SIZE,
+            offset,
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted) return;
+          setProjects((prev) => (offset === 0 ? result.projects : [...prev, ...result.projects]));
+          setHasMore(result.hasMore);
+          setRawOffset(offset + result.rawCount);
         } else {
           // "featured" and "all" both page through the public listing; featured
           // adds the ?featured=true filter.
@@ -321,35 +373,86 @@ export function ProjectGalleryDialog({
     }
   }, [open, loadPage]);
 
+  useEffect(() => {
+    if (!open || !hasToken) {
+      setOrganizations([]);
+      setGroups([]);
+      setRequestToken("");
+      return;
+    }
+    const controller = new AbortController();
+    membershipAbortRef.current = controller;
+    // Same credential precedence as the listings: OAuth session first, the
+    // pasted personal token as the fallback.
+    const fetchOptions = resolveShareRequestToken(trimmedToken).then((token) => {
+      if (!controller.signal.aborted) setRequestToken(token);
+      if (!token) throw new Error("no share credential");
+      return { token, signal: controller.signal };
+    });
+    void fetchOptions
+      .then(fetchMyOrganizations)
+      .then((orgs) => {
+        if (controller.signal.aborted) return;
+        setOrganizations(orgs);
+        if (defaultScopePendingRef.current) {
+          setScope(orgs.length > 0 ? "organizations" : "featured");
+          defaultScopePendingRef.current = false;
+        }
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setOrganizations([]);
+      });
+    void fetchOptions
+      .then(fetchMyGroups)
+      .then((grps) => {
+        if (controller.signal.aborted) return;
+        setGroups(grps);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setGroups([]);
+      });
+    return () => {
+      controller.abort();
+      if (membershipAbortRef.current === controller) membershipAbortRef.current = null;
+    };
+  }, [open, hasToken, trimmedToken, oauthIssuer]);
+
+  const selectScope = (nextScope: GalleryScope) => {
+    defaultScopePendingRef.current = false;
+    setScope(nextScope);
+  };
+
   const handleOpen = async (project: SharedProject, options: { asCopy?: boolean } = {}) => {
     const action = options.asCopy ? "copy" : "open";
     setOpeningState({ id: project.id, action });
     setOpenError(null);
     try {
-      // Only private projects in "My projects" need credentials; public and
-      // unlisted opens stay anonymous to avoid a CORS preflight.
-      let token = "";
-      if (effectiveScope === "mine" && project.visibility === "private") {
-        token = trimmedToken;
-        if (oauthSupported) {
-          try {
-            token = (await getShareAccessToken()) ?? trimmedToken;
-          } catch (err) {
-            if (
-              !(err instanceof ShareOAuthError) ||
-              err.code !== "refresh-unavailable" ||
-              !trimmedToken
-            ) {
-              throw err;
-            }
-          }
-        }
-      }
-      await onOpenProject(
-        project.rawJsonUrl,
-        effectiveScope === "mine" ? projectOpenToken(project, token) : undefined,
-        options,
-      );
+      const asCopy = options.asCopy === true;
+      const isProtected = project.visibility !== "public" && project.visibility !== "unlisted";
+      // Only protected (private/organization) projects need credentials to
+      // open; projectOpenToken keeps public and unlisted opens anonymous to
+      // avoid a CORS preflight. The token is resolved per open so an OAuth
+      // access token is fresh, and skipped for an anonymous read-only open.
+      const token =
+        isProtected || (!asCopy && project.canEdit)
+          ? await resolveShareRequestToken(trimmedToken)
+          : "";
+      await onOpenProject(project.rawJsonUrl, projectOpenToken(project, token), {
+        asCopy,
+        remoteProject: asCopy
+          ? undefined
+          : {
+              id: project.id,
+              versionCount: project.versionCount,
+              canEdit: project.canEdit,
+              // The personal-token fallback; the save path re-resolves the
+              // OAuth access token at save time.
+              token: trimmedToken,
+              baseUrl: resolveShareBaseUrl() ?? "",
+            },
+      });
       onOpenChange(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -437,23 +540,37 @@ export function ProjectGalleryDialog({
         <div className="flex w-full gap-1 rounded-md bg-muted p-1 sm:w-auto sm:self-start">
           <ScopeTab
             active={effectiveScope === "featured"}
-            onClick={() => setScope("featured")}
+            onClick={() => selectScope("featured")}
             icon={<Star className="h-3.5 w-3.5" />}
             label={t("gallery.scopeFeatured")}
           />
           <ScopeTab
             active={effectiveScope === "all"}
-            onClick={() => setScope("all")}
+            onClick={() => selectScope("all")}
             icon={<Globe2 className="h-3.5 w-3.5" />}
             label={t("gallery.scopeAll")}
           />
           {hasToken ? (
-            <ScopeTab
-              active={effectiveScope === "mine"}
-              onClick={() => setScope("mine")}
-              icon={<User className="h-3.5 w-3.5" />}
-              label={t("gallery.scopeMine")}
-            />
+            <>
+              <ScopeTab
+                active={effectiveScope === "organizations"}
+                onClick={() => selectScope("organizations")}
+                icon={<Users className="h-3.5 w-3.5" />}
+                label={t("gallery.scopeOrganizations")}
+              />
+              <ScopeTab
+                active={effectiveScope === "groups"}
+                onClick={() => selectScope("groups")}
+                icon={<UserPlus className="h-3.5 w-3.5" />}
+                label={t("gallery.scopeGroups")}
+              />
+              <ScopeTab
+                active={effectiveScope === "mine"}
+                onClick={() => selectScope("mine")}
+                icon={<User className="h-3.5 w-3.5" />}
+                label={t("gallery.scopeMine")}
+              />
+            </>
           ) : null}
         </div>
 
@@ -549,9 +666,13 @@ export function ProjectGalleryDialog({
                     ? t("gallery.noMatches")
                     : effectiveScope === "mine"
                       ? t("gallery.emptyMine")
-                      : effectiveScope === "featured"
-                        ? t("gallery.emptyFeatured")
-                        : t("gallery.empty")}
+                      : effectiveScope === "organizations"
+                        ? t("gallery.emptyOrganizations")
+                        : effectiveScope === "groups"
+                          ? t("gallery.emptyGroups")
+                          : effectiveScope === "featured"
+                            ? t("gallery.emptyFeatured")
+                            : t("gallery.empty")}
                 </p>
               ) : (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -559,6 +680,7 @@ export function ProjectGalleryDialog({
                     <GalleryCard
                       key={project.id}
                       project={project}
+                      token={requestToken}
                       openingAction={openingState?.id === project.id ? openingState.action : null}
                       disabled={openingState !== null}
                       onOpen={() => void handleOpen(project)}
@@ -623,30 +745,84 @@ function ScopeTab({
     </Button>
   );
 }
-/** A small badge marking unlisted/private projects; public renders nothing. */
+
+/** A small badge marking non-public projects; public renders nothing. */
 function VisibilityBadge({ visibility }: { visibility: string }) {
   const { t } = useTranslation();
-  if (visibility !== "unlisted" && visibility !== "private") return null;
+  if (visibility !== "unlisted" && visibility !== "private" && visibility !== "organization") {
+    return null;
+  }
   const isPrivate = visibility === "private";
+  const isOrganization = visibility === "organization";
   return (
     <span className="absolute start-1.5 top-1.5 flex items-center gap-1 rounded bg-background/85 px-1.5 py-0.5 text-[10px] font-medium text-foreground shadow-sm">
-      {isPrivate ? <Lock className="h-2.5 w-2.5" /> : <EyeOff className="h-2.5 w-2.5" />}
-      {isPrivate ? t("gallery.visibilityPrivate") : t("gallery.visibilityUnlisted")}
+      {isPrivate ? (
+        <Lock className="h-2.5 w-2.5" />
+      ) : isOrganization ? (
+        <Users className="h-2.5 w-2.5" />
+      ) : (
+        <EyeOff className="h-2.5 w-2.5" />
+      )}
+      {isPrivate
+        ? t("gallery.visibilityPrivate")
+        : isOrganization
+          ? t("gallery.visibilityOrganization")
+          : t("gallery.visibilityUnlisted")}
     </span>
   );
 }
 
 interface GalleryCardProps {
   project: SharedProject;
+  token: string;
   openingAction: "open" | "copy" | null;
   disabled: boolean;
   onOpen: () => void;
   onOpenCopy: () => void;
 }
 
-function GalleryCard({ project, openingAction, disabled, onOpen, onOpenCopy }: GalleryCardProps) {
+function GalleryCard({
+  project,
+  token,
+  openingAction,
+  disabled,
+  onOpen,
+  onOpenCopy,
+}: GalleryCardProps) {
   const { t } = useTranslation();
   const [thumbBroken, setThumbBroken] = useState(false);
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    setThumbBroken(false);
+    setThumbnailUrl(null);
+    // A protected thumbnail waits for the dialog to resolve its credential.
+    if (!token && project.visibility !== "public" && project.visibility !== "unlisted") {
+      return () => controller.abort();
+    }
+    void loadSharedProjectThumbnail(project, { token, signal: controller.signal })
+      .then((result) => {
+        if (!result) return;
+        if (controller.signal.aborted) {
+          if (result.objectUrl) URL.revokeObjectURL(result.url);
+          return;
+        }
+        objectUrl = result.objectUrl ? result.url : null;
+        setThumbnailUrl(result.url);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          console.error("Failed to load shared project thumbnail", error);
+          setThumbBroken(true);
+        }
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [project, token]);
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border bg-card">
@@ -657,9 +833,9 @@ function GalleryCard({ project, openingAction, disabled, onOpen, onOpenCopy }: G
         className="group relative block aspect-video w-full overflow-hidden bg-muted disabled:cursor-not-allowed"
         title={t("gallery.open")}
       >
-        {project.thumbnailUrl && !thumbBroken ? (
+        {thumbnailUrl && !thumbBroken ? (
           <img
-            src={project.thumbnailUrl}
+            src={thumbnailUrl}
             alt=""
             loading="lazy"
             className="h-full w-full object-cover transition-transform group-hover:scale-105"

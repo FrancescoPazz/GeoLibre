@@ -31,6 +31,7 @@ import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
 import { openExternalLink } from "../../lib/open-external";
 import {
   getShareAccessToken,
+  resolveShareRequestToken,
   ShareOAuthError,
   shareOAuthErrorKey,
   signInToShare,
@@ -63,6 +64,14 @@ import {
   type ShareReadinessReport,
 } from "../../lib/share-readiness";
 import { openSettingsSection } from "./SettingsDialog";
+import {
+  fetchMyOrganizations,
+  fetchMyGroups,
+  isPublicSharingBlocked,
+  publicSharingRestriction,
+  type ShareOrganization,
+  type ShareGroup,
+} from "../../lib/share-gallery";
 
 interface ShareProjectDialogProps {
   open: boolean;
@@ -237,6 +246,7 @@ const VISIBILITY_LABEL_KEYS = {
   unlisted: "share.visibilityUnlistedShort",
   public: "share.visibilityPublicShort",
   private: "share.visibilityPrivateShort",
+  organization: "share.visibilityOrganizationShort",
 } as const satisfies Record<ShareVisibility, string>;
 
 const ROLE_LABEL_KEYS = {
@@ -298,6 +308,12 @@ export function ShareProjectDialog({
   const abortRef = useRef<AbortController | null>(null);
   const sharesAbortRef = useRef<AbortController | null>(null);
   const revokeAbortRef = useRef<AbortController | null>(null);
+  const [organizations, setOrganizations] = useState<ShareOrganization[]>([]);
+  const [groups, setGroups] = useState<ShareGroup[]>([]);
+  const [orgLoading, setOrgLoading] = useState(false);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const getTokenButtonRef = useRef<HTMLButtonElement>(null);
   const copyTimeoutRef = useRef<number | null>(null);
@@ -316,6 +332,12 @@ export function ShareProjectDialog({
     !isMissingForRecipients(item) && !missingKeys.has(rowKey(item));
   const remoteProblems = readiness?.problems.filter(isRemoteRow) ?? [];
   const remoteItemCount = readiness?.items.filter(isRemoteRow).length ?? 0;
+
+  const selectedOrganization =
+    organizations.find((organization) => organization.id === selectedOrgId) ?? null;
+  const publicRestriction = publicSharingRestriction(selectedOrganization);
+  const publicBlocked = isPublicSharingBlocked(visibility, selectedOrganization);
+  const organizationRequired = visibility === "organization" && !selectedOrganization;
 
   // The bearer token for the Manage tab's list and revoke calls: the web OAuth
   // session when there is one, else the pasted personal token, mirroring the
@@ -395,6 +417,8 @@ export function ShareProjectDialog({
       setSharesError(null);
       setActiveShares([]);
       setLoadingShares(false);
+      setSelectedOrgId(null);
+      setSelectedGroupIds([]);
     } else {
       abortRef.current?.abort();
       abortRef.current = null;
@@ -413,6 +437,50 @@ export function ShareProjectDialog({
   useEffect(() => {
     if (open && hasToken) void loadActiveShares();
   }, [open, hasToken, loadActiveShares]);
+
+  // Load the caller's organizations and groups for the owner and group
+  // pickers, also apart from the reset so a credential change keeps the form.
+  useEffect(() => {
+    setOrganizations([]);
+    setGroups([]);
+    const load = open && hasToken;
+    setOrgLoading(load);
+    setGroupLoading(load);
+    if (!load) return;
+    const controller = new AbortController();
+    // Same credential precedence as the upload: the OAuth session when signed
+    // in, else the pasted personal token. A failure only hides the pickers;
+    // the upload itself reports credential problems.
+    const memberships = resolveShareRequestToken(shareToken).then((token) => {
+      if (!token) throw new Error("no share credential");
+      return { token, signal: controller.signal };
+    });
+    memberships
+      .then(fetchMyOrganizations)
+      .then((orgs) => {
+        if (controller.signal.aborted) return;
+        setOrganizations(orgs);
+        setOrgLoading(false);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setOrganizations([]);
+        setOrgLoading(false);
+      });
+    memberships
+      .then(fetchMyGroups)
+      .then((grps) => {
+        if (controller.signal.aborted) return;
+        setGroups(grps);
+        setGroupLoading(false);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setGroups([]);
+        setGroupLoading(false);
+      });
+    return () => controller.abort();
+  }, [open, hasToken, shareToken]);
 
   // Pre-flight the project's data sources when the dialog opens, so the author
   // learns that a layer will be empty for everyone else *before* the upload
@@ -476,7 +544,7 @@ export function ShareProjectDialog({
   const handleShare = async () => {
     // Guard re-entry synchronously: a second click before the disabled state
     // renders would otherwise start a concurrent, non-idempotent upload.
-    if (abortRef.current) return;
+    if (abortRef.current || organizationRequired || publicBlocked) return;
     setError(null);
     setErrorCode(null);
     setStatus("uploading");
@@ -510,6 +578,8 @@ export function ShareProjectDialog({
         filename,
         content,
         visibility,
+        organizationId: selectedOrganization?.id,
+        groupIds: selectedGroupIds.length > 0 ? selectedGroupIds : undefined,
         role,
         expiresIn: expiresIn !== "never" ? expiresIn : undefined,
         password: password.trim() || undefined,
@@ -811,9 +881,23 @@ export function ShareProjectDialog({
                       disabled={status === "uploading"}
                     >
                       <option value="unlisted">{t("share.visibilityUnlisted")}</option>
-                      <option value="public">{t("share.visibilityPublic")}</option>
+                      <option value="public" disabled={publicRestriction !== null}>
+                        {t("share.visibilityPublic")}
+                      </option>
                       <option value="private">{t("share.visibilityPrivate")}</option>
+                      <option value="organization" disabled={organizations.length === 0}>
+                        {t("share.visibilityOrganization")}
+                      </option>
                     </Select>
+                    {publicRestriction && (
+                      <p className="text-xs text-destructive">
+                        {t(
+                          publicRestriction === "publisher-required"
+                            ? "share.publicPublisherRequired"
+                            : "share.publicDisabledByOrgPolicy",
+                        )}
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
@@ -861,6 +945,71 @@ export function ShareProjectDialog({
                     />
                   </div>
                 </div>
+
+                {organizations.length > 0 || orgLoading ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="share-organization">{t("share.owner")}</Label>
+                    <Select
+                      id="share-organization"
+                      value={selectedOrgId || ""}
+                      onChange={(event) => {
+                        const organization =
+                          organizations.find((item) => item.id === event.target.value) ?? null;
+                        setSelectedOrgId(organization?.id ?? null);
+                        setVisibility(
+                          organization
+                            ? organization.defaultVisibility
+                            : visibility === "organization"
+                              ? "unlisted"
+                              : visibility,
+                        );
+                      }}
+                      disabled={status === "uploading" || orgLoading}
+                    >
+                      <option value="">{t("share.personalAccount")}</option>
+                      {organizations.map((org) => (
+                        <option key={org.id} value={org.id}>
+                          {org.name} ({org.slug})
+                        </option>
+                      ))}
+                    </Select>
+                    {orgLoading ? (
+                      <p className="text-xs text-muted-foreground">
+                        {t("share.loadingOrganizations")}
+                      </p>
+                    ) : null}
+                    {organizationRequired ? (
+                      <p className="text-xs text-destructive">{t("share.organizationRequired")}</p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {groups.length > 0 || groupLoading ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="share-groups">{t("share.groups")}</Label>
+                    <Select
+                      id="share-groups"
+                      multiple
+                      value={selectedGroupIds}
+                      onChange={(e) => {
+                        const options = Array.from(e.target.selectedOptions).map((o) => o.value);
+                        setSelectedGroupIds(options);
+                      }}
+                      disabled={status === "uploading" || groupLoading}
+                      className="h-auto min-h-[80px]"
+                    >
+                      {groups.map((group) => (
+                        <option key={group.id} value={group.id}>
+                          {group.name} {group.sharedUpdate && `(${t("share.sharedUpdate")})`}
+                        </option>
+                      ))}
+                    </Select>
+                    {groupLoading ? (
+                      <p className="text-xs text-muted-foreground">{t("share.loadingGroups")}</p>
+                    ) : null}
+                    <p className="text-xs text-muted-foreground">{t("share.groupsHint")}</p>
+                  </div>
+                ) : null}
 
                 {readinessState === "checking" ? (
                   <p className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -986,7 +1135,9 @@ export function ShareProjectDialog({
                   <Button
                     type="button"
                     onClick={() => void handleShare()}
-                    disabled={status === "uploading" || !titleValid}
+                    disabled={
+                      status === "uploading" || !titleValid || organizationRequired || publicBlocked
+                    }
                   >
                     {status === "uploading" ? (
                       <>

@@ -550,6 +550,28 @@ export async function getShareAccessToken(baseUrl?: string): Promise<string | nu
   return refreshPromise;
 }
 
+/**
+ * The Bearer token for a share-server request: the OAuth access token when a
+ * web session exists, otherwise the pasted personal API token. A transient
+ * refresh failure falls back to the personal token when one is configured, and
+ * rethrows otherwise. Resolves to "" when neither credential is available.
+ */
+export async function resolveShareRequestToken(
+  personalToken: string,
+  baseUrl?: string,
+): Promise<string> {
+  const pasted = personalToken.trim();
+  if (!supportsShareOAuth()) return pasted;
+  try {
+    return (await getShareAccessToken(baseUrl)) ?? pasted;
+  } catch (err) {
+    if (err instanceof ShareOAuthError && err.code === "refresh-unavailable" && pasted) {
+      return pasted;
+    }
+    throw err;
+  }
+}
+
 async function refreshAccessToken(
   issuer: string,
   refreshToken: string,

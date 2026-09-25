@@ -10,6 +10,7 @@ import {
   oauthEndpointUrl,
   randomUrlSafeToken,
   resolveShareIssuer,
+  resolveShareRequestToken,
   s256Challenge,
   ShareOAuthError,
   signInToShare,
@@ -145,6 +146,41 @@ describe("refresh failure handling", () => {
       assert.equal(
         env.storage.get(`geolibre-share-oauth:${issuer}`),
         JSON.stringify({ refreshToken: "refresh-token" }),
+      );
+    } finally {
+      env.restore();
+    }
+  });
+});
+
+describe("resolveShareRequestToken", () => {
+  it("returns the pasted personal token when OAuth is unsupported", async () => {
+    // No window under the test loader, so the web OAuth flow is unavailable.
+    assert.equal(await resolveShareRequestToken("  pat-token  "), "pat-token");
+  });
+
+  it("falls back to the personal token when the OAuth refresh is unavailable", async () => {
+    const issuer = "https://request-token-fallback.example";
+    const env = installRefreshEnvironment(issuer, async () => {
+      throw new TypeError("offline");
+    });
+    try {
+      assert.equal(await resolveShareRequestToken("pat-token", issuer), "pat-token");
+    } finally {
+      env.restore();
+    }
+  });
+
+  it("rethrows a refresh failure when no personal token is configured", async () => {
+    const issuer = "https://request-token-no-fallback.example";
+    const env = installRefreshEnvironment(issuer, async () => {
+      throw new TypeError("offline");
+    });
+    try {
+      await assert.rejects(
+        resolveShareRequestToken("", issuer),
+        (error: unknown) =>
+          error instanceof ShareOAuthError && error.code === "refresh-unavailable",
       );
     } finally {
       env.restore();
