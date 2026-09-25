@@ -18,7 +18,6 @@ import {
   type EmbedEventType,
 } from "../lib/embed-api";
 import { fetchProjectFromUrl, startupProjectUrl, projectUrlFromLocation } from "../lib/project-url";
-import { shouldAwaitNativeMap } from "../lib/native-map-attach";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
 import { isKnownWhiteboxToolId } from "../lib/whitebox-tool-url";
 import { loadDataUrl } from "./useDataUrlLoader";

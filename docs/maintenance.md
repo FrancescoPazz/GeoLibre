@@ -184,7 +184,7 @@ black — it declines the stack.
 - **The PMTiles control's layer ids** (`pmtilesControlLayerId` /
   `pmtilesIdsForSourceLayers` / `pmtilesIdNamesSourceLayer`,
   `packages/map/src/pmtiles-layer.ts`, read from `layer-sync.ts` and
-  `packages/plugins/src/plugins/maplibre-components.ts`) mirror an unexported fact
+  `packages/plugins/src/plugins/components/pmtiles.ts`) mirror an unexported fact
   about `PMTilesLayerControl`: it names its MapLibre layers
   `${sourceId}-${name}-${kind}` from the **raw** source-layer name, where
   `pmtilesVectorLayerId` percent-encodes it. The two agree for every name needing
@@ -344,6 +344,20 @@ above this one is checked by the **compiler**:
 assignability against the real imported type, so a renamed or dropped engine
 identifier fails `npm run typecheck`. Nothing extra to do on a bump beyond letting
 the build run.
+
+### `maplibre-gl-raster` — picker data copied to keep it off startup
+
+`apps/geolibre-desktop/src/lib/raster-picker-mirror.ts` is a hand-kept copy of
+the package's `COLORMAP_OPTIONS`, `NORMALIZED_DIFFERENCE_INDICES`,
+`CUSTOM_NORMALIZED_DIFFERENCE`, `indexById` and `guessBandForRole`. The Style
+panel's colormap and spectral index pickers need them as soon as they render,
+and the package ships as one shared chunk, so importing even one constant put
+the whole ~0.35 MB library on the startup path. Everything else GeoLibre takes
+from the package is async and dynamic-imports it instead; keep new value
+imports that way.
+`tests/raster-picker-mirror.test.ts` compares every value and both helpers with
+the package export, so a colormap added or renamed upstream fails
+`npm run test:frontend`. Regenerate the copy from the package when it does.
 
 ### `tauri-plugin-persisted-scope` — private on-disk format
 
@@ -597,7 +611,16 @@ count can only go down. The warnings come from `react-hooks/exhaustive-deps`,
 `@typescript-eslint/no-floating-promises` (app, package and worker `src/`
 only, checked against each file's nearest `tsconfig.json`), and
 `local/no-physical-tailwind` (`eslint-rules/no-physical-tailwind.mjs`, the
-right-to-left rule from [Internationalization](i18n.md#right-to-left-languages)).
+right-to-left rule from [Internationalization](i18n.md#right-to-left-languages)),
+and two `eslint-plugin-jsx-a11y` rules (`control-has-associated-label`,
+`no-static-element-interactions`) on app and package `.tsx`.
+
+`eslint-plugin-jsx-a11y` 6.10 declares ESLint up to 9 as a peer. It runs under
+ESLint 10, and the `overrides` entry for it in the root `package.json` points its
+peer at the installed ESLint. When the plugin publishes ESLint 10 support, drop
+that override. If a future ESLint breaks the plugin, `npm run lint` fails
+loudly; pin ESLint or disable the two rules rather than reaching for
+`--legacy-peer-deps`.
 
 - **A PR adds a warning:** fix it. For a floating promise that is a deliberate
   fire-and-forget, prefix the call with `void` and make sure it handles its own
@@ -606,6 +629,9 @@ right-to-left rule from [Internationalization](i18n.md#right-to-left-languages))
   not raise the limit.
 - **A PR fixes warnings:** lower the limit to the new total that ESLint prints,
   in the same PR, so the gain is kept.
+- **A PR turns on a new rule:** the one time the limit goes up. Raise it by
+  exactly the new rule's count on the code as it is, say so in the PR, and fix
+  those warnings over time like the rest.
 
 ## Dependency updates and the audit allowlist
 

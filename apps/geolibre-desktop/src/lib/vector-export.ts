@@ -80,30 +80,6 @@ export function featureExportFileStem(layerName: string, featureId?: string | nu
   return `${stem}_${id}`;
 }
 
-function csvCell(value: unknown): string {
-  return quoteCsvCell(formatAttributeValue(value));
-}
-
-function geojsonToCsv(geojson: FeatureCollection): string {
-  const propertyKeys = new Set<string>();
-  for (const feature of geojson.features) {
-    for (const key of Object.keys(feature.properties ?? {})) {
-      propertyKeys.add(key);
-    }
-  }
-
-  const orderedKeys = Array.from(propertyKeys);
-  const headers = ["feature_id", ...orderedKeys];
-  const rows = geojson.features.map((feature, index) => {
-    const featureId = String(feature.id ?? index);
-    const properties = feature.properties ?? {};
-    const values = [featureId, ...orderedKeys.map((key) => properties[key])];
-    return values.map(csvCell).join(",");
-  });
-
-  return [headers.map(csvCell).join(","), ...rows].join("\n");
-}
-
 function exportFormatLabel(format: BinaryVectorExportFormat): string {
   switch (format) {
     case "geoparquet":
