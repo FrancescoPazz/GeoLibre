@@ -1660,3 +1660,90 @@ def test_check_validity_counts_empty_geometry_as_missing() -> None:
     _, messages = run_vector_tool("check-validity", with_empty)
     assert any("1 without geometry" in m for m in messages)
     assert any("Checked 1 feature(s)" in m for m in messages)
+
+
+@requires_geopandas
+@pytest.mark.parametrize(
+    "tolerance", [-1, -0.001, True, False, float("nan"), float("inf"), float("-inf")]
+)
+def test_simplify_negative_or_non_finite_tolerance_raises_value_error(tolerance: object) -> None:
+    with pytest.raises(
+        ValueError, match="Simplify tolerance must be a finite, non-negative number"
+    ):
+        run_vector_tool("simplify", SQUARE, parameters={"tolerance": tolerance})
+
+
+@requires_geopandas
+def test_simplify_unparseable_tolerance_raises_value_error() -> None:
+    with pytest.raises(
+        ValueError, match="Simplify tolerance must be a finite, non-negative number"
+    ):
+        run_vector_tool("simplify", SQUARE, parameters={"tolerance": "invalid_num"})
+
+
+@requires_geopandas
+def test_simplify_defaults_missing_tolerance() -> None:
+    geojson, messages = run_vector_tool("simplify", SQUARE)
+    assert len(geojson["features"]) == 1
+    assert any("tolerance 0.01 degrees" in m for m in messages)
+
+
+@requires_geopandas
+@pytest.mark.parametrize(
+    ("tolerance", "expected_tolerance"),
+    [
+        (0, "tolerance 0.0 degrees"),
+        (None, "tolerance 0.01 degrees"),
+        (0.05, "tolerance 0.05 degrees"),
+    ],
+)
+def test_simplify_preserves_boundary_tolerances(tolerance: object, expected_tolerance: str) -> None:
+    geojson, messages = run_vector_tool("simplify", SQUARE, parameters={"tolerance": tolerance})
+    assert len(geojson["features"]) == 1
+    assert any(expected_tolerance in m for m in messages)
+
+
+NULL_GEOM_LAYER = {
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"name": "no_geom"},
+            "geometry": None,
+        }
+    ],
+}
+
+
+@requires_geopandas
+def test_bounding_box_empty_geometries_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="contains no valid geometry to compute a bounding box"):
+        run_vector_tool("bounding-box", NULL_GEOM_LAYER)
+
+
+@requires_geopandas
+def test_bounding_box_computes_expected_bounds() -> None:
+    geojson, messages = run_vector_tool("bounding-box", SQUARE)
+    assert len(geojson["features"]) == 1
+    coords = geojson["features"][0]["geometry"]["coordinates"][0]
+    assert len(coords) == 5
+    assert coords == [
+        [1.0, 0.0],
+        [1.0, 1.0],
+        [0.0, 1.0],
+        [0.0, 0.0],
+        [1.0, 0.0],
+    ]
+    assert any("Computed bounding box" in m for m in messages)
+
+
+@requires_geopandas
+def test_buffer_empty_geometries_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="contains no valid geometry coordinates to project"):
+        run_vector_tool("buffer", NULL_GEOM_LAYER, parameters={"distance": 1})
+
+
+@requires_geopandas
+def test_centroids_empty_geometries_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="contains no valid geometry coordinates to project"):
+        run_vector_tool("centroids", NULL_GEOM_LAYER)

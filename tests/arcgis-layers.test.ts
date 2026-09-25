@@ -437,17 +437,271 @@ describe("arcgisUnsupportedStyleSettings", () => {
         blendMode: "multiply",
       },
     });
-    assert.deepEqual(arcgisUnsupportedStyleSettings(layer, false), [
-      "lineDecoration",
-      "invertedFill",
-      "extrusionFlat",
-    ]);
+    assert.deepEqual(arcgisUnsupportedStyleSettings(layer, false), ["extrusionFlat"]);
     assert.deepEqual(arcgisUnsupportedStyleSettings(layer, true), [
-      "lineDecoration",
-      "invertedFill",
+      "lineDecorationScene",
       "blendModeScene",
       "clusterScene",
     ]);
+  });
+});
+
+describe("ArcGIS style companions", () => {
+  const square = (x: number, y: number) => ({
+    type: "Polygon" as const,
+    coordinates: [
+      [
+        [x, y],
+        [x + 1, y],
+        [x + 1, y + 1],
+        [x, y + 1],
+        [x, y],
+      ],
+    ],
+  });
+  const polygons = (style: Partial<typeof DEFAULT_LAYER_STYLE>) =>
+    geojsonLayer({
+      geojson: {
+        type: "FeatureCollection",
+        features: [
+          { type: "Feature", id: "a", properties: { v: 1 }, geometry: square(0, 0) },
+          { type: "Feature", id: "b", properties: { v: 2 }, geometry: square(5, 5) },
+        ],
+      },
+      style: { ...DEFAULT_LAYER_STYLE, ...style },
+    });
+  const parts = (layer: GeoLibreLayer, scene = false) => {
+    const plan = compileArcgisLayer(layer, { scene });
+    assert.equal(plan.kind, "geojson");
+    return plan.kind === "geojson" ? plan.parts : [];
+  };
+
+  it("draws an inverted fill as a world mask under outline-only features", () => {
+    const [mask, features] = parts(polygons({ invertedFillEnabled: true }));
+    assert.equal(mask.interactive, false);
+    assert.equal(mask.geometryType, "polygon");
+    const rings = (mask.features!.features[0].geometry as { coordinates: number[][][] })
+      .coordinates;
+    // The world ring clamped to Web Mercator, both features cut out.
+    assert.ok(rings[0].every(([, lat]) => Math.abs(lat) <= 85.0512));
+    assert.equal(rings.length, 3);
+    const maskSymbol = mask.renderer.type === "simple" ? mask.renderer.symbol : null;
+    assert.equal((maskSymbol?.outline as { style: string }).style, "none");
+    assert.ok(((maskSymbol?.color as number[]) ?? [])[3] > 0);
+    const fill = features.renderer.type === "simple" ? features.renderer.symbol : null;
+    assert.deepEqual(fill?.color, [0, 0, 0, 0]);
+    assert.notEqual((fill?.outline as { style: string }).style, "none");
+    assert.equal(features.interactive, undefined);
+  });
+
+  it("adds generated geometry as non-interactive companion parts", () => {
+    const hulls = parts(
+      polygons({ geometryGenerator: "bounding-box", geometryGeneratorOpacity: 0.5 }),
+    );
+    assert.equal(hulls.length, 2);
+    assert.equal(hulls[1].interactive, false);
+    assert.equal(hulls[1].features!.features.length, 2);
+    const symbol = hulls[1].renderer.type === "simple" ? hulls[1].renderer.symbol : null;
+    assert.deepEqual(
+      symbol?.color,
+      cssToArcgisColor(DEFAULT_LAYER_STYLE.geometryGeneratorFillColor, 0.5),
+    );
+    const centroids = parts(
+      polygons({
+        geometryGenerator: "centroid",
+        geometryGeneratorSizeProperty: "v",
+        geometryGeneratorSizeMinValue: 1,
+        geometryGeneratorSizeMaxValue: 2,
+        geometryGeneratorSizeMinRadius: 4,
+        geometryGeneratorSizeMaxRadius: 8,
+      }),
+    );
+    const points = centroids[1];
+    assert.equal(points.geometryType, "point");
+    assert.equal(points.renderer.type, "unique-value");
+    const sizes =
+      points.renderer.type === "unique-value"
+        ? points.renderer.uniqueValueInfos.map(({ symbol }) => symbol.size)
+        : [];
+    assert.deepEqual(sizes, ["8px", "16px"]);
+    // Extrusion turns the generator off, as on the 2D map.
+    assert.equal(
+      parts(polygons({ geometryGenerator: "centroid", extrusionEnabled: true }), true).length,
+      1,
+    );
+  });
+
+  it("hides generated centroids whose proportional radius is 0", () => {
+    const [, points] = parts(
+      polygons({
+        geometryGenerator: "centroid",
+        geometryGeneratorSizeProperty: "v",
+        geometryGeneratorSizeMinValue: 1,
+        geometryGeneratorSizeMaxValue: 2,
+        geometryGeneratorSizeMinRadius: 0,
+        geometryGeneratorSizeMaxRadius: 8,
+      }),
+    );
+    // Feature `a` (v = 1) maps to 0 px and is left out, as on the 2D map.
+    assert.equal(points.features!.features.length, 1);
+  });
+
+  it("reuses the derived geometry of a filtered layer across compiles", () => {
+    const layer: GeoLibreLayer = {
+      ...polygons({ invertedFillEnabled: true }),
+      embedFilter: ["==", ["get", "v"], 1],
+    };
+    const mask = () => parts(layer)[0].features!.features[0].geometry;
+    const first = mask();
+    // One hole: the filter dropped feature `b`.
+    assert.equal((first as { coordinates: unknown[] }).coordinates.length, 2);
+    assert.equal(mask(), first);
+  });
+
+  it("decorates lines and outlines with a CIM marker line on a flat map", () => {
+    const layer = geojsonLayer({
+      ...mixed,
+      style: { ...DEFAULT_LAYER_STYLE, lineDecoration: "arrow", lineDecorationColor: "#ff0000" },
+    });
+    const flat = parts(layer);
+    const kinds = flat.map(
+      (part) => `${part.geometryType}${part.interactive === false ? "*" : ""}`,
+    );
+    assert.deepEqual(kinds, ["polygon", "polyline", "polyline*", "point"]);
+    const decoration = flat[2];
+    // The line and the polygon's outline.
+    assert.equal(decoration.features!.features.length, 2);
+    const symbol = decoration.renderer.type === "simple" ? decoration.renderer.symbol : null;
+    assert.equal(symbol?.type, "cim");
+    const marker = (symbol?.data as { symbol: { symbolLayers: Record<string, unknown>[] } }).symbol
+      .symbolLayers[0];
+    assert.equal((marker.markerPlacement as { angleToLine: boolean }).angleToLine, true);
+    assert.match(JSON.stringify(marker), /\[255,0,0,255\]/);
+    // A SceneView does not draw CIM line symbols.
+    assert.equal(parts(layer, true).length, 3);
+  });
+
+  it("labels de-duplicated points from their own part", () => {
+    const point = (id: string, name: string) => ({
+      type: "Feature" as const,
+      id,
+      properties: { name },
+      geometry: { type: "Point" as const, coordinates: [1, 2] },
+    });
+    const layer = geojsonLayer({
+      geojson: { type: "FeatureCollection", features: [point("a", "X"), point("b", "Y")] },
+      style: {
+        ...DEFAULT_LAYER_STYLE,
+        labels: {
+          ...DEFAULT_LAYER_STYLE.labels,
+          enabled: true,
+          field: "name",
+          dedupe: "concatenate",
+          transform: "lowercase",
+          sizeExpression: '["get", "size"]',
+        },
+      },
+    });
+    const [points, labels] = parts(layer);
+    assert.equal(points.labelingInfo, undefined);
+    assert.equal(labels.interactive, false);
+    assert.deepEqual(
+      labels.features!.features.map((f) => f.properties?.[ARCGIS_LABEL_FIELD]),
+      ["x\ny"],
+    );
+    assert.equal(labels.labelingInfo?.length, 1);
+  });
+
+  it("bins a continuous label colour ramp instead of a class per feature", () => {
+    const features = Array.from({ length: 200 }, (_, i) => ({
+      type: "Feature" as const,
+      id: `f${i}`,
+      properties: { name: `f${i}`, v: i },
+      geometry: { type: "Point" as const, coordinates: [i / 10, 0] },
+    }));
+    const layer = geojsonLayer({
+      geojson: { type: "FeatureCollection", features },
+      style: {
+        ...DEFAULT_LAYER_STYLE,
+        labels: {
+          ...DEFAULT_LAYER_STYLE.labels,
+          enabled: true,
+          field: "name",
+          colorExpression:
+            '["interpolate", ["linear"], ["get", "v"], 0, "#000000", 199, "#ffffff"]',
+        },
+      },
+    });
+    const classes = parts(layer)[0].labelingInfo ?? [];
+    assert.ok(classes.length > 1 && classes.length <= 16, String(classes.length));
+    // An alpha ramp is binned too.
+    const faded = parts({
+      ...layer,
+      style: {
+        ...layer.style,
+        labels: {
+          ...layer.style.labels,
+          colorExpression:
+            '["interpolate", ["linear"], ["get", "v"], 0, "rgba(0,0,0,0)", 199, "#000000"]',
+        },
+      },
+    })[0].labelingInfo;
+    assert.ok(faded && faded.length > 1 && faded.length <= 64, String(faded?.length));
+  });
+
+  it("groups data-defined label overrides into label classes", () => {
+    const point = (id: string, rank: number, big: boolean) => ({
+      type: "Feature" as const,
+      id,
+      properties: { name: id, rank, big },
+      geometry: { type: "Point" as const, coordinates: [rank, 0] },
+    });
+    const layer = geojsonLayer({
+      geojson: {
+        type: "FeatureCollection",
+        features: [point("a", 3, true), point("b", 1, false), point("c", 2, true)],
+      },
+      opacity: 0.5,
+      style: {
+        ...DEFAULT_LAYER_STYLE,
+        labels: {
+          ...DEFAULT_LAYER_STYLE.labels,
+          enabled: true,
+          field: "name",
+          sizeExpression: '["case", ["get", "big"], 20, 10]',
+          colorExpression: '["case", ["get", "big"], "#ff0000", "#0000ff"]',
+          opacityExpression: '["+", 0, 0.25]',
+          visibilityExpression: '["!=", ["get", "name"], "c"]',
+          priorityExpression: '["get", "rank"]',
+        },
+      },
+    });
+    const [part] = parts(layer);
+    const features = part.features!.features;
+    // The hidden label is blanked.
+    assert.deepEqual(
+      features.map((f) => [f.properties?.[ARCGIS_ID_FIELD], f.properties?.[ARCGIS_LABEL_FIELD]]),
+      [
+        ["a", "a"],
+        ["b", "b"],
+        ["c", ""],
+      ],
+    );
+    // One class per resolved size and colour.
+    const classes = part.labelingInfo ?? [];
+    const classOf = (index: number) => `gl__lcls = '${features[index].properties?.gl__lcls}'`;
+    assert.deepEqual(
+      classes.map((c) => c.where),
+      [classOf(0), classOf(1)],
+    );
+    assert.equal(classOf(0), classOf(2));
+    const big = classes[0].symbol as { color: number[]; font: { size: string } };
+    assert.equal(big.font.size, "20px");
+    assert.equal((classes[1].symbol as { font: { size: string } }).font.size, "10px");
+    // The SDK has no label priority: the Style panel names the expression.
+    assert.deepEqual(arcgisUnsupportedStyleSettings(layer, false), ["labelPriority"]);
+    // The 0.25 override replaces the layer's 0.5 opacity.
+    assert.deepEqual(big.color, [255, 0, 0, 0.5]);
   });
 });
 
@@ -585,7 +839,7 @@ describe("ArcGIS raster, service and media compilation", () => {
     assert.equal(plan.kind, "wms");
     if (plan.kind === "wms") assert.deepEqual(plan.sublayers, [{ name: "roads" }]);
   });
-  it("turns vector tiles into a Mapbox style document without symbol layers", () => {
+  it("turns vector tiles into a Mapbox style document with labels in an Esri font", () => {
     const layer: GeoLibreLayer = {
       ...geojsonLayer({ geojson: undefined }),
       type: "vector-tiles",
@@ -602,11 +856,18 @@ describe("ArcGIS raster, service and media compilation", () => {
     const plan = compileArcgisLayer(layer);
     assert.equal(plan.kind, "vector-tile");
     if (plan.kind !== "vector-tile") return;
-    const style = plan.style as { version: number; sources: object; layers: { type: string }[] };
+    const style = plan.style as {
+      version: number;
+      sources: object;
+      layers: { type: string; layout?: Record<string, unknown> }[];
+    };
     assert.equal(style.version, 8);
     assert.equal(Object.keys(style.sources).length, 1);
     assert.ok(style.layers.length >= 3);
-    assert.ok(style.layers.every((l) => l.type !== "symbol"));
+    // The label layer is kept, in a font Esri's glyph service has; the engine
+    // adds the glyphs and sprite (`arcgis-sprite.ts`).
+    const label = style.layers.find((l) => l.type === "symbol");
+    assert.deepEqual(label?.layout?.["text-font"], ["Arial Regular"]);
     // Opacity and visibility are native layer properties, so the style must
     // not change with them — otherwise every slider tick rebuilds the layer.
     const faded = compileArcgisLayer({ ...layer, opacity: 0.3, visible: false });

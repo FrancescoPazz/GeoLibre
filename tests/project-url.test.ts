@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   deploymentStartProjectUrl,
   fetchProjectFromUrl,
+  parseShareRole,
 } from "../apps/geolibre-desktop/src/lib/project-url";
 
 const PROJECT_URL = "https://example.com/Test.geolibre.json";
@@ -273,5 +274,17 @@ describe("fetchProjectFromUrl", () => {
         return true;
       },
     );
+  });
+});
+
+describe("parseShareRole", () => {
+  it("parses valid role strings and rejects invalid ones", () => {
+    assert.equal(parseShareRole("view"), "view");
+    assert.equal(parseShareRole("comment"), "comment");
+    assert.equal(parseShareRole("edit"), "edit");
+    assert.equal(parseShareRole("admin"), null);
+    assert.equal(parseShareRole(""), null);
+    assert.equal(parseShareRole(null), null);
+    assert.equal(parseShareRole(undefined), null);
   });
 });

@@ -2480,6 +2480,7 @@ export function TopToolbar({
           open={gpsTrackingOpen}
           onOpenChange={setGpsTrackingOpen}
           mapControllerRef={mapControllerRef}
+          mapReadyGeneration={mapReadyGeneration}
         />
       )}
       <RecordTourDialog
@@ -2496,6 +2497,7 @@ export function TopToolbar({
         open={georeferencerOpen}
         onOpenChange={setGeoreferencerOpen}
         mapControllerRef={mapControllerRef}
+        mapReadyGeneration={mapReadyGeneration}
       />
       <SetViewDialog
         open={setViewOpen}
@@ -2536,7 +2538,9 @@ export function TopToolbar({
       <ProjectGalleryDialog
         open={galleryDialogOpen}
         onOpenChange={setGalleryDialogOpen}
-        onOpenProject={(url, authToken) => projectFiles.openProjectFromShareUrl(url, { authToken })}
+        onOpenProject={(url, authToken, options) =>
+          projectFiles.openProjectFromShareUrl(url, { authToken, ...options })
+        }
       />
       {isMenuVisible(uiProfile, "help") && (
         <HelpMenu

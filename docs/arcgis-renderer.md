@@ -81,10 +81,30 @@ override is set aside and the shared basemap is translated instead.
   way before features reach the SDK. Zoom-dependent expressions (metre-unit
   strokes, per-rule zoom ranges) are re-evaluated when the integer zoom
   changes.
+- The symbology pack draws through companion layers built from the filtered
+  features: the **inverted fill** as a world mask with the polygons cut out
+  (clamped to the Web Mercator latitude limit, as on Mapbox), the **geometry
+  generator** (centroids, bounding boxes, convex hulls, buffers) in its own
+  fill, stroke and proportional circle size, and **line decorations** as a CIM
+  marker line that repeats the shape at the style's spacing and turns arrows
+  to follow the line (a flat `MapView` only; the SDK draws no CIM line symbols
+  in a scene). **Label de-duplication** labels the aggregated points from a
+  label-only layer. The label size, colour, opacity and visibility
+  expressions are evaluated per feature and grouped into one label class per
+  resolved size and colour, since the SDK's label symbols are not
+  data-driven (a continuous ramp is binned into a few dozen classes). The layer's
+  opacity also applies to its labels, so an opacity expression cannot make a
+  label more opaque than its layer. Companion layers are not identified or
+  selected.
 - HTTP(S) raster tiles (XYZ, WMTS tile templates), WMS (the GetMap template is
   split into the SDK's `WMSLayer` description), and vector tiles with named
   source layers (drawn by the SDK's `VectorTileLayer` from the same style
-  layers the Mapbox engine compiles, minus text labels). A raster template
+  layers the Mapbox engine compiles). Markers, line decorations and fill
+  patterns are GeoLibre's generated images, baked into a sprite sheet the SDK
+  reads through a request interceptor; labels use Arial from Esri's public
+  glyph service, so they need the network. Past a source's maximum zoom the
+  SDK magnifies its last tiles, patterns and decoration spacing with them,
+  where MapLibre keeps them crisp. A raster template
   `WebTileLayer` cannot express — a `{bbox-epsg-3857}` request, a TMS scheme,
   `{-y}` or `{quadkey}`, a 512 px tile size, a source `minzoom`/`maxzoom`, or
   several templates — draws through a custom tile layer that requests each
@@ -119,12 +139,18 @@ override is set aside and the shared basemap is translated instead.
 - Feature picking (click identify with the layer's popup template and field
   visibility; **Identify visible layers** groups every layer's hits, including
   WMS GetFeatureInfo, Time Slider pixels, COG/NetCDF pixels and DuckDB
-  layers), selection highlighting, extent
+  layers), hover map tips (the layer's hover fields, picked from the store's
+  features as on Mapbox), geotagged-photo popups on a click without the
+  Identify tool, selection highlighting, extent
   drawing, draggable placement, and engine-level image capture. **Layers →
   Select features** (single, rectangle, polygon, freehand and radius) runs the
   same gestures as on MapLibre on the primary map. The status bar's pointer
   elevation reads the ground under the cursor from the scene's elevation
   surface, or (with consent) the same remote lookup the other maps use.
+- **GPS Tracking** (the position marker, accuracy circle and track, following
+  the position), **Add comment**, the Georeferencer's **Link on map**, and the
+  Pixel Time Series and NetCDF sample markers work through the engine's render
+  surface and click events.
 - Plugin controls hosted on the map receive MapLibre's `move`, `zoom`,
   `rotate`, `click` and `mousemove` events, so readouts such as View State and
   the minimap follow the camera. Story chapter layer fades run over the
@@ -139,10 +165,18 @@ override is set aside and the shared basemap is translated instead.
   zoom in 2D. Built-in and custom SVG fill patterns also render in 2D, with
   per-feature fill opacity and independent outlines.
 - The built-in controls the **Controls** menu governs, as the SDK's own widgets:
-  fullscreen, compass (resets rotation), zoom (navigation), locate (geolocate)
-  and the scale bar (metric or imperial, 2D only), plus a globe/Mercator
-  toggle and terrain (see [2D and 3D](#2d-and-3d)). Attribution is drawn by the view
+  fullscreen, compass (resets rotation), zoom (navigation) and locate
+  (geolocate), plus a globe/Mercator toggle and terrain (see
+  [2D and 3D](#2d-and-3d)). The scale bar is the 2D map's own: it measures
+  around the view's centre with the active body's radius, in metric, imperial
+  or nautical units, on a flat map and in a scene. Attribution is drawn by the view
   itself (`attributionVisible`); Esri requires it and it cannot be hidden.
+- The **Print Layout** atlas frames each page by driving the view's camera
+  north up, with the fit MapLibre's `fitBounds` computes, and waits for the
+  view to finish drawing before the capture. The mask outside the current
+  feature is painted onto the capture rather than drawn on the live map, and
+  a fixed scale is corrected up to three times, aiming for 0.5 % of the
+  requested one, since the SDK rounds the zoom it is given.
 - **Plugins → Layer Control** toggles the native ArcGIS layer list, enabled by
   default on the primary map like the shared plugin. Its visibility
   toggles update the project and the sidebar, and sidebar changes update the
@@ -207,10 +241,7 @@ In a scene:
   advanced colour expression, or the extrusion colour. On a 2D `MapView` they
   stay flat fills.
 - Identify, selection highlighting, extent drawing and capture work as in 2D.
-  The scale bar does not: the SDK's scale bar only measures a `MapView`, so
-  the Controls menu cannot show it in a scene. The project's minimum and
-  maximum zoom still clamp camera moves the app makes, but not the user's own
-  navigation.
+  The project's zoom range becomes the scene's altitude range on a globe.
 - **3D (Z values)** places vector coordinates at their absolute altitude, with
   the configured vertical scale and offset. Selection highlights use the same
   transformed coordinates. Source data stays unchanged.
@@ -307,13 +338,21 @@ experimental alignment and depth limitations described above.
   renderer, and the layer panels badge such layers **No ArcGIS**. A layer a
   plugin draws on MapLibre only (Planetary Computer, say) is named in the map's
   banner too.
+- An Esri vector tile service's own icon and label layers (its stored style
+  keeps no sprite or glyphs), in any view.
+- Navigation limits differ slightly from MapLibre's: a view that settles past
+  the zoom range or the restricted bounds eases back inside them (on a flat
+  map the wheel also stops at the zoom limits), the bounds hold the view's
+  centre rather than the whole viewport, and the SDK always wraps around the
+  antimeridian, so turning off world copies only clamps the views the app
+  applies.
 - Measure and the geometry editor draw through the MapLibre/Mapbox style API;
   the Controls menu greys Measure out, and editing a layer's geometry says the
   renderer does not support it.
-- Line decorations, geometry generators, inverted fills, diagrams and label
-  de-duplication; clustering, fill patterns and blend modes in a `SceneView`;
-  extrusion on a flat map. The Style panel names whichever of these a layer
-  turns on.
+- Diagrams and the label priority expression (the SDK has no per-feature
+  label priority); clustering, fill patterns, blend modes and line
+  decorations in a `SceneView`; extrusion on a flat map. The Style panel names
+  whichever of these a layer turns on.
 - Arbitrary MapLibre custom layers and rendering APIs still require adapters.
   The primary view hosts DOM controls with navigation methods; Vector, LiDAR,
   DuckDB and 3D Tiles have explicit rendering bridges. Layer Control delegates

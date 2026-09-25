@@ -78,6 +78,18 @@ export {
   type VectorToolKind,
 } from "./store";
 export {
+  NO_LAYERS,
+  selectLayerById,
+  selectLayerIds,
+  selectLayerSummaries,
+  selectLayersWhen,
+  useLayer,
+  useLayerIds,
+  useLayerSummaries,
+  useLayersWhen,
+  type LayerSummary,
+} from "./layer-selectors";
+export {
   getHistoryCoalesceMs,
   setHistoryCoalesceMs,
   getMaxHistoryFeatureCount,

@@ -1,4 +1,4 @@
-import { useAppStore, type GlobeAppearance } from "@geolibre/core";
+import { useAppStore, type GlobeAppearance, useLayersWhen } from "@geolibre/core";
 import {
   CogDemError,
   DEFAULT_TERRAIN_EXAGGERATION,
@@ -75,7 +75,9 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
   // The globe's own look (base colour, translucency, camera collision): read
   // from the engine on open, `null` while the map is not a 3D globe.
   const [globeLook, setGlobeLook] = useState<GlobeAppearance | null>(null);
-  const layers = useAppStore((state) => state.layers);
+  // Layers are only read while the dialog is open, so layer edits made with it
+  // closed do not re-render it; handleOpen reads the store directly to seed.
+  const layers = useLayersWhen(open);
   const rasterLayerOptions = useMemo(() => terrainRasterLayerOptions(layers), [layers]);
   useEffect(() => setDraft(String(exaggeration)), [exaggeration]);
 
@@ -93,7 +95,9 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
       setExaggeration(value);
       setDraft(String(value));
       const currentSource = mapControllerRef.current?.getTerrainCogSource() ?? "";
-      const currentLayer = rasterLayerOptions.find((option) => option.source === currentSource);
+      const currentLayer = terrainRasterLayerOptions(useAppStore.getState().layers).find(
+        (option) => option.source === currentSource,
+      );
       setTerrainUrl(!currentLayer && /^https?:\/\//i.test(currentSource) ? currentSource : "");
       setRasterLayerId(currentLayer?.id ?? "");
       setSourceError(null);
@@ -115,7 +119,7 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
       window.removeEventListener(TERRAIN_SETTINGS_EVENT, handleOpen);
       window.removeEventListener(TERRAIN_SETTINGS_CLOSE_EVENT, handleClose);
     };
-  }, [mapControllerRef, rasterLayerOptions]);
+  }, [mapControllerRef]);
 
   const applyGlobeLook = (patch: GlobeAppearance) => {
     const engine = mapControllerRef.current;
@@ -223,8 +227,10 @@ export function TerrainSettingsDialog({ mapControllerRef }: TerrainSettingsDialo
 
   const selectedRasterLayer = rasterLayerOptions.find((option) => option.id === rasterLayerId);
   useEffect(() => {
-    if (rasterLayerId && !selectedRasterLayer) setRasterLayerId("");
-  }, [rasterLayerId, selectedRasterLayer]);
+    // Gated on `open`: while closed, `layers` is empty by design (see
+    // useLayersWhen), which is not the selected layer disappearing.
+    if (open && rasterLayerId && !selectedRasterLayer) setRasterLayerId("");
+  }, [open, rasterLayerId, selectedRasterLayer]);
 
   const applyRasterLayerSource = () => {
     if (selectedRasterLayer) {
