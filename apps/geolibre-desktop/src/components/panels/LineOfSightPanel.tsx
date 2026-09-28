@@ -1,6 +1,10 @@
 import {
   LINE_OF_SIGHT_HEIGHT_MAX,
   LINE_OF_SIGHT_HEIGHT_MIN,
+  armLineOfSightNewLine,
+  armLineOfSightObserverPlacement,
+  armLineOfSightTargetPlacement,
+  cancelLineOfSightPlacement,
   clearLineOfSight,
   closeLineOfSightPanel,
   getLineOfSightSnapshot,
@@ -11,8 +15,9 @@ import {
 } from "@geolibre/plugins";
 import { Button, Input, Label } from "@geolibre/ui";
 import { Check, Eraser, Eye, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useState, useSyncExternalStore } from "react";
+import { type PointerEvent as ReactPointerEvent, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
+import { useRer3dToolPanelPosition } from "../../hooks/useRer3dToolPanelPosition";
 import { clamp } from "../../lib/clamp";
 
 const PANEL_WIDTH = 300;
@@ -53,7 +58,7 @@ function formatPoint(point: LngLatAlt, locale: string): string {
 function LineOfSightCard({ state }: { state: LineOfSightState }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const [position, setPosition] = useState(() => ({ x: EDGE_MARGIN, y: EDGE_MARGIN }));
+  const [position, setPosition] = useRer3dToolPanelPosition("line-of-sight", PANEL_WIDTH);
 
   const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("button,input,select")) return;
@@ -91,15 +96,20 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
     handle.addEventListener("pointercancel", handleUp);
   };
 
-  const { phase, result, settings } = state;
+  const { phase, result, settings, placementActive, placementIntent } = state;
   const hint =
     phase === "unavailable"
       ? t("toolbar.lineOfSight.unavailable")
-      : phase === "observer"
+      : placementActive && placementIntent === "observer"
         ? t("toolbar.lineOfSight.clickObserver")
-        : phase === "target"
+        : placementActive && placementIntent === "target"
           ? t("toolbar.lineOfSight.clickTarget")
-          : null;
+          : phase === "observer"
+            ? t("toolbar.lineOfSight.chooseObserver")
+            : phase === "target"
+              ? t("toolbar.lineOfSight.chooseTarget")
+              : t("toolbar.lineOfSight.chooseNewLine");
+  const showPlacementControls = phase !== "unavailable";
 
   return (
     <div
@@ -138,17 +148,61 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
       </div>
 
       <div className="space-y-3 p-3">
-        {hint && (
-          <div
-            className={
-              phase === "unavailable"
-                ? "flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400"
-                : "text-xs text-muted-foreground"
-            }
-            data-testid="line-of-sight-hint"
-          >
-            {phase === "unavailable" && <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
-            <span>{hint}</span>
+        <div
+          className={
+            phase === "unavailable"
+              ? "flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400"
+              : "text-xs text-muted-foreground"
+          }
+          data-testid="line-of-sight-hint"
+        >
+          {phase === "unavailable" && <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          <span>{hint}</span>
+        </div>
+
+        {showPlacementControls && (
+          <div className="flex flex-wrap gap-1.5" data-testid="line-of-sight-placement">
+            <Button
+              type="button"
+              variant={placementActive && placementIntent === "observer" ? "default" : "outline"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => armLineOfSightObserverPlacement()}
+            >
+              {t("toolbar.lineOfSight.placeObserver")}
+            </Button>
+            <Button
+              type="button"
+              variant={placementActive && placementIntent === "target" ? "default" : "outline"}
+              size="sm"
+              className="h-7 text-xs"
+              disabled={!state.observer}
+              onClick={() => armLineOfSightTargetPlacement()}
+            >
+              {t("toolbar.lineOfSight.placeTarget")}
+            </Button>
+            {phase === "done" && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => armLineOfSightNewLine()}
+              >
+                {t("toolbar.lineOfSight.startNewLine")}
+              </Button>
+            )}
+            {placementActive && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => cancelLineOfSightPlacement()}
+              >
+                {t("toolbar.lineOfSight.cancelPlacement")}
+              </Button>
+            )}
           </div>
         )}
 

@@ -12,6 +12,16 @@ import {
   type LineOfSightResult,
   type LngLatAlt,
 } from "./line-of-sight-geometry";
+import {
+  activateSightAndViewshedPlacement,
+  cancelSightAndViewshedPlacement,
+  isSightAndViewshedMarkerEntity,
+  isSightAndViewshedPlacementActive,
+  registerSightAndViewshedCanvas,
+  resetSightAndViewshedPlacement,
+  runWithSightAndViewshedInputTool,
+  subscribeSightAndViewshedPlacement,
+} from "./line-of-sight-viewshed-input";
 
 /**
  * Line of sight on the 3D globe: click an observer, click a target, and see
@@ -54,9 +64,15 @@ export const DEFAULT_LINE_OF_SIGHT_SETTINGS: LineOfSightSettings = Object.freeze
  */
 export type LineOfSightPhase = "unavailable" | "observer" | "target" | "done";
 
+export type LineOfSightPlacementIntent = "observer" | "target";
+
 export interface LineOfSightState {
   open: boolean;
   phase: LineOfSightPhase;
+  /** Runtime only: empty-ground clicks are accepted while this is true. */
+  placementActive: boolean;
+  /** Which endpoint the next globe click will set, when {@link placementActive}. */
+  placementIntent: LineOfSightPlacementIntent | null;
   /** The clicked ground positions, before the heights are applied. */
   observer: LngLatAlt | null;
   target: LngLatAlt | null;
@@ -85,13 +101,17 @@ let observer: LngLatAlt | null = null;
 let target: LngLatAlt | null = null;
 let settings: LineOfSightSettings = { ...DEFAULT_LINE_OF_SIGHT_SETTINGS };
 let result: LineOfSightResult | null = null;
+/** Whether this tool wants empty-ground placement (not persisted). */
+let placementActive = false;
+let placementIntent: LineOfSightPlacementIntent | null = null;
 
 /** The globe the tool is bound to, with everything needed to unbind. */
 interface Binding {
   handle: CesiumSceneHandle;
   handler: ScreenSpaceEventHandler;
   entities: Entity[];
-  previousCursor: string;
+  releaseCanvas: () => void;
+  unsubscribePlacement: () => void;
   releaseTiles: () => void;
   /** A point being dragged, with the camera inputs suspended until it is let go. */
   dragging: { which: "observer" | "target"; restoreInputs: () => void } | null;
@@ -106,11 +126,77 @@ function buildSnapshot(): LineOfSightState {
   return {
     open,
     phase: !binding ? "unavailable" : !observer ? "observer" : !target ? "target" : "done",
+    placementActive: placementActive && isSightAndViewshedPlacementActive(LINE_OF_SIGHT_TOOL_ID),
+    placementIntent: placementActive ? placementIntent : null,
     observer,
     target,
     settings,
     result,
   };
+}
+
+function disarmPlacement(): void {
+  placementActive = false;
+  placementIntent = null;
+  cancelSightAndViewshedPlacement(LINE_OF_SIGHT_TOOL_ID);
+}
+
+/** Arm the next required endpoint when the panel opens on an incomplete line. */
+function autoArmIfIncomplete(): void {
+  if (!open || !live()) return;
+  if (observer && target) return;
+  armLineOfSightPlacement(!observer ? "observer" : "target");
+}
+
+function armLineOfSightPlacement(intent: LineOfSightPlacementIntent): void {
+  if (!open || !live()) return;
+  placementActive = true;
+  placementIntent = intent;
+  activateSightAndViewshedPlacement(LINE_OF_SIGHT_TOOL_ID);
+  publish();
+}
+
+export function cancelLineOfSightPlacement(): void {
+  if (!placementActive) return;
+  disarmPlacement();
+  publish();
+}
+
+/** Place or replace the observer on the next empty-ground click. */
+export function armLineOfSightObserverPlacement(): void {
+  if (!open || !live()) return;
+  if (target) {
+    target = null;
+    result = null;
+  }
+  armLineOfSightPlacement("observer");
+  const b = live();
+  if (b) drawEntities(b);
+}
+
+/** Place the target on the next empty-ground click (requires an observer). */
+export function armLineOfSightTargetPlacement(): void {
+  if (!open || !live() || !observer) return;
+  if (target) {
+    target = null;
+    result = null;
+    const b = live();
+    if (b) drawEntities(b);
+  }
+  armLineOfSightPlacement("target");
+}
+
+/** Forget the current line and arm a new observer placement. */
+export function armLineOfSightNewLine(): void {
+  if (!open || !live()) return;
+  observer = null;
+  target = null;
+  result = null;
+  armLineOfSightPlacement("observer");
+  const b = live();
+  if (b) {
+    drawEntities(b);
+  }
 }
 
 function publish(): void {
@@ -282,23 +368,21 @@ async function recomputeSampled(b: Binding): Promise<void> {
 
 function refresh(b: Binding): void {
   const provider = b.handle.viewer.terrainProvider;
-  if (provider?.availability) {
-    void recomputeSampled(b).then(() => {
-      if (live() !== b) return;
-      drawEntities(b);
-      publish();
-    });
+  if (!provider?.availability) {
+    recompute(b);
+    drawEntities(b);
+    publish();
     return;
   }
-  recompute(b);
+  // Publish immediately so placement and drags update the snapshot while
+  // sampled-terrain recomputation finishes in the background.
   drawEntities(b);
   publish();
-}
-
-function applyCursor(b: Binding): void {
-  const canvas = b.handle.canvas;
-  const placing = open && (!observer || !target);
-  canvas.style.cursor = placing ? "crosshair" : b.previousCursor;
+  void recomputeSampled(b).then(() => {
+    if (live() !== b) return;
+    drawEntities(b);
+    publish();
+  });
 }
 
 /** Which of the two points is under the pointer, if either. */
@@ -308,6 +392,11 @@ function pointAt(b: Binding, position: Cartesian2): "observer" | "target" | null
   if (id === ENTITY_ID.observer) return "observer";
   if (id === ENTITY_ID.target) return "target";
   return null;
+}
+
+function entityBlocksPlacement(b: Binding, position: Cartesian2): boolean {
+  const picked = b.handle.scene.pick(position) as { id?: { id?: unknown } } | undefined;
+  return isSightAndViewshedMarkerEntity(picked?.id?.id);
 }
 
 function onLeftDown(b: Binding, position: Cartesian2): void {
@@ -345,25 +434,61 @@ function endDrag(b: Binding): void {
 }
 
 function onClick(b: Binding, position: Cartesian2): void {
+  if (
+    !placementActive ||
+    !isSightAndViewshedPlacementActive(LINE_OF_SIGHT_TOOL_ID) ||
+    !placementIntent
+  ) {
+    return;
+  }
   const { Cesium: C, viewer } = b.handle;
-  // A click on a placed point is the end of a drag or a missed grab, not a
-  // new measurement.
-  if (pointAt(b, position)) return;
+  if (pointAt(b, position) || entityBlocksPlacement(b, position)) return;
   const picked = pickGroundPosition(C, viewer, position);
   if (!picked) return;
   const ground = toLngLatAlt(C, picked);
-  if (!observer) {
-    observer = ground;
-  } else if (!target) {
-    target = ground;
-  } else {
-    // A third click starts over from a new observer.
+  if (placementIntent === "observer") {
     observer = ground;
     target = null;
     result = null;
+    if (open) {
+      placementIntent = "target";
+    }
+  } else {
+    target = ground;
+    disarmPlacement();
   }
-  applyCursor(b);
   refresh(b);
+}
+
+function bindLineOfSightHandlers(b: Binding, handle: CesiumSceneHandle): void {
+  const { Cesium: C, viewer } = handle;
+  const { handler } = b;
+  handler.setInputAction((movement: { position: Cartesian2 }) => {
+    const current = live();
+    if (!open || !current) return;
+    onClick(current, movement.position);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction((movement: { position: Cartesian2 }) => {
+    const current = live();
+    if (!open || !current) return;
+    onLeftDown(current, movement.position);
+  }, C.ScreenSpaceEventType.LEFT_DOWN);
+  handler.setInputAction((movement: { endPosition: Cartesian2 }) => {
+    const current = live();
+    if (!current) return;
+    onMouseMove(current, movement.endPosition);
+  }, C.ScreenSpaceEventType.MOUSE_MOVE);
+  handler.setInputAction(() => {
+    const current = live();
+    if (!current) return;
+    endDrag(current);
+  }, C.ScreenSpaceEventType.LEFT_UP);
+  b.releaseTiles();
+  b.releaseTiles = watchTiles(handle, () => {
+    const current = live();
+    if (!current || !observer || !target) return;
+    refresh(current);
+  });
 }
 
 function watchTiles(handle: CesiumSceneHandle, onSettled: () => void): () => void {
@@ -382,52 +507,40 @@ function attach(app: GeoLibreAppAPI): void {
   const handle = primaryGlobe(app);
   if (!handle) return;
   const { Cesium: C, viewer } = handle;
-  const handler = new C.ScreenSpaceEventHandler(viewer.canvas);
+  const handler = runWithSightAndViewshedInputTool(
+    LINE_OF_SIGHT_TOOL_ID,
+    () => new C.ScreenSpaceEventHandler(viewer.canvas),
+  );
   const b: Binding = {
     handle,
     handler,
     entities: [],
-    previousCursor: viewer.canvas.style.cursor,
+    releaseCanvas: registerSightAndViewshedCanvas(LINE_OF_SIGHT_TOOL_ID, viewer.canvas),
+    unsubscribePlacement: subscribeSightAndViewshedPlacement(() => {
+      if (placementActive && !isSightAndViewshedPlacementActive(LINE_OF_SIGHT_TOOL_ID)) {
+        placementActive = false;
+      }
+      publish();
+    }),
     releaseTiles: () => {},
     dragging: null,
   };
   binding = b;
-  handler.setInputAction((movement: { position: Cartesian2 }) => {
-    if (!open || live() !== b) return;
-    onClick(b, movement.position);
-  }, C.ScreenSpaceEventType.LEFT_CLICK);
-  // Placed points can be dragged to a new spot, the way the old geoportal
-  // let its measurement handles be moved.
-  handler.setInputAction((movement: { position: Cartesian2 }) => {
-    if (!open || live() !== b) return;
-    onLeftDown(b, movement.position);
-  }, C.ScreenSpaceEventType.LEFT_DOWN);
-  handler.setInputAction((movement: { endPosition: Cartesian2 }) => {
-    if (live() !== b) return;
-    onMouseMove(b, movement.endPosition);
-  }, C.ScreenSpaceEventType.MOUSE_MOVE);
-  handler.setInputAction(() => {
-    if (live() !== b) return;
-    endDrag(b);
-  }, C.ScreenSpaceEventType.LEFT_UP);
-  // Terrain refines as tiles load, and `globe.pick` only sees loaded tiles,
-  // so the answer is re-asked once loading settles rather than every frame.
-  b.releaseTiles = watchTiles(handle, () => {
-    if (live() !== b || !observer || !target) return;
-    refresh(b);
-  });
-  applyCursor(b);
+  bindLineOfSightHandlers(b, handle);
+  autoArmIfIncomplete();
   refresh(b);
 }
 
 function detach(): void {
   const b = binding;
   binding = null;
+  disarmPlacement();
   if (!b) return;
   b.releaseTiles();
+  b.unsubscribePlacement();
+  b.releaseCanvas();
   endDrag(b);
   if (!b.handle.viewer.isDestroyed()) {
-    b.handle.canvas.style.cursor = b.previousCursor;
     removeEntities(b);
     b.handle.requestRender();
   }
@@ -438,8 +551,7 @@ function detach(): void {
 export function openLineOfSightPanel(app: GeoLibreAppAPI): void {
   open = true;
   attach(app);
-  const b = live();
-  if (b) applyCursor(b);
+  autoArmIfIncomplete();
   publish();
 }
 
@@ -458,10 +570,11 @@ export function clearLineOfSight(): void {
   observer = null;
   target = null;
   result = null;
+  disarmPlacement();
   const b = live();
   if (b) {
-    applyCursor(b);
     drawEntities(b);
+    autoArmIfIncomplete();
   }
   publish();
 }
@@ -500,6 +613,7 @@ export function restoreLineOfSight(app: GeoLibreAppAPI, state: unknown): boolean
     target = null;
     result = null;
     settings = { ...DEFAULT_LINE_OF_SIGHT_SETTINGS };
+    disarmPlacement();
     publish();
     return false;
   }
@@ -508,6 +622,7 @@ export function restoreLineOfSight(app: GeoLibreAppAPI, state: unknown): boolean
   observer = normalizePoint(raw.observer);
   target = observer ? normalizePoint(raw.target) : null;
   result = null;
+  disarmPlacement();
   if (raw.open === true) {
     // Bind first so the restored points are drawn and tested on the globe.
     open = true;
@@ -518,6 +633,12 @@ export function restoreLineOfSight(app: GeoLibreAppAPI, state: unknown): boolean
     closeLineOfSightPanel(app);
   }
   return true;
+}
+
+/** Reset placement ownership when the plugin deactivates or the project clears. */
+export function resetLineOfSightPlacement(): void {
+  disarmPlacement();
+  resetSightAndViewshedPlacement();
 }
 
 /** The state worth persisting, or `undefined` when everything is at its default. */

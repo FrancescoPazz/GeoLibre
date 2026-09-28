@@ -17,6 +17,7 @@ import {
   reattachLineOfSight,
   restoreLineOfSight,
 } from "./line-of-sight";
+import { resetSightAndViewshedPlacement } from "./line-of-sight-viewshed-input";
 import {
   closeMeasure3dPanel,
   getMeasure3dProjectState,
@@ -80,6 +81,7 @@ export const rer3dToolsPlugin: GeoLibrePlugin = {
     closeViewshedAreaPanel(app);
     closeGlobeClippingPanel(app);
     closeElevationBandsPanel(app);
+    resetSightAndViewshedPlacement();
   },
   // Each tool persists its panel flag and figure under its own key, so a
   // reopened project shows the same drawings; the numbers are recomputed
@@ -128,6 +130,10 @@ export {
   LINE_OF_SIGHT_HEIGHT_MAX,
   LINE_OF_SIGHT_HEIGHT_MIN,
   LINE_OF_SIGHT_TOOL_ID,
+  armLineOfSightNewLine,
+  armLineOfSightObserverPlacement,
+  armLineOfSightTargetPlacement,
+  cancelLineOfSightPlacement,
   clearLineOfSight,
   closeLineOfSightPanel,
   getLineOfSightProjectState,
@@ -140,9 +146,21 @@ export {
   setLineOfSightSettings,
   subscribeLineOfSight,
   type LineOfSightPhase,
+  type LineOfSightPlacementIntent,
   type LineOfSightSettings,
   type LineOfSightState,
 } from "./line-of-sight";
+export {
+  activateSightAndViewshedPlacement,
+  cancelSightAndViewshedPlacement,
+  isSightAndViewshedEntity,
+  isSightAndViewshedMarkerEntity,
+  isSightAndViewshedOverlayEntity,
+  isSightAndViewshedPlacementActive,
+  resetSightAndViewshedPlacement,
+  subscribeSightAndViewshedPlacement,
+  type SightAndViewshedToolId,
+} from "./line-of-sight-viewshed-input";
 export {
   LINE_OF_SIGHT_ORIGIN_SKIP_METERS,
   LINE_OF_SIGHT_TARGET_TOLERANCE_MIN_METERS,
@@ -351,6 +369,8 @@ export {
   VIEWSHED_AREA_RADIUS_MAX,
   VIEWSHED_AREA_RADIUS_MIN,
   VIEWSHED_AREA_TOOL_ID,
+  armViewshedAreaPlacement,
+  cancelViewshedAreaPlacement,
   clearViewshedArea,
   closeViewshedAreaPanel,
   getViewshedAreaProjectState,

@@ -16,6 +16,16 @@ import {
   visibleFraction,
   type TerrainVisibilityGrid,
 } from "./viewshed-area-geometry";
+import {
+  activateSightAndViewshedPlacement,
+  cancelSightAndViewshedPlacement,
+  isSightAndViewshedMarkerEntity,
+  isSightAndViewshedPlacementActive,
+  registerSightAndViewshedCanvas,
+  resetSightAndViewshedPlacement,
+  runWithSightAndViewshedInputTool,
+  subscribeSightAndViewshedPlacement,
+} from "./line-of-sight-viewshed-input";
 
 /**
  * Visible area on the 3D globe (Controls → Viewshed area): click an observer
@@ -64,6 +74,8 @@ export type ViewshedAreaStatus = "idle" | "computing" | "ready" | "no-terrain" |
 export interface ViewshedAreaState {
   open: boolean;
   phase: ViewshedAreaPhase;
+  /** Runtime only: empty-ground clicks move or place the observer while true. */
+  placementActive: boolean;
   /** The clicked ground position. */
   observer: LngLatAlt | null;
   settings: ViewshedAreaSettings;
@@ -102,12 +114,14 @@ let result: {
 } | null = null;
 let computeRequest = 0;
 let computeTimer: ReturnType<typeof setTimeout> | null = null;
+let placementActive = false;
 
 interface Binding {
   handle: CesiumSceneHandle;
   handler: ScreenSpaceEventHandler;
   entities: Entity[];
-  previousCursor: string;
+  releaseCanvas: () => void;
+  unsubscribePlacement: () => void;
   releaseTiles: () => void;
   dragging: { restoreInputs: () => void } | null;
 }
@@ -120,6 +134,7 @@ function buildSnapshot(): ViewshedAreaState {
   return {
     open,
     phase: !binding ? "unavailable" : !observer ? "observer" : "done",
+    placementActive: placementActive && isSightAndViewshedPlacementActive(VIEWSHED_AREA_TOOL_ID),
     observer,
     settings,
     status,
@@ -131,6 +146,29 @@ function buildSnapshot(): ViewshedAreaState {
 function publish(): void {
   snapshot = buildSnapshot();
   for (const listener of listeners) listener();
+}
+
+function disarmPlacement(): void {
+  placementActive = false;
+  cancelSightAndViewshedPlacement(VIEWSHED_AREA_TOOL_ID);
+}
+
+function autoArmIfNoObserver(): void {
+  if (!open || !live() || observer) return;
+  armViewshedAreaPlacement();
+}
+
+export function armViewshedAreaPlacement(): void {
+  if (!open || !live()) return;
+  placementActive = true;
+  activateSightAndViewshedPlacement(VIEWSHED_AREA_TOOL_ID);
+  publish();
+}
+
+export function cancelViewshedAreaPlacement(): void {
+  if (!placementActive) return;
+  disarmPlacement();
+  publish();
 }
 
 export function subscribeViewshedArea(listener: () => void): () => void {
@@ -345,10 +383,6 @@ function paintVisibility(pixels: {
   return image;
 }
 
-function applyCursor(b: Binding): void {
-  b.handle.canvas.style.cursor = open && !observer ? "crosshair" : b.previousCursor;
-}
-
 function observerAt(b: Binding, position: Cartesian2): boolean {
   const picked = b.handle.scene.pick(position) as { id?: { id?: unknown } } | undefined;
   return picked?.id?.id === ENTITY_ID.observer;
@@ -359,7 +393,7 @@ function moveObserver(b: Binding, ground: LngLatAlt): void {
   result = null;
   fraction = null;
   cellSize = null;
-  applyCursor(b);
+  disarmPlacement();
   drawEntities(b);
   scheduleCompute();
   publish();
@@ -391,13 +425,49 @@ function endDrag(b: Binding): void {
   drag?.restoreInputs();
 }
 
+function entityBlocksPlacement(b: Binding, position: Cartesian2): boolean {
+  const picked = b.handle.scene.pick(position) as { id?: { id?: unknown } } | undefined;
+  return isSightAndViewshedMarkerEntity(picked?.id?.id);
+}
+
 function onClick(b: Binding, position: Cartesian2): void {
+  if (!placementActive || !isSightAndViewshedPlacementActive(VIEWSHED_AREA_TOOL_ID)) return;
   const { Cesium: C, viewer } = b.handle;
-  if (observerAt(b, position)) return;
+  if (observerAt(b, position) || entityBlocksPlacement(b, position)) return;
   const picked = pickGroundPosition(C, viewer, position);
   if (!picked) return;
-  // Every click places (or moves) the one observer.
   moveObserver(b, toLngLatAlt(C, picked));
+}
+
+function bindViewshedAreaHandlers(b: Binding, handle: CesiumSceneHandle): void {
+  const { Cesium: C } = handle;
+  const { handler } = b;
+  handler.setInputAction((movement: { position: Cartesian2 }) => {
+    const current = live();
+    if (!open || !current) return;
+    onClick(current, movement.position);
+  }, C.ScreenSpaceEventType.LEFT_CLICK);
+  handler.setInputAction((movement: { position: Cartesian2 }) => {
+    const current = live();
+    if (!open || !current) return;
+    onLeftDown(current, movement.position);
+  }, C.ScreenSpaceEventType.LEFT_DOWN);
+  handler.setInputAction((movement: { endPosition: Cartesian2 }) => {
+    const current = live();
+    if (!current) return;
+    onMouseMove(current, movement.endPosition);
+  }, C.ScreenSpaceEventType.MOUSE_MOVE);
+  handler.setInputAction(() => {
+    const current = live();
+    if (!current) return;
+    endDrag(current);
+  }, C.ScreenSpaceEventType.LEFT_UP);
+  b.releaseTiles();
+  b.releaseTiles = watchTiles(handle, () => {
+    const current = live();
+    if (!current || !observer || status !== "no-terrain") return;
+    scheduleCompute();
+  });
 }
 
 function watchTiles(handle: CesiumSceneHandle, onSettled: () => void): () => void {
@@ -415,41 +485,27 @@ function attach(app: GeoLibreAppAPI): void {
   const handle = primaryGlobe(app);
   if (!handle) return;
   const { Cesium: C, viewer } = handle;
-  const handler = new C.ScreenSpaceEventHandler(viewer.canvas);
+  const handler = runWithSightAndViewshedInputTool(
+    VIEWSHED_AREA_TOOL_ID,
+    () => new C.ScreenSpaceEventHandler(viewer.canvas),
+  );
   const b: Binding = {
     handle,
     handler,
     entities: [],
-    previousCursor: viewer.canvas.style.cursor,
+    releaseCanvas: registerSightAndViewshedCanvas(VIEWSHED_AREA_TOOL_ID, viewer.canvas),
+    unsubscribePlacement: subscribeSightAndViewshedPlacement(() => {
+      if (placementActive && !isSightAndViewshedPlacementActive(VIEWSHED_AREA_TOOL_ID)) {
+        placementActive = false;
+      }
+      publish();
+    }),
     releaseTiles: () => {},
     dragging: null,
   };
   binding = b;
-  handler.setInputAction((movement: { position: Cartesian2 }) => {
-    if (!open || live() !== b) return;
-    onClick(b, movement.position);
-  }, C.ScreenSpaceEventType.LEFT_CLICK);
-  handler.setInputAction((movement: { position: Cartesian2 }) => {
-    if (!open || live() !== b) return;
-    onLeftDown(b, movement.position);
-  }, C.ScreenSpaceEventType.LEFT_DOWN);
-  handler.setInputAction((movement: { endPosition: Cartesian2 }) => {
-    if (live() !== b) return;
-    onMouseMove(b, movement.endPosition);
-  }, C.ScreenSpaceEventType.MOUSE_MOVE);
-  handler.setInputAction(() => {
-    if (live() !== b) return;
-    endDrag(b);
-  }, C.ScreenSpaceEventType.LEFT_UP);
-  // The most detailed terrain the provider has is what the grid reads, so
-  // unlike line of sight the result does not depend on the tiles in view —
-  // but a globe that had no terrain at all when the click landed gets one
-  // once terrain is switched on and its tiles arrive.
-  b.releaseTiles = watchTiles(handle, () => {
-    if (live() !== b || !observer || status !== "no-terrain") return;
-    scheduleCompute();
-  });
-  applyCursor(b);
+  bindViewshedAreaHandlers(b, handle);
+  autoArmIfNoObserver();
   drawEntities(b);
   if (observer && !result) scheduleCompute();
 }
@@ -457,15 +513,17 @@ function attach(app: GeoLibreAppAPI): void {
 function detach(): void {
   const b = binding;
   binding = null;
+  disarmPlacement();
   computeRequest += 1;
   if (computeTimer) clearTimeout(computeTimer);
   computeTimer = null;
   if (status === "computing") status = result ? "ready" : "idle";
   if (!b) return;
   b.releaseTiles();
+  b.unsubscribePlacement();
+  b.releaseCanvas();
   endDrag(b);
   if (!b.handle.viewer.isDestroyed()) {
-    b.handle.canvas.style.cursor = b.previousCursor;
     removeEntities(b);
     b.handle.requestRender();
   }
@@ -476,8 +534,7 @@ function detach(): void {
 export function openViewshedAreaPanel(app: GeoLibreAppAPI): void {
   open = true;
   attach(app);
-  const b = live();
-  if (b) applyCursor(b);
+  autoArmIfNoObserver();
   publish();
 }
 
@@ -498,10 +555,11 @@ export function clearViewshedArea(): void {
   computeRequest += 1;
   if (computeTimer) clearTimeout(computeTimer);
   computeTimer = null;
+  disarmPlacement();
   const b = live();
   if (b) {
-    applyCursor(b);
     drawEntities(b);
+    autoArmIfNoObserver();
   }
   publish();
 }
@@ -548,6 +606,7 @@ export function restoreViewshedArea(app: GeoLibreAppAPI, state: unknown): boolea
     cellSize = null;
     status = "idle";
     settings = { ...DEFAULT_VIEWSHED_AREA_SETTINGS };
+    disarmPlacement();
     publish();
     return false;
   }
@@ -558,6 +617,7 @@ export function restoreViewshedArea(app: GeoLibreAppAPI, state: unknown): boolea
   fraction = null;
   cellSize = null;
   status = "idle";
+  disarmPlacement();
   if (raw.open === true) {
     open = true;
     detach();
@@ -567,6 +627,12 @@ export function restoreViewshedArea(app: GeoLibreAppAPI, state: unknown): boolea
     closeViewshedAreaPanel(app);
   }
   return true;
+}
+
+/** Reset placement ownership when the plugin deactivates or the project clears. */
+export function resetViewshedAreaPlacement(): void {
+  disarmPlacement();
+  resetSightAndViewshedPlacement();
 }
 
 /** The state worth persisting, or `undefined` when everything is at its default. */
