@@ -281,9 +281,9 @@ describe("CesiumDrawing", () => {
     assert.equal(m.areaSqm, null);
   });
 
-  it("places vertex markers at the same positions as the polyline (no ground clamp on points)", () => {
+  it("places clamped vertex markers at the same horizontal anchor as the draped polyline", () => {
     const globe = makeGlobe();
-    const { d } = drawing(globe);
+    drawing(globe);
     globe.click(A);
     globe.click(B);
     const line = globe.entity("geolibre-draw-line") as {
@@ -297,12 +297,54 @@ describe("CesiumDrawing", () => {
         point: { heightReference?: unknown };
       };
       assert.ok(vertex, `vertex ${i}`);
-      assert.equal(vertex.point.heightReference, undefined);
+      assert.equal(vertex.point.heightReference, Cesium.HeightReference.CLAMP_TO_GROUND);
       assert.ok(
         Cesium.Cartesian3.equalsEpsilon(vertex.position, linePositions[i], 1e-6),
         `vertex ${i} matches polyline`,
       );
     }
+  });
+
+  it("ignores picked terrain height on clamped glyphs but keeps it in store", () => {
+    const globe = makeGlobe();
+    const { d, last } = drawing(globe);
+    const highA = P(A.lng, A.lat, 500);
+    const highB = P(B.lng, B.lat, 800);
+    globe.click(highA);
+    globe.click(highB);
+    assert.ok(Math.abs(last().geometry.points[0].alt - 500) < 1e-3);
+    assert.ok(Math.abs(last().geometry.points[1].alt - 800) < 1e-3);
+    const line = globe.entity("geolibre-draw-line") as {
+      polyline: { positions: Cesium.Cartesian3[] };
+    };
+    for (let i = 0; i < 2; i += 1) {
+      const vertex = globe.entity(`geolibre-draw-vertex-${i}`) as {
+        position: Cesium.Cartesian3;
+        point: { heightReference?: unknown };
+      };
+      assert.equal(vertex.point.heightReference, Cesium.HeightReference.CLAMP_TO_GROUND);
+      assert.ok(
+        Cesium.Cartesian3.equalsEpsilon(vertex.position, line.polyline.positions[i], 1e-6),
+        `vertex ${i} matches draped line`,
+      );
+      const expected = Cesium.Cartesian3.fromDegrees(
+        last().geometry.points[i].lng,
+        last().geometry.points[i].lat,
+        0,
+      );
+      assert.ok(
+        Cesium.Cartesian3.equalsEpsilon(vertex.position, expected, 1e-6),
+        `vertex ${i} uses lng/lat anchor only`,
+      );
+    }
+    d.setMarker(last().geometry.points[0]);
+    const marker = globe.entity("geolibre-draw-marker") as {
+      position: Cesium.Cartesian3;
+      point: { heightReference?: unknown };
+    };
+    assert.equal(marker.point.heightReference, Cesium.HeightReference.CLAMP_TO_GROUND);
+    const expectedMarker = Cesium.Cartesian3.fromDegrees(highA.lng, highA.lat, 0);
+    assert.ok(Cesium.Cartesian3.equalsEpsilon(marker.position, expectedMarker, 1e-6));
   });
 
   it("hides labels and undrapes the line on request", () => {
@@ -314,6 +356,36 @@ describe("CesiumDrawing", () => {
     assert.ok(!globe.ids().some((id) => id.includes("label")));
     const line = globe.entity("geolibre-draw-line") as { polyline: { clampToGround: boolean } };
     assert.equal(line.polyline.clampToGround, false);
+    for (let i = 0; i < 2; i += 1) {
+      const vertex = globe.entity(`geolibre-draw-vertex-${i}`) as {
+        point: { heightReference?: unknown };
+      };
+      assert.equal(vertex.point.heightReference, undefined);
+    }
+  });
+
+  it("uses absolute heights on vertices when clamp to ground is off", () => {
+    const globe = makeGlobe();
+    const { d } = drawing(globe);
+    const highA = P(A.lng, A.lat, 500);
+    const highB = P(B.lng, B.lat, 800);
+    globe.click(highA);
+    globe.click(highB);
+    d.setOptions({ clampToGround: false });
+    const line = globe.entity("geolibre-draw-line") as {
+      polyline: { positions: Cesium.Cartesian3[] };
+    };
+    for (let i = 0; i < 2; i += 1) {
+      const vertex = globe.entity(`geolibre-draw-vertex-${i}`) as {
+        position: Cesium.Cartesian3;
+        point: { heightReference?: unknown };
+      };
+      assert.equal(vertex.point.heightReference, undefined);
+      assert.ok(
+        Cesium.Cartesian3.equalsEpsilon(vertex.position, line.polyline.positions[i], 1e-6),
+        `vertex ${i} matches absolute line`,
+      );
+    }
   });
 
   it("closes a polygon by clicking its first vertex, then fills and measures it", () => {

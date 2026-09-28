@@ -358,6 +358,28 @@ export class CesiumDrawing {
     this.notify();
   }
 
+  /** Ellipsoidal position including picked terrain height. */
+  private cartAbsolute(p: LngLatAlt): Cartesian3 {
+    return fromLngLatAlt(this.handle.Cesium, p);
+  }
+
+  /**
+   * Horizontal anchor for ground-clamped glyphs — same convention as
+   * `placeCesiumPin` in `@geolibre/map`: lng/lat only, clamp supplies height.
+   */
+  private cartClamped(p: LngLatAlt): Cartesian3 {
+    const C = this.handle.Cesium;
+    return fromLngLatAlt(C, { lng: p.lng, lat: p.lat, alt: 0 });
+  }
+
+  private cartForGlyph(p: LngLatAlt): Cartesian3 {
+    return this.options.clampToGround ? this.cartClamped(p) : this.cartAbsolute(p);
+  }
+
+  private cartForLine(p: LngLatAlt): Cartesian3 {
+    return this.options.clampToGround ? this.cartClamped(p) : this.cartAbsolute(p);
+  }
+
   /**
    * Place (or remove, with `null`) the marker that shows where along the
    * figure the pointer is on the profile chart.
@@ -372,12 +394,15 @@ export class CesiumDrawing {
     if (point) {
       this.marker = viewer.entities.add({
         id: `${ID}-marker`,
-        position: fromLngLatAlt(C, point),
+        position: this.cartForGlyph(point),
         point: {
           pixelSize: 10,
           color: C.Color.fromCssColorString(FIRST_VERTEX_COLOR),
           outlineColor: C.Color.WHITE,
           outlineWidth: 2,
+          ...(this.options.clampToGround
+            ? { heightReference: C.HeightReference.CLAMP_TO_GROUND }
+            : {}),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -450,7 +475,11 @@ export class CesiumDrawing {
     this.removeEntities();
     const { Cesium: C, viewer } = this.handle;
     if (viewer.isDestroyed()) return;
-    const cart = (p: LngLatAlt) => fromLngLatAlt(C, p);
+    const clamp = this.options.clampToGround;
+    const cartLine = (p: LngLatAlt) => this.cartForLine(p);
+    const cartGlyph = (p: LngLatAlt) => this.cartForGlyph(p);
+    const cartAbsolute = (p: LngLatAlt) => this.cartAbsolute(p);
+    const groundRef = clamp ? C.HeightReference.CLAMP_TO_GROUND : undefined;
     const add = (entity: Parameters<typeof viewer.entities.add>[0]) => {
       this.entities.push(viewer.entities.add(entity));
     };
@@ -463,6 +492,7 @@ export class CesiumDrawing {
           color: C.Color.fromCssColorString(color),
           outlineColor: C.Color.WHITE,
           outlineWidth: 2,
+          ...(groundRef !== undefined ? { heightReference: groundRef } : {}),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -489,6 +519,7 @@ export class CesiumDrawing {
           outlineColor: C.Color.fromCssColorString(LABEL_OUTLINE),
           outlineWidth: 3,
           pixelOffset: new C.Cartesian2(0, -14),
+          ...(groundRef !== undefined ? { heightReference: groundRef } : {}),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       });
@@ -500,20 +531,24 @@ export class CesiumDrawing {
     if (this.mode === "circle") {
       const center = points[0];
       const edge = points[1] ?? this.preview;
-      if (center) point(`${VERTEX_ID}0`, cart(center), FIRST_VERTEX_COLOR);
+      if (center) point(`${VERTEX_ID}0`, cartGlyph(center), FIRST_VERTEX_COLOR);
       if (center && edge) {
         const radius = geodesicMeters(C, center, edge);
         if (radius > 0) {
-          line(`${ID}-circle`, circleRing(C, center, radius).map(cart), 3);
-          line(`${ID}-radius`, [cart(center), cart(edge)], 2);
+          line(`${ID}-circle`, circleRing(C, center, radius).map(cartAbsolute), 3);
+          line(`${ID}-radius`, [cartLine(center), cartLine(edge)], 2);
           label(
             `${ID}-radius-label`,
-            cart(geodesicInterpolate(C, center, edge, 0.5)),
+            cartGlyph(geodesicInterpolate(C, center, edge, 0.5)),
             formatMeters(radius),
           );
-          label(`${ID}-circle-label`, cart(center), formatSquareMeters(Math.PI * radius * radius));
+          label(
+            `${ID}-circle-label`,
+            cartGlyph(center),
+            formatSquareMeters(Math.PI * radius * radius),
+          );
         }
-        if (points[1]) point(`${VERTEX_ID}1`, cart(edge), VERTEX_COLOR);
+        if (points[1]) point(`${VERTEX_ID}1`, cartGlyph(edge), VERTEX_COLOR);
       }
       this.handle.requestRender();
       return;
@@ -521,27 +556,33 @@ export class CesiumDrawing {
 
     if (this.mode !== "point" && points.length >= 2) {
       const ring = this.closed ? [...points, points[0]] : points;
-      line(`${ID}-line`, ring.map(cart));
+      line(`${ID}-line`, ring.map(cartLine));
       if (this.mode === "polygon" && this.closed && points.length >= 3) {
         add({
           id: `${ID}-fill`,
           polygon: {
-            hierarchy: new C.PolygonHierarchy(points.map(cart)),
+            hierarchy: new C.PolygonHierarchy(points.map(cartLine)),
             material: C.Color.fromCssColorString(LINE_COLOR).withAlpha(FILL_ALPHA),
-            heightReference: C.HeightReference.CLAMP_TO_GROUND,
-            perPositionHeight: false,
+            ...(groundRef !== undefined
+              ? { heightReference: groundRef, perPositionHeight: false }
+              : { perPositionHeight: true }),
           },
         });
         const centroid = verticesCentroid(points);
         if (centroid && measures.areaSqm !== null) {
-          label(`${ID}-area-label`, cart(centroid), formatSquareMeters(measures.areaSqm));
+          label(`${ID}-area-label`, cartGlyph(centroid), formatSquareMeters(measures.areaSqm));
         }
       }
       if (this.mode === "angle" && points.length === 3) {
-        const arc = angleArc(C, cart(points[0]), cart(points[1]), cart(points[2]));
+        const arc = angleArc(
+          C,
+          cartAbsolute(points[0]),
+          cartAbsolute(points[1]),
+          cartAbsolute(points[2]),
+        );
         if (arc.length > 1) line(`${ID}-arc`, arc, 2);
         if (measures.angleDeg !== null) {
-          label(`${ID}-angle-label`, cart(points[1]), formatDegrees(measures.angleDeg));
+          label(`${ID}-angle-label`, cartGlyph(points[1]), formatDegrees(measures.angleDeg));
         }
       }
       if (this.mode !== "angle") {
@@ -549,12 +590,16 @@ export class CesiumDrawing {
           const a = ring[i];
           const meters = measures.segmentMeters[i];
           if (meters === undefined) return;
-          label(`${ID}-label-${i}`, cart(geodesicInterpolate(C, a, b, 0.5)), formatMeters(meters));
+          label(
+            `${ID}-label-${i}`,
+            cartGlyph(geodesicInterpolate(C, a, b, 0.5)),
+            formatMeters(meters),
+          );
         });
       }
     }
     points.forEach((p, i) =>
-      point(`${VERTEX_ID}${i}`, cart(p), i === 0 ? FIRST_VERTEX_COLOR : VERTEX_COLOR),
+      point(`${VERTEX_ID}${i}`, cartGlyph(p), i === 0 ? FIRST_VERTEX_COLOR : VERTEX_COLOR),
     );
     this.handle.requestRender();
   }
