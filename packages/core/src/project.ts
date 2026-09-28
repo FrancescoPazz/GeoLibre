@@ -56,6 +56,7 @@ import {
   type CommentAuthor,
   type CommentReply,
   type ProjectComment,
+  type ProjectInteraction,
 } from "./types";
 import { DEFAULT_LAYER_GROUP_OPACITY, normalizeGroupContiguity } from "./layer-groups";
 import { normalizeStyleLibraryEntries } from "./style-library";
@@ -265,7 +266,7 @@ function serializeProjectValue(
 export function serializeProject(project: GeoLibreProject): string {
   return (
     serializeProjectValue(
-      { ...project, layers: project.layers.map(withoutLocalRasterBytes) },
+      { ...project, layers: project.layers.map(portableLayer) },
       0,
       "",
       new Set(),
@@ -315,7 +316,7 @@ export function serializeProjectWithLayerCache(
   cache: ProjectLayerSerializationCache,
 ): string {
   if (layerSources.length !== project.layers.length) return serializeProject(project);
-  const layers = project.layers.map(withoutLocalRasterBytes);
+  const layers = project.layers.map(portableLayer);
   // Presets are keyed by layer object, so a record listed twice would get one
   // index's text in both places. The store never does that; bypass if it does.
   if (new Set(layers).size !== layers.length) return serializeProject(project);
@@ -370,6 +371,7 @@ export function parseProject(json: string): GeoLibreProject {
   );
   const styleLibrary = normalizeStyleLibraryEntries(data.styleLibrary);
   const parsedComments = normalizeProjectComments(data.comments);
+  const parsedInteraction = normalizeProjectInteraction(data.interaction);
   return {
     version: data.version,
     name: data.name,
@@ -411,6 +413,7 @@ export function parseProject(json: string): GeoLibreProject {
       : {}),
     ...(styleLibrary.length > 0 ? { styleLibrary } : {}),
     ...(parsedComments.length > 0 ? { comments: parsedComments } : {}),
+    ...(parsedInteraction ? { interaction: parsedInteraction } : {}),
     metadata: data.metadata ?? {},
   };
 }
@@ -1263,6 +1266,41 @@ export function normalizeDashboardColumns(value: unknown): number {
   return Math.max(MIN_DASHBOARD_COLUMNS, Math.min(MAX_DASHBOARD_COLUMNS, Math.trunc(value)));
 }
 
+/**
+ * Coerce an untrusted `interaction` block into a {@link ProjectInteraction}.
+ *
+ * Layer ids are kept even when no such layer exists: the block is replayed
+ * against whatever layers the project has when it opens, and the loader drops
+ * the ones it cannot find. Control names are kept as written for the same
+ * reason; the app ignores names it does not know.
+ *
+ * @param value - Raw `interaction` value from the project JSON or the store.
+ * @returns The normalized block, or null when it carries nothing to apply.
+ */
+export function normalizeProjectInteraction(value: unknown): ProjectInteraction | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as { identify?: unknown; controls?: unknown };
+  const result: ProjectInteraction = {};
+  if (raw.identify === null) {
+    result.identify = null;
+  } else if (typeof raw.identify === "string" && raw.identify) {
+    result.identify = raw.identify;
+  } else if (Array.isArray(raw.identify)) {
+    const ids = [
+      ...new Set(raw.identify.filter((id): id is string => typeof id === "string" && !!id)),
+    ];
+    if (ids.length > 0) result.identify = ids;
+  }
+  if (raw.controls && typeof raw.controls === "object" && !Array.isArray(raw.controls)) {
+    const controls: Record<string, boolean> = {};
+    for (const [name, shown] of Object.entries(raw.controls)) {
+      if (name && typeof shown === "boolean") controls[name] = shown;
+    }
+    if (Object.keys(controls).length > 0) result.controls = controls;
+  }
+  return "identify" in result || result.controls ? result : null;
+}
+
 function normalizeProjectPreferences(preferences: unknown): ProjectPreferences {
   if (!preferences || typeof preferences !== "object") {
     return DEFAULT_PROJECT_PREFERENCES;
@@ -1543,6 +1581,35 @@ function withoutLocalRasterBytes(layer: GeoLibreLayer): GeoLibreLayer {
   return { ...layer, metadata };
 }
 
+/**
+ * Drop a Zarr layer's request headers. They authenticate the store (a bearer
+ * token, an API key), so they are credentials: the Zarr adds keep them in a
+ * session-only map the renderer reads (`registerZarrHeaders` in
+ * @geolibre/map), but a project saved before that change carries them on
+ * `source` (opengeos/GeoLibre#2643). Not applied on parse, so such a project
+ * still authenticates for the session it is opened in.
+ *
+ * @param layer - Any layer.
+ * @returns The layer without `source.headers` when it is a Zarr layer, else
+ *   the same object.
+ */
+function withoutZarrHeaders(layer: GeoLibreLayer): GeoLibreLayer {
+  if (layer.type !== "zarr" || layer.source?.headers === undefined) return layer;
+  const { headers: _headers, ...source } = layer.source;
+  return { ...layer, source };
+}
+
+/**
+ * Strip the session-only state every serializer must leave out, whether or not
+ * the project came through `projectFromStore`.
+ *
+ * @param layer - Any layer.
+ * @returns The layer as it may be written to a project file.
+ */
+function portableLayer(layer: GeoLibreLayer): GeoLibreLayer {
+  return withoutZarrHeaders(withoutLocalRasterBytes(layer));
+}
+
 function normalizeLayer(layer: GeoLibreLayer): GeoLibreLayer {
   layer = withoutLocalRasterBytes(layer);
   // `capabilities` is split off the spread rather than overwritten: a raw value
@@ -1689,6 +1756,8 @@ export function projectFromStore(state: {
   /** Project-scoped Style Manager entries (the store's `projectStyleLibrary`). */
   styleLibrary?: StyleLibraryEntry[] | null;
   comments?: ProjectComment[] | null;
+  /** Startup interaction state loaded with the project, written back as-is. */
+  interaction?: ProjectInteraction | null;
   metadata: Record<string, unknown>;
 }): GeoLibreProject {
   const styles: Record<string, LayerStyle> = {};
@@ -1705,6 +1774,7 @@ export function projectFromStore(state: {
   const processingHistory = normalizeProcessingHistory(state.processingHistory);
   const widgets = normalizeWidgets(state.widgets);
   const comments = normalizeProjectComments(state.comments);
+  const interaction = normalizeProjectInteraction(state.interaction);
   // Persist a non-default column count only; a default-layout dashboard (or a
   // widget-less project) stays free of the key for legacy readers.
   const dashboardColumns =
@@ -1770,6 +1840,7 @@ export function projectFromStore(state: {
       : {}),
     ...(styleLibrary.length > 0 ? { styleLibrary } : {}),
     ...(comments.length > 0 ? { comments } : {}),
+    ...(interaction ? { interaction } : {}),
     metadata: state.metadata,
   };
 }
@@ -1793,6 +1864,7 @@ function hasRestorableSourceUrl(layer: GeoLibreLayer): boolean {
 export const USE_AUTHENTICATION_METADATA_KEY = "useAuthentication";
 
 function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
+
   layer = withoutLocalRasterBytes(layer);
 
   // A layer whose service is protected by the geoportal sign-in carries the
@@ -1804,6 +1876,9 @@ function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
     const { requestHeaders: _requestHeaders, ...source } = layer.source;
     layer = { ...layer, source };
   }
+
+
+  layer = portableLayer(layer);
 
   // This flag describes unsaved changes to the live source, not persisted
   // project state. A reference-only save reloads the original geometries;
@@ -1862,6 +1937,20 @@ function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
     layer.metadata.externalNativeLayer === true &&
     layer.geojson &&
     (hasRestorableSourceUrl(layer) || isVectorControlLayer)
+  ) {
+    const { geojson: _geojson, ...rest } = layer;
+    layer = rest;
+  }
+
+  // An Add Vector Layer layer GeoLibre adopted (`maplibre-gl-vector-adopted`,
+  // ADOPTED_VECTOR_SOURCE_KIND in @geolibre/plugins) holds its features in
+  // `geojson`, but a URL-backed one saves the URL and is re-read through the
+  // control on reopen, like the control layer it was. A browser-picked file has
+  // no URL and keeps its features, like a drag-and-drop layer.
+  if (
+    layer.geojson &&
+    layer.metadata.sourceKind === "maplibre-gl-vector-adopted" &&
+    hasRestorableSourceUrl(layer)
   ) {
     const { geojson: _geojson, ...rest } = layer;
     layer = rest;
@@ -1967,6 +2056,7 @@ export function applyProjectToStore(project: GeoLibreProject): {
   primaryRenderer: MapRendererKind;
   projectStyleLibrary: StyleLibraryEntry[];
   comments: ProjectComment[];
+  projectInteraction: ProjectInteraction | null;
   metadata: Record<string, unknown>;
 } {
   // Legacy and externally-authored projects can carry a partial top-level
@@ -2073,6 +2163,7 @@ export function applyProjectToStore(project: GeoLibreProject): {
     primaryRenderer: normalizePrimaryRenderer(project.primaryRenderer) ?? DEFAULT_PRIMARY_RENDERER,
     projectStyleLibrary: normalizeStyleLibraryEntries(project.styleLibrary),
     comments: scrubbedComments,
+    projectInteraction: normalizeProjectInteraction(project.interaction),
     metadata: project.metadata,
   };
 }

@@ -22,6 +22,7 @@ import {
   restoreRasterLayers,
   restoreRerPoiLayers,
   restoreReverseGeocode,
+  restoreSplattingLayers,
   restoreThreeDTilesLayers,
   restoreVectorLayers,
   REVERSE_GEOCODE_PLUGIN_ID,
@@ -203,7 +204,9 @@ export function usePluginStateRestore({
     reattachGodsEyeView(appAPI);
     if (!engine.capabilities.nativeMapInstance) {
       if (engine.kind === "mapbox" || engine.kind === "arcgis") restoreRasterLayers(appAPI);
-      if (engine.kind === "arcgis") restoreArcgisZarrLayers();
+      // Both draw Zarr from the layer record, so only the Time Slider binding
+      // needs restoring (opengeos/GeoLibre#2261).
+      if (engine.kind === "arcgis" || engine.kind === "cesium") restoreArcgisZarrLayers();
       void restoreLocalFileLayers();
       return;
     }
@@ -219,6 +222,11 @@ export function usePluginStateRestore({
     // renders nothing.
     void restoreLidarLayers(appAPI).catch((error: unknown) => {
       console.warn("[lidar] failed to restore saved point clouds", error);
+    });
+    // Same for saved Gaussian splats and 3D models (`splatting-url`): the
+    // splatting control draws them, so reload them through it.
+    void restoreSplattingLayers(appAPI).catch((error: unknown) => {
+      console.warn("[splatting] failed to restore saved layers", error);
     });
     // Re-read drag-dropped / Add Data local-file GeoJSON layers from disk
     // (their data was saved as a path, not embedded).

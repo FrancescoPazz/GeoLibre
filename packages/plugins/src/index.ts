@@ -109,7 +109,6 @@ export {
   type ArcGISSourceType,
 } from "./plugins/arcgis-layer";
 export {
-  addCogRasterLayer,
   closeBookmarkPanel,
   closeColorbarPanel,
   closeHtmlPanel,
@@ -152,6 +151,7 @@ export {
   openSearchPlacesPanel,
   openSpinGlobePanel,
   openSplattingLayerPanel,
+  restoreSplattingLayers,
   openStacSearchLayerPanel,
   openViewStatePanel,
   openZarrLayerPanel,
@@ -177,7 +177,6 @@ export {
   subscribeSearchPlacesPanel,
   subscribeSpinGlobePanel,
   subscribeViewStatePanel,
-  type CogRasterLayerOptions,
 } from "./plugins/maplibre-components";
 export {
   KerchunkReferenceStore,
@@ -331,8 +330,13 @@ export {
 // tests import the sync helpers from the module paths directly. These two are
 // the exception — the Layer Library (issue #1520) has to recognize a
 // control-painted vector layer to read its features before saving it, and to
-// route a re-add back to restoreVectorLayers.
-export { isEmbeddableLocalVectorLayer, VECTOR_SOURCE_KIND } from "./plugins/vector-layer-sync";
+// route a re-add back to restoreVectorLayers. The adopted kind routes there too,
+// since an adopted layer saved by path is replayed through the control.
+export {
+  ADOPTED_VECTOR_SOURCE_KIND,
+  isEmbeddableLocalVectorLayer,
+  VECTOR_SOURCE_KIND,
+} from "./plugins/vector-layer-sync";
 export {
   clearDirectionsWaypoints,
   type DirectionsRouteLegMetric,
@@ -532,6 +536,12 @@ export {
   type FieldsOfTheWorldFileSaver,
 } from "./plugins/maplibre-fields-of-the-world";
 export {
+  OCEAN_DATA_PLATFORM_PLUGIN_ID,
+  maplibreOceanDataPlatformPlugin,
+  setOceanDataPlatformFileSaver,
+  type OceanDataPlatformFileSaver,
+} from "./plugins/maplibre-ocean-data-platform";
+export {
   maplibreSatelliteEmbeddingsPlugin,
   SATELLITE_EMBEDDINGS_PLUGIN_ID,
   setSatelliteEmbeddingsFileSaver,
@@ -571,10 +581,15 @@ export {
 } from "./plugins/ign-lidar-hd-api";
 export {
   ARCGIS_HUB_PLUGIN_ID,
+  createArcGisHubPlugin,
   DEFAULT_ARCGIS_HUB_LABELS,
   maplibreArcGisHubPlugin,
   setArcGisHubLabels,
+  type ArcGisHubCatalog,
+  type ArcGisHubCatalogSet,
   type ArcGisHubLabels,
+  type ArcGisHubPluginConfig,
+  type ArcGisHubPluginInstance,
 } from "./plugins/maplibre-arcgis-hub";
 export {
   CATALOG_LAYER_METADATA_KEY,
@@ -696,9 +711,45 @@ export {
   type MicrozonationProjects,
   type MicrozonationRecord,
 } from "./plugins/microzonation";
+  DEFAULT_TENNESSEE_GIS_LABELS,
+  maplibreTennesseeGisPlugin,
+  setTennesseeGisLabels,
+  TENNESSEE_GIS_CATALOG_GROUPS,
+  TENNESSEE_GIS_PLUGIN_ID,
+  TENNESSEE_GIS_PORTAL_URL,
+  TENNESSEE_GIS_SITE_ID,
+} from "./plugins/maplibre-tennessee-gis";
+export {
+  DEFAULT_US_STATE_GIS_LABELS,
+  maplibreUsStateGisPlugin,
+  setUsStateGisLabels,
+  US_STATE_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-us-state-gis";
+export { US_STATE_GIS_CATALOGS } from "./plugins/us-state-gis-catalogs";
+export {
+  DEFAULT_US_LOCAL_GIS_LABELS,
+  maplibreUsLocalGisPlugin,
+  setUsLocalGisLabels,
+  US_LOCAL_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-us-local-gis";
+export { US_LOCAL_GIS_CATALOGS } from "./plugins/us-local-gis-catalogs";
+export {
+  DEFAULT_US_FEDERAL_GIS_LABELS,
+  maplibreUsFederalGisPlugin,
+  setUsFederalGisLabels,
+  US_FEDERAL_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-us-federal-gis";
+export { US_FEDERAL_GIS_CATALOGS } from "./plugins/us-federal-gis-catalogs";
+export {
+  buildSocrataCatalogUrl,
+  searchSocrataCatalog,
+  SOCRATA_CATALOG_API_URL,
+} from "./plugins/socrata-api";
 export {
   ARCGIS_HUB_PAGE_URL,
   ARCGIS_HUB_PORTAL_URL,
+  ARCGIS_HUB_SEARCH_TYPES,
+  fetchArcGisHubSiteGroups,
   arcGisHubItemDataUrl,
   arcGisHubItemPageUrl,
   arcGisHubItemThumbnailUrl,
@@ -708,6 +759,7 @@ export {
   sanitizeArcGisHubSearchText,
   searchArcGisHub,
   type ArcGisHubItem,
+  type ArcGisHubSearchOptions,
   type ArcGisHubSearchResult,
 } from "./plugins/arcgis-hub-api";
 export {
@@ -723,10 +775,12 @@ export {
 export {
   maplibrePlanetOpenDataPlugin,
   maplibrePortolanPlugin,
+  cancelStacCatalogRequest,
   maplibreStacCatalogsPlugin,
   PLANET_DISASTER_DATA_CATALOG_URL,
   PLANET_OPEN_DATA_PLUGIN_ID,
   PORTOLAN_PLUGIN_ID,
+  requestStacCatalogUrl,
   setStacLabels,
   STAC_PLUGIN_ID,
   type StacLabels,

@@ -1,6 +1,6 @@
 {
   "name": "geolibre-desktop",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,6 +18,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",
     "@auth0/auth0-react": "^2.27.0",
+    "@aws-sdk/client-bedrock": "^3.1121.0",
     "@carbonplan/zarr-layer": "0.9.1",
     "@cereusdb/standard": "^0.2.0",
     "@cesium/engine": "^26.3.0",
@@ -71,6 +72,7 @@
     "fflate": "^0.8.3",
     "gdal3.js": "^2.8.1",
     "geotiff": "^3.0.5",
+    "geotiff-geokeys-to-proj4": "^2026.8.16",
     "h3-js": "^4.5.0",
     "html2canvas-pro": "^2.4.3",
     "i18next": "^26.4.2",
@@ -99,6 +101,7 @@
     "maplibre-gl-usgs-lidar": "^0.11.5",
     "maplibre-gl-vector": "^0.11.1",
     "openai": "^7.19.0",
+    "proj4": "^2.22.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

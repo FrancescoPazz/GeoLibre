@@ -29,6 +29,14 @@ import {
   type CogTilerModule,
 } from "./cesium-cog-imagery";
 import { drapeSignature, isDrapedLayer, MapLibreDrape } from "./cesium-drape";
+import {
+  applyZarrRender,
+  createZarrImageryProvider,
+  isZarrImageryProvider,
+  zarrOpenSignature,
+  type ZarrCesiumModule,
+} from "./cesium-zarr-imagery";
+import { getZarrStore } from "./zarr-source";
 import { createFeatureStyleResolver, type FeatureStyleResolver } from "./cesium-feature-style";
 import { createCesiumLabeler, pickLabelPart } from "./cesium-labels";
 import {
@@ -152,6 +160,11 @@ function isRasterArchive(layer: GeoLibreLayer): boolean {
     classifyLayer(layer) === "tile-archive" &&
     (layer.metadata?.tileType === "raster" || layer.source?.type === "raster")
   );
+}
+
+/** Whether this is a Zarr layer, which the globe draws through zarr-cesium (#2261). */
+function isZarrLayer(layer: GeoLibreLayer): boolean {
+  return layer.type === "zarr";
 }
 
 /** Whether this is a maplibre-gl-raster COG layer the globe can open itself. */
@@ -553,6 +566,7 @@ export function isCesiumSupportedLayerType(layer: GeoLibreLayer): boolean {
     case "raster-tiles":
     case "image":
     case "cog":
+    case "zarr":
       return true;
     case "3d-tiles":
     case "gaussian-splat":
@@ -565,7 +579,6 @@ export function isCesiumSupportedLayerType(layer: GeoLibreLayer): boolean {
     case "arcgis":
       return isDrapedLayer(layer);
     // No globe renderer: these stay in the 2D panes.
-    case "zarr":
     case "vector-file":
     case "duckdb-query":
     case "deckgl-viz":
@@ -620,6 +633,13 @@ function isSupported(layer: GeoLibreLayer): boolean {
     return Boolean(wmtsCapabilities(layer)) || Boolean(firstTile(layer));
   }
   if (isCogLayer(layer)) return Boolean(cogSourceUrl(layer));
+  // A registered store (a local folder, an Icechunk repository) stands in for
+  // the URL; zarr-cesium needs one or the other plus the variable.
+  if (isZarrLayer(layer))
+    return (
+      Boolean(str(layer.source.variable)) &&
+      (Boolean(str(layer.source.url)) || Boolean(getZarrStore(layer.id)))
+    );
   if (layer.type === "pmtiles") return Boolean(pmtilesArchiveUrl(layer));
   return Boolean(firstTile(layer));
 }
@@ -752,6 +772,9 @@ function needsRebuild(prev: GeoLibreLayer, next: GeoLibreLayer): boolean {
       return (
         cesiumIonAssetId(prev) !== cesiumIonAssetId(next) ||
         (isCogLayer(next) && cogRenderSignature(prev) !== cogRenderSignature(next)) ||
+        // Selector, colour limits and ramp are applied to the live provider in
+        // sync(); only what the store is opened with rebuilds it.
+        (isZarrLayer(next) && zarrOpenSignature(prev) !== zarrOpenSignature(next)) ||
         str(prev.metadata?.tileType) !== str(next.metadata?.tileType) ||
         // The Y-axis convention and the coverage rectangle bake into the
         // bridged provider.
@@ -835,6 +858,8 @@ export interface CesiumLayerSyncDeps {
   ionToken?: () => string | undefined;
   /** Loads the COG tiler module; defaults to `import("cog-tiler-wasm")`. */
   loadCogTiler?: () => Promise<CogTilerModule>;
+  /** Loads the Zarr imagery module; defaults to `import("zarr-cesium")`. */
+  loadZarrCesium?: () => Promise<ZarrCesiumModule>;
   /**
    * Reads a raster PMTiles archive's header; defaults to the shared
    * `pmtiles://` protocol's archive (a range request over HTTP).
@@ -1949,7 +1974,7 @@ export class CesiumLayerSync {
     for (const layer of this.currentLayers) {
       if (!layer.visible || layer.opacity === 0) continue;
       if (hasGeoJsonCollection(layer) && !layer.geojson?.features.length) continue;
-      // "2D only" kinds (PMTiles, Zarr, LiDAR, deck.gl-viz, ...) are skipped on
+      // "2D only" kinds (vector files, DuckDB queries, deck.gl-viz, ...) are skipped on
       // the globe by design and flagged as such in the layer list, so they are
       // not load failures: reporting them in `errors` would make every capture
       // throw for an ordinary mixed project.
@@ -2153,6 +2178,8 @@ export class CesiumLayerSync {
         this.createEntry(layer);
         if (entryKind(layer) === "imagery") imageryRebuilt = true;
       } else {
+        if (isZarrLayer(layer) && existing.kind === "imagery")
+          this.refreshZarrImagery(existing, layer);
         existing.layer = layer;
         this.applyAppearance(existing);
       }
@@ -2597,7 +2624,10 @@ export class CesiumLayerSync {
   /** Runs the once-loaded work for `entry`: a pending fit, or a load failure. */
   private settleEntry(entry: LayerEntry): void {
     this.flushPendingZoom(entry);
-    if (entry.loadError && !entry.cancelled) {
+    // Report a failure only while the entry is still the layer's current one:
+    // a removed or rebuilt entry is gone from `entries`. `cancelled` cannot
+    // decide this, since a failed imagery entry is parked as cancelled too.
+    if (entry.loadError && this.entries.get(entry.layer.id) === entry) {
       this.deps.onLayerError?.({
         layerId: entry.layer.id,
         layerName: entry.layer.name,
@@ -2737,14 +2767,21 @@ export class CesiumLayerSync {
       if (provider === null) return;
       this.attachImageryProvider(entry, provider, request.isAsync);
     } catch (error) {
+      // The layer was removed or rebuilt while its provider loaded: a real
+      // cancellation, not a failure worth reporting.
+      if (entry.cancelled) return;
       // A provider that throws synchronously (e.g. malformed params) or rejects
+      // should not abort the sync pass; mirror createGeoJson/createTileset's
+      // best-effort. The failure is recorded so settleEntry reports it.
       entry.loadError = error instanceof Error ? error.message : String(error);
-      // should not abort the sync pass; mirror createGeoJson/createTileset's best-effort.
       // The entry stays registered with a null handle rather than being deleted:
       // sync() re-runs on every unrelated store change (an opacity drag, a
-      // reorder), so a deleted entry would be recreated — re-issuing the failing
-      // request and re-warning — on every pass. Retrying is left to needsRebuild,
-      // i.e. an actual change to this layer's source.
+      // reorder), so a deleted entry would be recreated (re-issuing the failing
+      // request and re-warning) on every pass. Retrying is left to needsRebuild,
+      // i.e. an actual change to this layer's source. Marking it cancelled keeps
+      // later passes off it, and any imagery layer it did add is taken off the
+      // globe, since an unready provider left there stops the whole globe
+      // drawing.
       if (this.entries.get(entry.layer.id) === entry) {
         entry.cancelled = true;
         if (entry.handle) {
@@ -2816,6 +2853,8 @@ export class CesiumLayerSync {
       };
     } else if (isCogLayer(layer)) {
       return { isAsync: true, pending: this.cogImageryProvider(layer) };
+    } else if (isZarrLayer(layer)) {
+      return { isAsync: true, pending: this.zarrImageryProvider(layer) };
     } else if (layer.type === "pmtiles" && pmtilesArchiveUrl(layer)) {
       return { isAsync: true, pending: this.pmtilesImageryProvider(entry) };
     } else {
@@ -2833,6 +2872,53 @@ export class CesiumLayerSync {
    */
   private async cogImageryProvider(layer: GeoLibreLayer): Promise<ImageryProvider> {
     return createCogImageryProvider(this.Cesium, await this.loadCogTiler(), layer);
+  }
+
+  /**
+   * zarr-cesium reads the store itself (zarrita), from the layer's URL or the
+   * store registered for it, so no Resource applies here either. The module
+   * carries its colormap tables and 3D providers, so it loads on the first
+   * Zarr layer the globe draws rather than with the globe.
+   */
+  private async zarrImageryProvider(layer: GeoLibreLayer): Promise<ImageryProvider> {
+    this.zarrCesium ??= (this.deps.loadZarrCesium ?? (() => import("zarr-cesium")))().catch(
+      (error: unknown) => {
+        // Let the next Zarr layer retry a failed chunk load.
+        this.zarrCesium = null;
+        throw error;
+      },
+    );
+    return createZarrImageryProvider(this.Cesium, await this.zarrCesium, layer);
+  }
+
+  private zarrCesium: Promise<ZarrCesiumModule> | null = null;
+
+  /**
+   * Draw the selector, colour limits and ramp `layer` asks for with the Zarr
+   * entry's live provider, instead of reopening the store: the Time Slider
+   * changes the selector on every step.
+   *
+   * Cesium caches the tiles an imagery layer has drawn, and a provider cannot
+   * invalidate them, so a change that alters pixels swaps in a fresh
+   * `ImageryLayer` over the same provider at the same stacking position — what
+   * zarr-cesium's own `softRefreshCurrentView` does.
+   */
+  private refreshZarrImagery(entry: LayerEntry, next: GeoLibreLayer): void {
+    const previous = entry.layer;
+    entry.layer = next;
+    const imagery = entry.handle as ImageryLayer | null;
+    // Still loading: attachImageryProvider applies the latest layer on arrival.
+    if (!imagery) return;
+    const provider = imagery.imageryProvider;
+    if (!isZarrImageryProvider(provider)) return;
+    if (!applyZarrRender(this.Cesium, provider, previous, next)) return;
+    const layers = this.viewer.imageryLayers;
+    const fresh = new this.Cesium.ImageryLayer(provider as unknown as ImageryProvider);
+    layers.add(fresh, layers.indexOf(imagery));
+    // Destroys the layer, not the provider, which the fresh layer now draws.
+    layers.remove(imagery, true);
+    this.imageryRefs.set(fresh, next.id);
+    entry.handle = fresh;
   }
 
   /**
@@ -2881,6 +2967,7 @@ export class CesiumLayerSync {
       // provider still owns an abort controller, so tear it down rather than
       // dropping it.
       if (provider instanceof ProtocolImageryProvider) provider.destroy();
+      if (isZarrImageryProvider(provider)) provider.destroy();
       // Redundant today, and deliberately kept. A removal that races the
       // (multi-megabyte) tiler import runs forgetCogSource against a cache
       // this URL has not reached yet, so it only works because that forget is
@@ -2893,6 +2980,9 @@ export class CesiumLayerSync {
       if (isCogLayer(layer)) this.forgetCogSource(entry);
       return;
     }
+    // The provider was built from the layer as it was when the entry started;
+    // a Time Slider step or restyle in the meantime was recorded on the entry.
+    if (isZarrImageryProvider(provider)) applyZarrRender(this.Cesium, provider, undefined, layer);
     // addImageryProvider appends above the base imagery (and earlier store
     // layers), so store order maps to Cesium's bottom-to-top stacking.
     const imageryLayer = viewer.imageryLayers.addImageryProvider(provider);
@@ -2904,6 +2994,7 @@ export class CesiumLayerSync {
       // abort controller and the handler requests still in flight.
       viewer.imageryLayers.remove(imageryLayer, true);
       if (provider instanceof ProtocolImageryProvider) provider.destroy();
+      if (isZarrImageryProvider(provider)) provider.destroy();
       return;
     }
     this.imageryRefs.set(imageryLayer, layer.id);
@@ -3876,6 +3967,8 @@ export class CesiumLayerSync {
       const provider = imagery.imageryProvider as { destroy?: () => void } | undefined;
       this.viewer.imageryLayers.remove(imagery, true);
       if (provider instanceof ProtocolImageryProvider) provider.destroy();
+      // zarr-cesium aborts its pending chunk reads and drops its tile cache.
+      if (isZarrImageryProvider(provider)) provider.destroy();
     } else if (entry.kind === "geojson" || entry.kind === "czml" || entry.kind === "kml") {
       // `cancelled` is already set, so the election skips this entry.
       if (this.czmlClockOwner === entry.layer.id) this.electCzmlClockOwner();

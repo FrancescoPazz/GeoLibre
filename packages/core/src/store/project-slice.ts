@@ -23,6 +23,7 @@ import {
   type ProjectPluginState,
   type RecentProjectEntry,
 } from "../types";
+import { resolveIdentifyTarget } from "./session-slice";
 import type { SliceCreator } from "./types";
 import { clearHistory } from "./undo-history";
 
@@ -138,6 +139,7 @@ export const createProjectSlice: SliceCreator<ProjectSlice> = (set, get) => ({
     const applied = applyProjectToStore(project);
     set((s) => ({
       ...applied,
+      hoverTooltipsEnabled: true,
       projectPath: null,
       projectGeneration: s.projectGeneration + 1,
       isDirty: false,
@@ -145,6 +147,7 @@ export const createProjectSlice: SliceCreator<ProjectSlice> = (set, get) => ({
       selectedFeatureId: null,
       selectedFeatureIds: [],
       identifyLayerId: null,
+      identifyLayerIds: null,
       // The copied style names a layer from the previous project, so a
       // paste in the new one would apply an orphaned entry.
       copiedLayerStyle: null,
@@ -196,13 +199,20 @@ export const createProjectSlice: SliceCreator<ProjectSlice> = (set, get) => ({
           : (applied.layers[0]?.id ?? null);
     set((s) => ({
       ...applied,
+      hoverTooltipsEnabled: true,
       projectPath: path,
       projectGeneration: s.projectGeneration + 1,
       isDirty: false,
       selectedLayerId,
       selectedFeatureId: null,
       selectedFeatureIds: [],
-      identifyLayerId: null,
+      // A project that saved an Identify target (issue #2688) opens with it
+      // armed; any other load disarms Identify, since the previous target
+      // named a layer of the project being replaced.
+      ...resolveIdentifyTarget(
+        applied.projectInteraction?.identify,
+        applied.layers.map((layer) => layer.id),
+      ),
       // The copied style names a layer from the previous project, so a
       // paste in the loaded one would apply an orphaned entry.
       copiedLayerStyle: null,

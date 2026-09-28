@@ -577,10 +577,12 @@ def build_server(workspace: Workspace) -> MCPServer:
             version: WMS protocol version, e.g. `1.1.1` or `1.3.0`.
             crs: The CRS WMS tiles are requested in; `EPSG:3857` when
                 omitted. Check the capabilities first: if the layer does not
-                list EPSG:3857, pass a geographic CRS it does list
-                (`EPSG:4326`, `EPSG:4258`, `EPSG:6706`, `CRS:84`). The
-                desktop app redraws those tiles into Web Mercator; the web
-                build and `export_html` pages cannot show them.
+                list EPSG:3857, pass a CRS it does list, preferably a
+                geographic one (`EPSG:4326`, `EPSG:4258`, `EPSG:6706`,
+                `CRS:84`), otherwise a projected `EPSG:<code>` such as
+                `EPSG:25832`. The desktop app redraws those tiles into Web
+                Mercator; the web build and `export_html` pages cannot show
+                them.
             bounds: The layer's extent as `[west, south, east, north]` in
                 WGS84. A service layer has no geometry to derive it from, so
                 without this "zoom to layer" cannot reach it. Read it from the
@@ -1101,6 +1103,49 @@ def build_server(workspace: Workspace) -> MCPServer:
                 shape=shape,
             )
         return _summarize(file, project, legend=entry)
+
+    @tool()
+    def set_map_legend(
+        path: str,
+        title: str | None = None,
+        position: str | None = None,
+        group_by_layer: bool | None = None,
+        visible: bool | None = None,
+        collapsed: bool | None = None,
+    ) -> dict[str, Any]:
+        """Show the map legend, built from the layers' own symbology.
+
+        This is the app's Controls > Legend panel: its rows come from each
+        visible layer's style (graduated classes, categories, ramps), so it
+        needs no entries. Use `add_legend` for hand-written entries instead. A
+        project has one map legend; calling this again updates it.
+
+        Args:
+            path: Path to the `.geolibre.json` file.
+            title: Heading above the entries. Keeps the current one when
+                omitted.
+            position: `top-left`, `top-right`, `bottom-left`, or
+                `bottom-right`. Keeps the current corner when omitted.
+            group_by_layer: Group each layer's classes under a layer heading.
+                Keeps the current setting when omitted.
+            visible: Whether the on-map panel is open. Keeps the current
+                state when omitted; a new legend opens.
+            collapsed: Whether the open panel is collapsed to its header.
+                Keeps the current state when omitted.
+
+        Returns:
+            The project's map legend config.
+        """
+        with edit(path) as (file, project):
+            legend = authoring.set_map_legend(
+                project,
+                title,
+                position=position,
+                group_by_layer=group_by_layer,
+                visible=visible,
+                collapsed=collapsed,
+            )
+        return _summarize(file, project, mapLegend=legend)
 
     @tool()
     def add_colorbar(

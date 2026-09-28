@@ -1,6 +1,6 @@
 {
   "name": "geolibre",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "private": true,
   "description": "GeoLibre: a free and open-source, lightweight, cloud-native GIS platform for visualizing, exploring, and analyzing geospatial data. It runs in the web browser, on the desktop, on mobile, and inside Jupyter notebooks, all while keeping your data local and private",
   "workspaces": [
@@ -17,7 +17,7 @@
     "build:embed": "node scripts/build-embed.mjs",
     "build:chrome-extension": "node scripts/package-chrome-extension.mjs",
     "typecheck": "npm run build",
-    "lint": "eslint apps packages workers tests --max-warnings 265",
+    "lint": "eslint apps packages workers tests --max-warnings 264",
     "test": "npm run test:frontend",
     "test:frontend": "node --import tsx --test tests/*.test.ts",
     "test:frontend:coverage": "node scripts/coverage-check.mjs",
@@ -28,6 +28,7 @@
     "test:e2e:core": "playwright test --project=core",
     "test:e2e:features": "playwright test --project=features",
     "check:rust": "cargo check --manifest-path apps/geolibre-desktop/src-tauri/Cargo.toml",
+    "check:gis-portals": "node --import tsx scripts/check-gis-portals.mjs",
     "audit:ci": "node scripts/audit-check.mjs",
     "i18n:tools": "node --import tsx scripts/gen-processing-i18n-catalog.mjs",
     "i18n:tools:check": "node --import tsx scripts/gen-processing-i18n-catalog.mjs --check",

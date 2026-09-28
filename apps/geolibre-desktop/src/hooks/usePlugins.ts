@@ -35,6 +35,7 @@ import {
   setEarthdataCogSaver,
   setSatelliteEmbeddingsFileSaver,
   setFieldsOfTheWorldFileSaver,
+  setOceanDataPlatformFileSaver,
   maplibreEnviroAtlasPlugin,
   maplibreEsriWaybackPlugin,
   maplibreFemaWmsPlugin,
@@ -49,6 +50,10 @@ import {
   maplibreArcGisHubPlugin,
   TERRIA_CATALOG_PLUGIN_ID,
   terriaCatalogPlugin,
+  maplibreTennesseeGisPlugin,
+  maplibreUsFederalGisPlugin,
+  maplibreUsStateGisPlugin,
+  maplibreUsLocalGisPlugin,
   maplibreCkanPlugin,
   maplibreSocrataPlugin,
   maplibreStacCatalogsPlugin,
@@ -57,6 +62,7 @@ import {
   maplibreHuggingFacePlugin,
   maplibreSatelliteEmbeddingsPlugin,
   maplibreFieldsOfTheWorldPlugin,
+  maplibreOceanDataPlatformPlugin,
   maplibreGeoLensPlugin,
   setGeoLensDefaultServerUrl,
   maplibreVantorPlugin,
@@ -86,6 +92,8 @@ import {
   godsEyeViewPlugin,
   maplibreSwipePlugin,
   SWIPE_PLUGIN_ID,
+  DIRECTIONS_PLUGIN_ID,
+  REVERSE_GEOCODE_PLUGIN_ID,
   maplibreTimelapsePlugin,
   maplibreTimeSliderPlugin,
   setTimelapseVideoSaver,
@@ -119,6 +127,7 @@ import {
 } from "@geolibre/map";
 import type {
   GeoLibreCogLayerOptions,
+  GeoLibrePlugin,
   GeoLibreCogRenderEngine,
   GeoLibreDeckGL,
   GeoLibreExternalNativeLayerRegistration,
@@ -164,9 +173,14 @@ import { partitionProjectPluginManifestUrls } from "../lib/plugin-trust";
 import i18n from "../i18n";
 import { createPluginLocaleApi } from "../lib/plugin-locale";
 import { setTimeSliderOpenedByBinding, shouldCloseTimeSliderDock } from "../lib/time-slider-dock";
-import { createWmsTileUrl, normalizeWmsVersion } from "../components/layout/add-data/helpers";
+import {
+  createWmsTileUrl,
+  normalizeWmsCrs,
+  normalizeWmsVersion,
+} from "../components/layout/add-data/helpers";
 import { createExternalNativeStoreLayer } from "../lib/external-native-layer";
 import { createPluginLayerGroupActions } from "../lib/plugin-layer-groups";
+import { createPluginLayerStyleActions } from "../lib/plugin-layer-style";
 import { createPluginLayerQueries } from "../lib/plugin-layer-queries";
 import { mergeStringLists } from "../lib/string-lists";
 import {
@@ -214,7 +228,7 @@ interface TauriRuntimeWindow extends Window {
 
 const manager = new PluginManager();
 setGeoLensDefaultServerUrl(readDeploymentEnvValue("VITE_GEOLENS_DEFAULT_URL"));
-manager.registerAll([
+const BUILT_IN_PLUGINS: GeoLibrePlugin[] = [
   maplibreLayerControlPlugin,
   maplibreGeoEditorPlugin,
   maplibreAnnotationsPlugin,
@@ -236,6 +250,10 @@ manager.registerAll([
   maplibreOsmDownloaderPlugin,
   maplibreIgnLidarHdPlugin,
   maplibreArcGisHubPlugin,
+  maplibreTennesseeGisPlugin,
+  maplibreUsFederalGisPlugin,
+  maplibreUsStateGisPlugin,
+  maplibreUsLocalGisPlugin,
   maplibreSocrataPlugin,
   maplibreCkanPlugin,
   maplibreStacCatalogsPlugin,
@@ -244,6 +262,7 @@ manager.registerAll([
   maplibreHuggingFacePlugin,
   maplibreSatelliteEmbeddingsPlugin,
   maplibreFieldsOfTheWorldPlugin,
+  maplibreOceanDataPlatformPlugin,
   maplibreGeoLensPlugin,
   maplibreEsriWaybackPlugin,
   maplibreTimeSliderPlugin,
@@ -282,7 +301,19 @@ manager.registerAll([
   maplibreReverseGeocodePlugin,
   maplibreDeckGlVizPlugin,
   maplibreComponentsPlugin,
+];
+manager.registerAll(BUILT_IN_PLUGINS);
+
+/**
+ * Built-in plugins a `?plugin=` deep link may not activate: they send what the
+ * user clicks to a public third-party server, so they stay behind the one-time
+ * consent notice the toolbar shows (see `useConsentGatedActions`).
+ */
+const CONSENT_GATED_PLUGIN_IDS: ReadonlySet<string> = new Set([
+  DIRECTIONS_PLUGIN_ID,
+  REVERSE_GEOCODE_PLUGIN_ID,
 ]);
+
 
 // A deployment that names catalog files (`CATALOG_URLS`) wants the Catalog
 // panel open from the start, the way a geoportal opens on its data tree.
@@ -291,6 +322,12 @@ manager.registerAll([
 if (readDeploymentEnvValue("VITE_CATALOG_URLS")?.trim()) {
   manager.markDefaultActive(TERRIA_CATALOG_PLUGIN_ID);
 }
+
+/** Ids of the built-in plugins a `?plugin=` deep link may activate. */
+export const DEEP_LINKABLE_PLUGIN_IDS: readonly string[] = BUILT_IN_PLUGINS.map(
+  (plugin) => plugin.id,
+).filter((id) => !CONSENT_GATED_PLUGIN_IDS.has(id));
+
 
 // The Timelapse plugin records the map to a video blob but cannot depend on
 // the app's Tauri I/O helpers, so the save step (native dialog under Tauri,
@@ -347,6 +384,16 @@ setSatelliteEmbeddingsFileSaver((blob, { defaultName, extension, mimeType, descr
 // The Fields of the World plugin saves tile GeoParquet and GeoJSON files the
 // same way.
 setFieldsOfTheWorldFileSaver((blob, { defaultName, extension, mimeType, description }) =>
+  saveBinaryFileWithFallback(blob, {
+    defaultName,
+    filters: [{ name: description, extensions: [extension] }],
+    browserTypes: [{ description, accept: { [mimeType]: [`.${extension}`] } }],
+    mimeType,
+  }),
+);
+
+// The Ocean Data Platform plugin saves GeoJSON files the same way.
+setOceanDataPlatformFileSaver((blob, { defaultName, extension, mimeType, description }) =>
   saveBinaryFileWithFallback(blob, {
     defaultName,
     filters: [{ name: description, extensions: [extension] }],
@@ -968,8 +1015,17 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
         options?.beforeLayerId ?? null,
       ),
     addWmsLayer: (name: string, options: GeoLibreWmsLayerOptions) => {
-      const { beforeLayerId, url, layers, styles, format, transparent, version, ...tileOptions } =
-        options;
+      const {
+        beforeLayerId,
+        url,
+        layers,
+        styles,
+        format,
+        transparent,
+        version,
+        crs,
+        ...tileOptions
+      } = options;
       // TypeScript enforces these, but an untyped JS plugin can pass "" — an
       // empty endpoint yields a relative GetMap URL that resolves against the
       // app origin and passes the store's empty-tile guard, persisting a layer
@@ -999,6 +1055,7 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
           )}"; using "${resolvedVersion}".`,
         );
       }
+      const resolvedCrs = normalizeWmsCrs(crs, resolvedVersion);
       const tileUrl = createWmsTileUrl({
         endpoint: url,
         layers,
@@ -1007,6 +1064,7 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
         transparent: resolvedTransparent,
         tileSize,
         version: resolvedVersion,
+        crs: resolvedCrs,
       });
       return store.addTileLayer(
         name,
@@ -1150,6 +1208,7 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
     },
     queryOvertureFeatures,
     ...createPluginLayerGroupActions(),
+    ...createPluginLayerStyleActions(),
     fitBounds: (bounds: [number, number, number, number]) =>
       mapControllerRef?.current?.fitBounds(bounds),
     getViewBounds: () => mapControllerRef?.current?.getViewBounds() ?? null,
@@ -1163,6 +1222,14 @@ export function createAppAPI(mapControllerRef?: RefObject<MapEngine | null>) {
         "getView" in engine &&
         typeof engine.getView === "function"
         ? engine.getView()
+        : null;
+    },
+    getArcgisControlMap: () => {
+      const engine = mapControllerRef?.current;
+      return engine?.kind === "arcgis" &&
+        "getControlMap" in engine &&
+        typeof engine.getControlMap === "function"
+        ? engine.getControlMap()
         : null;
     },
     getMapboxMap: () => {
@@ -1641,6 +1708,29 @@ function projectPluginStateSnapshot() {
     ...manager.getProjectState(),
     manifestUrls: useAppStore.getState().projectPlugins?.manifestUrls ?? EMPTY_PLUGIN_MANIFEST_URLS,
   };
+}
+
+/**
+ * Activates a plugin named by a `?plugin=` deep link and records it in the
+ * project's plugin state, so a later map re-init (a basemap or renderer swap)
+ * restores it instead of closing it. The write does not mark the project dirty:
+ * opening a link is not an edit.
+ *
+ * @param pluginId - The id of a registered plugin.
+ * @param mapControllerRef - The primary map engine.
+ * @returns Whether the plugin is active afterwards.
+ */
+export async function activateDeepLinkedPlugin(
+  pluginId: string,
+  mapControllerRef: RefObject<MapEngine | null>,
+): Promise<boolean> {
+  const activated = await manager.activate(pluginId, createAppAPI(mapControllerRef));
+  if (!activated || !manager.isActive(pluginId)) return false;
+  const nextState = projectPluginStateSnapshot();
+  if (JSON.stringify(nextState) !== JSON.stringify(useAppStore.getState().projectPlugins)) {
+    useAppStore.getState().setProjectPlugins(nextState, false);
+  }
+  return true;
 }
 
 function persistProjectPluginState(previousJson: string): void {

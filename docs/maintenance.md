@@ -260,6 +260,16 @@ format/reader/size rules those panels share — a per-panel copy would miss this
 check, so add new browse panels against that module rather than duplicating it
 (`source-coop-api.ts` re-exports it under its own names for compatibility).
 
+Adoption (`adoptVectorControlLayers` in `vector-layer-sync.ts`, #2715) hands the
+control's small GeoJSON-mode layers to GeoLibre, and leans on three things the
+package does not promise. `getLayerGeoJSON` must return the whole collection for
+a `renderMode: "geojson"`, `ingestMode: "table"` layer. `removeLayer` must drop
+the layer's DuckDB table as well as its map source, or adoption keeps two copies
+of the data. And `KML_ICON_PROPERTY` mirrors the feature property the control's
+KML/KMZ icon layer filters on (`__geolibre_kml_icon_url`); a layer carrying it
+stays with the control, so a rename upstream would adopt KML layers and drop
+their icons. Re-check all three on a bump.
+
 ### `maplibre-gl-lidar` (`packages/plugins/package.json`) — half checked by the compiler
 
 The space-effects engine raises the MapLibre canvas to `z-index: 4` so its
@@ -304,6 +314,70 @@ it. `addLidarLayerFromUrl` also relies on `load` firing, and adding the store
 layer, before `loadPointCloud` resolves; it throws if not.
 `tests/lidar-url-layer.test.ts` pins the GeoLibre side of both. Re-read
 `loadPointCloud` on a bump.
+
+### `maplibre-gl-splat` (`packages/plugins/package.json`) — private internals
+
+`packages/plugins/src/plugins/components/splatting.ts` reaches into
+`GaussianSplatControl`'s private fields, which the compiler cannot check:
+
+- `reserveSplattingIds` replaces the `_layerCounter` / `_modelCounter` instance
+  fields with accessors. Upstream names each asset `splat-${this._layerCounter++}`
+  / `model-${this._modelCounter++}`, and a new control restarts at 0, so without
+  the accessors a fresh load could take a saved layer's id and overwrite it.
+  Restoring a saved layer under its own id also goes through them.
+- `recordSplattingPlacements` wraps `loadSplat` / `loadModel` on the instance and
+  reads `_splatLayers` / `_modelLayers` (per-asset longitude/latitude/altitude),
+  `_state.rotation` / `_state.scale` and `_options.defaultModelRotation`, so the
+  store layer carries the placement a restore needs. The restore turns
+  `_options.flyTo` off while it runs.
+
+If upstream renames those fields or changes how it assigns ids, id reservation
+and placement restore stop working without an error.
+`tests/splatting-restore.test.ts` drives a fake with the same shape, so it will
+not catch that either: re-read `loadSplat` / `loadModel` in the package on a bump.
+Better still, upstream an id option and a per-asset placement getter and delete
+the patching.
+
+### `zarr-cesium` (`packages/map/package.json`) — private internals
+
+`packages/map/src/cesium-zarr-imagery.ts` draws Zarr layers on the globe and
+relies on two things zarr-cesium does not export as API:
+
+- `ZarrLayerProvider` only honours named matplotlib colormaps (its documented
+  `colorScale` option is not forwarded in 0.3.3), so GeoLibre writes the layer's
+  ramp to the provider's private `source.colorScale.colors` and calls
+  `source.updateColormapTexture()`. If those move, the globe draws the default
+  ramp and logs one warning.
+- `ZARR_DIMENSION_ALIASES` mirrors zarr-maps-tiling's `DIMENSION_ALIASES_DEFAULT`
+  (the names it files under `time` / `elevation`). Drift sends a selector to the
+  wrong key, so the Time Slider steps nothing.
+
+`tests/cesium-zarr-imagery.test.ts` constructs the real provider and imports
+the real alias table, so both fail CI on a bump; run it, and check whether
+upstream now forwards `colorScale` so the private write can go. zarr-cesium also
+imports the `cesium` wrapper, which `apps/geolibre-desktop/vite.config.ts`
+aliases to `@cesium/engine`: keep that alias if a bump adds more `cesium`
+imports, or the globe loads a second engine.
+
+### `maplibre-gl-planetary-computer` (`packages/plugins/package.json`) — private STAC client
+
+The Planetary Computer STAC API sends no CORS headers on `GET /collections` and
+rejects the preflight a JSON `POST /search` needs, so the library's own
+`STACClient` fails with "Failed to fetch" in the browser and the Tauri webview.
+`packages/plugins/src/plugins/planetary-computer-stac.ts` subclasses it: search
+goes out as a `GET /search`, and the collection list falls back to the bundled
+`planetary-computer-collections.json` when the live one cannot be read. The
+subclass reuses the private `fetch` / `abortController` fields, and
+`maplibre-gl-planetary-computer.ts` swaps it into the control's private
+`_stacClient` field before the control is added (collections load in `onAdd`).
+
+If upstream renames those fields, loads collections in its constructor, or adds
+new POST requests, the panel breaks again without a compiler error. Re-read
+`STACClient` and the control's constructor/`onAdd` on a bump, and run
+`tests/planetary-computer-stac.test.ts`. Regenerate the bundled list with
+`node scripts/gen-planetary-computer-collections.mjs` to pick up new
+collections. Better still, upstream a GET search and a client/fetch option and
+delete the swap.
 
 ### `maplibre-gl-raster` — stretch and gamma curves
 
@@ -516,6 +590,12 @@ manual check, not a Dependabot event:
   replacement is the `@arcgis/map-components` CDN build. Attribution already
   uses the 5.x path: the view draws it while `view.attributionVisible` is on,
   so the deprecated `Attribution` widget is not loaded.
+- **The Compass widget's `viewModel.reset`.** The engine overwrites it so a
+  click levels the pitch as well as the heading, as MapLibre's compass does.
+  That member is not part of the typed surface, and a missing `viewModel` is
+  skipped quietly, so a release that restructures it silently reverts the
+  compass to heading-only. After a bump, tilt a scene and click the compass:
+  both heading and tilt must return to 0.
 - **The ESM CDN notice.** The SDK logs "Only use ES modules from ArcGIS CDN for
   testing" on load; Esri's documented production path is an npm build, which
   this renderer deliberately avoids (see the size argument in issue #2421). The

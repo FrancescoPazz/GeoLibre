@@ -12,6 +12,7 @@ import {
   effectiveLayerRenderState,
   getActiveEllipsoid,
   IDENTIFY_ALL_LAYERS_ID,
+  identifyAllIncludes,
   isDuckDBQueryLayer,
   isPopupClickEnabled,
   isPopupHoverEnabled,
@@ -275,6 +276,7 @@ export const MapCanvas = memo(function MapCanvas({
   const mapPreferences = useAppStore((s) => s.preferences.map);
   const mapView = useAppStore((s) => s.mapView);
   const layers = useAppStore((s) => s.layers);
+  const hoverTooltipsEnabled = useAppStore((s) => s.hoverTooltipsEnabled);
   const layerGroups = useAppStore((s) => s.layerGroups);
   const layerGroupsRef = useRef(layerGroups);
   // Read by the photo-popup effect, which rebinds only on photo-layer changes.
@@ -633,8 +635,12 @@ export const MapCanvas = memo(function MapCanvas({
         // when handed the array form, so fold every candidate against one map
         // built once per click instead of one per layer.
         const groupById = new Map(layerGroupsRef.current.map((group) => [group.id, group]));
+        // Read at click time: a restriction set by a script or project names
+        // the layers this mode is limited to (issue #2688).
+        const { identifyLayerIds } = useAppStore.getState();
         const eligibleLayers = layers.filter(
           (candidate) =>
+            identifyAllIncludes(candidate.id, identifyLayerIds) &&
             effectiveLayerRenderState(candidate, groupById).visible &&
             resolveLayerCapabilities(candidate).query &&
             isPopupClickEnabled(candidate.popup),
@@ -1256,21 +1262,23 @@ export const MapCanvas = memo(function MapCanvas({
   // fields in the Style panel rebinds immediately.
   const hoverTooltipKey = useMemo(
     () =>
-      layers
-        // Group-aware, like the Identify handler and the selection query: a
-        // layer whose own switch is on can still be hidden by its group, and
-        // binding pointer handlers to it would be binding to something the
-        // user cannot see. `applyGroupEffects` also sets the synced MapLibre
-        // layer's visibility to `none`, so nothing fires today either way —
-        // this keeps the two from drifting if that ever stops being true.
-        .filter(
-          (layer) =>
-            effectiveLayerRenderState(layer, layerGroups).visible &&
-            isPopupHoverEnabled(layer.popup),
-        )
-        .map((layer) => `${layer.id}\u0000${JSON.stringify(layer.popup ?? {})}`)
-        .join("\u0001"),
-    [layers, layerGroups],
+      !hoverTooltipsEnabled
+        ? ""
+        : layers
+            // Group-aware, like the Identify handler and the selection query: a
+            // layer whose own switch is on can still be hidden by its group, and
+            // binding pointer handlers to it would be binding to something the
+            // user cannot see. `applyGroupEffects` also sets the synced MapLibre
+            // layer's visibility to `none`, so nothing fires today either way —
+            // this keeps the two from drifting if that ever stops being true.
+            .filter(
+              (layer) =>
+                effectiveLayerRenderState(layer, layerGroups).visible &&
+                isPopupHoverEnabled(layer.popup),
+            )
+            .map((layer) => `${layer.id}\u0000${JSON.stringify(layer.popup ?? {})}`)
+            .join("\u0001"),
+    [layers, layerGroups, hoverTooltipsEnabled],
   );
 
   useEffect(() => {

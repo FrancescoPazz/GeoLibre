@@ -91,9 +91,11 @@ add_cesium_kml_layer(path, name, url=None, data=None, index=None)
   WMS tiles are requested in, `EPSG:3857` when omitted: check that the layer
   lists it in the capabilities, because a server without Web Mercator answers
   every tile with an XML exception and the layer stays blank. For such a
-  server pass a geographic CRS it does list (`EPSG:4326`, `EPSG:4258`,
-  `EPSG:6706`, or `CRS:84` with `version="1.3.0"`): the desktop app redraws those tiles into Web
-  Mercator, while the web build and `export_html` pages cannot show them.
+  server pass a CRS it does list, preferably a geographic one (`EPSG:4326`,
+  `EPSG:4258`, `EPSG:6706`, or `CRS:84` with `version="1.3.0"`), otherwise a
+  projected `EPSG:<code>` such as `EPSG:25832`: the desktop app redraws or
+  warps those tiles into Web Mercator, while the web build and `export_html`
+  pages cannot show them.
 
 ### Editing
 
@@ -144,6 +146,8 @@ set_renderer(path, renderer, pane_id=None)
 set_map_layout(path, rows, cols, view_kinds=None, sync_view=True)
 set_view(path, center=None, zoom=None, bearing=None, pitch=None, bbox=None)
 set_basemap(path, basemap)
+set_map_legend(path, title=None, position=None, group_by_layer=None,
+               visible=None, collapsed=None)
 add_legend(path, title=None, legend_dict=None, labels=None, colors=None,
            builtin=None, position="bottom-left", shape="square")
 add_colorbar(path, colormap="viridis", vmin=0.0, vmax=1.0, label="", units="",
@@ -159,7 +163,11 @@ add_swipe(path, left_layers, right_layers, orientation="vertical",
 - `set_basemap` takes a named basemap or a MapLibre style JSON URL. An XYZ
   raster basemap (OpenStreetMap, Esri imagery) is **not** a basemap style — add
   it with `add_tile_layer` at `index=0`.
-- `add_legend`: give it exactly one of `legend_dict` (`{label: color}`),
+- `set_map_legend`: the app's own legend panel (Controls > Legend). Its rows
+  come from each visible layer's symbology, so after `classify_layer` it lists
+  the classes with no entries to write. Prefer it to `add_legend` for a styled
+  layer; a project has one, and calling it again updates it.
+- `add_legend`: hand-written entries. Give it exactly one of `legend_dict` (`{label: color}`),
   `labels` + `colors` (paired lists), or `builtin` (a preset name such as `nlcd`
   or `esa_worldcover`).
 - `add_colorbar`: `vmin` must be less than `vmax`. `colors` overrides `colormap`

@@ -20,21 +20,23 @@ A chrome-free `maponly` embed shows only the map, as in this shared 3D Tiles pro
 
 ## URL parameters
 
-| Parameter     | Example                                                    | Description                                                                                                                                                                                                                                            |
-| ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `url`         | `url=https://share.geolibre.app/you/project.geolibre.json` | Loads a `.geolibre.json` project from a public URL.                                                                                                                                                                                                    |
-| `loading`     | `loading=true`                                             | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below.                                                                                                                |
-| `data`        | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                                                                                                                                            |
-| `style`       | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                                                                                                                                            |
-| `layout`      | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
-| `toolbar`     | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`.                                                              |
-| `panels`      | `panels=collapsed`                                         | Starts Layers and Style collapsed to their icon rails. Use `none` to hide all panels; `hidden`, `hide`, and `off` are aliases.                                                                                                                         |
-| `hidePanels`  | `hidePanels=true`                                          | Alternative way to hide those panels.                                                                                                                                                                                                                  |
-| `maponly`     | `maponly`                                                  | Hides all chrome (toolbar, panels, and status bar), leaving only the map. The bare flag or `true`, `1`, `yes`, `on` enable it.                                                                                                                         |
-| `welcome`     | `welcome=0`                                                | Hides the first-launch welcome wizard. Accepts `0`, `false`, `off`, or `no`. A `url=` or `data=` deep link already suppresses it automatically.                                                                                                        |
-| `theme`       | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.                                                                                                                        |
-| `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`    | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. `settingUrl` is accepted as an alias.   |
-| `tool`        | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool.                                                                                                                  |
+| Parameter    | Example                                                    | Description                                                                                                                           |
+| ------------ | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `url`        | `url=https://share.geolibre.app/you/project.geolibre.json` | Loads a `.geolibre.json` project from a public URL.                                                                                   |
+| `loading`    | `loading=true` | Exposes screenshot readiness on the document element. Accepts a bare flag, `true`, `1`, `yes`, or `on`; disabled by default. See below. |
+| `data`       | `data=https://assets.geolibre.app/data/places.geojson`     | Loads public GeoJSON, GeoParquet, PMTiles, a COG, or a ZIP/REST response containing multiple GeoJSON files.                           |
+| `style`      | `style=https://assets.geolibre.app/data/sample.style.json` | Applies a GeoLibre/MapLibre vector style or raster-style JSON to the data loaded by `data`.                                            |
+| `stac`       | `stac=https://earth-search.aws.element84.com/v1/collections/naip` | Opens the STAC Catalogs browser connected to a STAC catalog, API, or API collection. A collection URL is searched on load, so its item footprints appear as a layer. See [Open a STAC catalog](#open-a-stac-catalog). |
+| `layout`     | `layout=viewer`                                            | `viewer` provides read-only chrome: Layers, View, Controls, basemaps, search/identify, Help, and any quick filters the project's layers carry, with authoring UI hidden. `compact` is the icon-only full-app layout; `embed` and `iframe` are aliases. |
+| `toolbar`    | `toolbar=none`                                             | Hides the top toolbar while keeping panels and the status bar. Use `icons` for icon-only buttons; `icon` and `icon-only` are aliases. `hidden`, `hide`, and `off` are aliases for `none`. |
+| `panels`     | `panels=collapsed`                                         | Starts Layers and Style collapsed to their icon rails. Use `none` to hide all panels; `hidden`, `hide`, and `off` are aliases.         |
+| `hidePanels` | `hidePanels=true`                                          | Alternative way to hide those panels.                                                                                                 |
+| `maponly`    | `maponly`                                                  | Hides all chrome (toolbar, panels, and status bar), leaving only the map. The bare flag or `true`, `1`, `yes`, `on` enable it.        |
+| `welcome`    | `welcome=0`                                                | Hides the first-launch welcome wizard. Accepts `0`, `false`, `off`, or `no`. A `url=` or `data=` deep link already suppresses it automatically. |
+| `theme`      | `theme=dark`                                               | Sets the initial color theme, overriding the OS preference. Accepts `dark` or `light`; the in-app toggle still works afterward.       |
+| `settingsUrl` | `settingsUrl=https://example.com/desktop-settings.json`   | Loads shared presentation settings before the first render. Supports `language`, `layout`, accent `theme`, and `uiProfile`. The override lasts for this page only and does not replace locally saved settings. `settingUrl` is accepted as an alias. |
+| `tool`       | `tool=adaptive_filter`                                     | Opens the Processing (Whitebox toolbox) dialog on a specific tool by its id. Unknown ids open the dialog without preselecting a tool. |
+| `plugin`     | `plugin=swipe`                                             | Activates one or more built-in plugins, as if picked from the Plugins menu. See [Activate a plugin](#deep-linking-a-plugin). |
 
 !!! note "Private projects and data"
 `url=` and `data=` are fetched by the browser with same-origin credentials,
@@ -84,6 +86,37 @@ preselecting a tool or applying any parameters. A known id the current engine
 doesn't expose (WASM in the browser, the Python sidecar on desktop) likewise
 isn't preselected. Tool ids match the Processing menu — the same ids used across
 the [Whitebox toolbox](processing.md).
+
+### Deep-linking a plugin
+
+Use `plugin` to open the app with a built-in plugin already active, as if you
+had picked it from the **Plugins** menu:
+
+```text
+https://web.geolibre.app/?plugin=swipe
+```
+
+Name a plugin by its id (`maplibre-gl-time-slider`) or by its short name, the id
+without a `maplibre-gl-`, `maplibre-`, or `geolibre-` prefix (`time-slider`).
+Short names are case-insensitive. The
+[Plugins page](plugins.md#open-a-plugin-from-a-link) lists every link name. List
+several plugins with commas, or repeat the parameter:
+
+```text
+https://web.geolibre.app/?plugin=graticule,h3-grid
+```
+
+It combines with `url`: the plugin opens once the shared project has loaded, on
+top of the plugins the project itself turns on.
+
+```text
+https://web.geolibre.app/?url=https://share.geolibre.app/giswqs/3d-tiles.geolibre.json&plugin=swipe
+```
+
+Unknown names are ignored. A plugin that does not support the current renderer
+does not activate. Directions and reverse geocoding send what you click to a
+public server, so they only open from the menu, after their one-time notice. The
+drawing and editing plugins stay off in `layout=viewer`.
 
 ## Waiting for a screenshot
 
@@ -266,6 +299,18 @@ For a ZIP containing files of the same geometry type, assign different styles by
 You do not need to author that JSON by hand. Open the vector layer's **Layer actions → Styles → Export GeoLibre URL style** menu. The downloaded `.geolibre.style.json` contains only symbology—not feature data—and its render-layer `source` is already set to the original GeoJSON filename stem. Host the file on a CORS-enabled server and pass its URL as `style` alongside the corresponding `data` URL. For a multi-file ZIP, export each layer's GeoLibre URL style and combine their `layers` and `sources` into one style document; layers without `source` can be used for rules shared by every ZIP member.
 
 The same file can be applied interactively to an existing vector layer through **Layer actions → Styles → Import style from file (GeoLibre URL / Mapbox GL / SLD / QML)…**. Interactive import ignores the file's query-param `source` binding and applies its supported symbology to the layer you selected, so the data filename does not need to match.
+
+## Open a STAC catalog
+
+Use `stac` to open the **STAC Catalogs** browser already connected to a catalog. It accepts a static catalog, the root of a STAC API, or one collection of a STAC API:
+
+```text
+https://web.geolibre.app/?stac=https://earth-search.aws.element84.com/v1/collections/naip
+```
+
+A collection URL (`…/collections/{id}`) connects to the API it belongs to, found through the collection's `root` link, selects that collection, and runs a search on it. The map fits the collection's extent and the matching item footprints are added as a **STAC search footprints** layer. From the result list you can then add an item's assets (COG, GeoJSON, GeoParquet, PMTiles, or Zarr) as layers. A catalog or API root only connects, leaving the search to you.
+
+Percent-encode the value with `encodeURIComponent` when the STAC URL carries its own query string. The server must allow cross-origin browser requests (CORS). The browser is a side panel, so `stac` has no effect in `layout=viewer` (which cannot add layers), and its panel is hidden by `maponly` or `panels=none`.
 
 ### An "Open in GeoLibre" badge
 

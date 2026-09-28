@@ -5,7 +5,9 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { readDir, readFile, readTextFile, stat, writeTextFile } from "@tauri-apps/plugin-fs";
+import type { FeatureCollection } from "geojson";
 import { isTauri } from "../is-tauri";
+import { joinLocalPath } from "./paths";
 
 /** One entry of a local directory listing (from {@link listDirectory}). */
 export interface LocalDirectoryEntry {
@@ -31,13 +33,11 @@ export interface LocalDirectoryEntry {
 export async function listDirectory(path: string): Promise<LocalDirectoryEntry[]> {
   if (!isTauri()) return [];
   const entries = await readDir(path);
-  // Join with the parent's own separator style so a Windows path stays
-  // all-backslash (readDir returns names only, no path).
-  const sep = path.includes("\\") ? "\\" : "/";
-  const base = /[/\\]$/.test(path) ? path : `${path}${sep}`;
+  // readDir returns names only, so join with the parent's own separator style
+  // (see joinLocalPath: `\\` is a separator only on Windows-style paths).
   return entries.map((entry) => ({
     name: entry.name,
-    path: `${base}${entry.name}`,
+    path: joinLocalPath(path, entry.name),
     isDirectory: entry.isDirectory,
   }));
 }
@@ -128,4 +128,26 @@ export async function localFileSizeBytes(path: string): Promise<number | undefin
  */
 export async function writeTextFileToPath(path: string, content: string): Promise<void> {
   await writeTextFile(path, content);
+}
+
+/**
+ * Overwrite an existing local GeoJSON source file with an edited layer, for
+ * Layer actions > Save edits to source file (GeoLibre#2439). Desktop only.
+ *
+ * Goes through the `write_local_geojson_file` command rather than the `fs`
+ * plugin, whose runtime scope does not cover a file dropped onto the map or
+ * restored with a project; the command validates the path, refuses to create a
+ * file, and writes atomically. Formatted like Layer actions > Export > GeoJSON.
+ *
+ * @param path - The layer's absolute `.geojson`/`.json` source path.
+ * @param geojson - The edited FeatureCollection to write.
+ */
+export async function writeLocalGeojsonFile(
+  path: string,
+  geojson: FeatureCollection,
+): Promise<void> {
+  await invoke("write_local_geojson_file", {
+    path,
+    contents: JSON.stringify(geojson, null, 2),
+  });
 }

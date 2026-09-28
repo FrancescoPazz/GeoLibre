@@ -6,6 +6,7 @@ import {
   effectiveLayerRenderState,
   getActiveEllipsoid,
   IDENTIFY_ALL_LAYERS_ID,
+  identifyAllIncludes,
   isDuckDBQueryLayer,
   isPopupClickEnabled,
   isPopupHoverEnabled,
@@ -366,6 +367,10 @@ export function MapboxCanvas({
         };
         const unsubscribe = useAppStore.subscribe(update);
         cleanupTasks.push(unsubscribe);
+        const stopHoverWatch = useAppStore.subscribe((state, previous) => {
+          if (!state.hoverTooltipsEnabled && previous.hoverTooltipsEnabled) removeHoverTooltip();
+        });
+        cleanupTasks.push(stopHoverWatch);
         if (!viewId) {
           pointerElevation = createPointerElevationResolver({
             getMap: () => ({
@@ -469,7 +474,7 @@ export function MapboxCanvas({
           return {
             hover: new Map(
               visible
-                .filter((layer) => isPopupHoverEnabled(layer.popup))
+                .filter((layer) => next.hoverTooltipsEnabled && isPopupHoverEnabled(layer.popup))
                 .map((layer) => [layer.id, layer]),
             ),
             photos: new Set(
@@ -654,6 +659,7 @@ export function MapboxCanvas({
           const groupById = new Map(next.layerGroups.map((group) => [group.id, group]));
           const eligibleLayers = next.layers.filter(
             (candidate) =>
+              identifyAllIncludes(candidate.id, next.identifyLayerIds) &&
               effectiveLayerRenderState(candidate, groupById).visible &&
               resolveLayerCapabilities(candidate).query &&
               isPopupClickEnabled(candidate.popup),

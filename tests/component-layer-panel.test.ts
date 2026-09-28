@@ -45,6 +45,31 @@ function layer(id: string) {
 }
 
 describe("LayerPanel", () => {
+  it("turns all hover tips off and restores their saved choices from the header", () => {
+    useAppStore.getState().newProject({ name: "Hover panel" });
+    const id = useAppStore.getState().addGeoJsonLayer("Rivers", {
+      type: "FeatureCollection",
+      features: [],
+    });
+    useAppStore.getState().setLayerPopup(id, { hover: true });
+    renderLayerPanel();
+
+    const toggle = screen.getByRole("checkbox", { name: "Hover tooltips" });
+    fireEvent.click(toggle);
+    assert.equal(useAppStore.getState().hoverTooltipsEnabled, false);
+    assert.equal(layer(id)?.popup?.hover, true);
+    fireEvent.click(toggle);
+    assert.equal(useAppStore.getState().hoverTooltipsEnabled, true);
+    assert.equal(layer(id)?.popup?.hover, true);
+  });
+
+  it("hides the hover row when no layer shows hover tips", () => {
+    useAppStore.getState().newProject({ name: "No hovers" });
+    useAppStore.getState().addGeoJsonLayer("Rivers", { type: "FeatureCollection", features: [] });
+    renderLayerPanel();
+    assert.equal(screen.queryByText("Hover tooltips"), null);
+  });
+
   it("lists the store's layers with the topmost map layer first", () => {
     useAppStore.setState({
       layers: [
@@ -154,5 +179,42 @@ describe("LayerPanel", () => {
       ["parks", "rivers"],
     );
     assert.deepEqual(rowNames(), ["Rivers", "Parks"]);
+  });
+
+  it("keeps the metadata dialog in step with the live layer", () => {
+    useAppStore.setState({
+      layers: [geojsonLayer({ id: "parks", name: "Parks", metadata: { featureCount: 3 } })],
+    });
+    renderLayerPanel();
+
+    fireEvent.click(within(row("Parks")).getByRole("button", { name: "Metadata" }));
+    let dialog = screen.getByRole("dialog");
+    within(dialog).getByText("Parks Metadata");
+
+    // A rename and a metadata change made while the dialog is open (the row's
+    // rename, a refresh) show up in it rather than the snapshot taken on open.
+    act(() => {
+      useAppStore.getState().updateLayer("parks", {
+        name: "City parks",
+        metadata: { featureCount: 5 },
+      });
+    });
+    dialog = screen.getByRole("dialog");
+    within(dialog).getByText("City parks Metadata");
+    const json = JSON.parse(dialog.querySelector("pre")?.textContent ?? "{}");
+    assert.equal(json.layerName, "City parks");
+    assert.equal(json.featureCount, 5);
+
+    // Removing the layer closes the dialog instead of leaving it on a ghost.
+    act(() => {
+      useAppStore.getState().removeLayer("parks");
+    });
+    assert.equal(screen.queryAllByRole("dialog").length, 0);
+
+    // The id was dropped too: a new layer that reuses it does not reopen it.
+    act(() => {
+      useAppStore.setState({ layers: [geojsonLayer({ id: "parks", name: "Parks again" })] });
+    });
+    assert.equal(screen.queryAllByRole("dialog").length, 0);
   });
 });

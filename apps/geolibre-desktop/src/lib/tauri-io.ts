@@ -32,11 +32,13 @@ export {
   isRasterFileName,
   isHttpUrl,
   isAbsoluteLocalPath,
+  isGeojsonSourcePath,
 } from "./file-io/paths";
 export {
   listDirectory,
   readLocalFileBytes,
   readLocalFileText,
+  writeLocalGeojsonFile,
   writeTextFileToPath,
   type LocalDirectoryEntry,
 } from "./file-io/local-fs";
@@ -66,10 +68,6 @@ export {
 export {
   pickVectorFilesWithSidecars,
   readVectorFileWithSidecars,
-  openGeoJsonFile,
-  openGeoJsonFileBrowser,
-  openGeoJsonFileWithFallback,
-  openVectorFileWithFallback,
   loadDroppedVectorFiles,
   loadDroppedVectorPaths,
   type PickedVectorFile,

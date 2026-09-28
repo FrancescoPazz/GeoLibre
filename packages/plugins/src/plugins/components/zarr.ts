@@ -17,7 +17,12 @@ import {
   setExternalNativePaintBridge,
   useAppStore,
 } from "@geolibre/core";
-import { readNativeZarrDimensions, registerZarrStore } from "@geolibre/map/zarr-source";
+import {
+  readNativeZarrDimensions,
+  registerZarrHeaders,
+  registerZarrStore,
+  zarrRequestHeaders,
+} from "@geolibre/map/zarr-source";
 import type {
   ZarrLayerControl,
   ZarrLayerControlOptions,
@@ -53,6 +58,16 @@ import { getComponentsConstructors, type ZarrLayerControlConstructor } from "./c
 import { layerNameFromUrl } from "./shared";
 
 const zarrControlPosition: GeoLibreMapControlPosition = "top-left";
+
+/**
+ * Whether `renderer` draws Zarr layers itself from the store record, rather
+ * than through the MapLibre Zarr control: the ArcGIS view and the Cesium globe
+ * (opengeos/GeoLibre#2261). Neither mounts the control, so their layers are
+ * added, restored, and time-stepped through the record alone.
+ */
+function isNativeZarrRenderer(renderer: string | undefined): boolean {
+  return renderer === "arcgis" || renderer === "cesium";
+}
 
 const ZARR_SAMPLE_URL =
   "https://carbonplan-maps.s3.us-west-2.amazonaws.com/v2/demo/4d/tavg-prec-month";
@@ -241,13 +256,14 @@ export interface CloudNetcdfLayerOptions {
  *
  * @param app The GeoLibre app API.
  * @param options Reference URL, variable, and optional styling/selector.
- * @throws If the Zarr control cannot be mounted or the reference fails to load.
+ * @throws If the Zarr control cannot be mounted, the reference fails to load,
+ *   or the control reports that the store or variable failed to load.
  */
 export async function addCloudNetcdfLayer(
   app: GeoLibreAppAPI,
   options: CloudNetcdfLayerOptions,
 ): Promise<void> {
-  if (app.getMapRenderer?.() === "arcgis") {
+  if (isNativeZarrRenderer(app.getMapRenderer?.())) {
     const refs =
       options.refs ?? (await loadKerchunkReference(options.url, { headers: options.headers }));
     await addNativeArcgisZarrLayer(
@@ -307,10 +323,18 @@ export async function addCloudNetcdfLayer(
     // The same event names the new layer, which the temporal registration below
     // needs so this add's own references reach the time-axis lookup.
     let addedLayerId: string | null = null;
+    let failure: string | null = null;
     const captureLayerId: ZarrLayerEventHandler = (event) => {
       if (event.layerId) addedLayerId = event.layerId;
     };
+    // The control reports a failed load by emitting "error" rather than
+    // rejecting. Listening only while this add runs (the queue keeps adds from
+    // overlapping) scopes the failure to this request.
+    const captureError: ZarrLayerEventHandler = (event) => {
+      failure = event.error ?? null;
+    };
     control.on("layeradd", captureLayerId);
+    control.on("error", captureError);
     // Claim this add, so the shared handler leaves the adapter to us.
     const endAdd = beginProgrammaticZarrAdd(options.url);
     try {
@@ -325,20 +349,28 @@ export async function addCloudNetcdfLayer(
       });
     } finally {
       control.off("layeradd", captureLayerId);
+      control.off("error", captureError);
       endAdd();
+    }
+
+    // Without a layer the add failed, whether or not the control said why, so
+    // reject and let the dialog show the error instead of closing as if the
+    // add succeeded.
+    if (!addedLayerId) {
+      throw new Error(failure ?? "Failed to add the NetCDF layer.");
     }
 
     // The references carry the coordinate attributes inline, which is the only
     // way to read a NetCDF cube's CF units: its `url` names the kerchunk
     // manifest, not a Zarr store whose metadata documents could be walked.
-    if (addedLayerId) {
-      registerZarrTemporalAdapter(addedLayerId, options.url, { refs, headers: options.headers });
-      // Record the extent on the layer itself. The control accepts `bounds` as a
-      // render hint but does not always carry it back on the "layeradd" event,
-      // and the renderer never reports the extent it resolved — so without this
-      // write the Layers panel's "Zoom to layer" has nothing to fly to.
-      if (options.bounds) applyZarrLayerBounds(addedLayerId, options.bounds);
-    }
+    // Session-only, as for addZarrRasterLayer: never on the layer record.
+    registerZarrHeaders(addedLayerId, options.headers);
+    registerZarrTemporalAdapter(addedLayerId, options.url, { refs, headers: options.headers });
+    // Record the extent on the layer itself. The control accepts `bounds` as a
+    // render hint but does not always carry it back on the "layeradd" event,
+    // and the renderer never reports the extent it resolved — so without this
+    // write the Layers panel's "Zoom to layer" has nothing to fly to.
+    if (options.bounds) applyZarrLayerBounds(addedLayerId, options.bounds);
   });
 
   // Unlike openZarrLayerPanel, the dialog-based flow intentionally leaves the
@@ -429,7 +461,7 @@ export type ZarrTimeAttributesReader = (dimension: string) => Promise<ZarrTimeAt
  * Add a Zarr layer through GeoLibre's own `@carbonplan/zarr-layer` instance and
  * mirror it into the layer store, without opening the Zarr panel.
  *
- * This is the Zarr counterpart of {@link addCogRasterLayer}: the host owns the
+ * This is the Zarr counterpart of `app.addCogLayer`: the host owns the
  * renderer, so an external plugin does not bundle a second copy of
  * `@carbonplan/zarr-layer` (plus its numcodecs WASM) and does not have to add a
  * raw MapLibre custom layer whose paint the Style panel cannot reach
@@ -465,7 +497,7 @@ export async function addZarrRasterLayer(
     throw new Error("A Zarr variable is required (pass options.variable).");
   }
 
-  if (app.getMapRenderer?.() === "arcgis")
+  if (isNativeZarrRenderer(app.getMapRenderer?.()))
     return addNativeArcgisZarrLayer({ ...options, url, variable });
   return queueZarrAdd(() => addZarrLayerExclusively(app, options, url, variable));
 }
@@ -493,9 +525,11 @@ async function addNativeArcgisZarrLayer(
     // Local NetCDF refs inline the entire decoded raster. Keep those in the
     // session store so saving a project cannot embed megabytes of base64 data.
     ...(refs && !options.url.startsWith("local:") ? { kerchunkRefs: refs } : {}),
-    headers: options.headers,
     spatialDimensions: options.spatialDimensions,
   };
+  // Headers are credentials: keep them in the session map the renderer reads,
+  // never on `layer.source`, which is saved and shared with the project.
+  registerZarrHeaders(id, options.headers);
   if (options.store) {
     const dispose = registerZarrStore(id, options.store);
     const unsubscribe = useAppStore.subscribe((state, previous) => {
@@ -633,6 +667,9 @@ async function addZarrLayerExclusively(
   // here rather than from the shared `layeradd` handler so this add's own
   // headers reach the metadata lookup even when another add of the same store
   // overlaps it (opengeos/GeoLibre#1448 review).
+  // Remembered for the session (never on the layer record) so the ArcGIS
+  // renderer can still authenticate this layer after a renderer swap.
+  registerZarrHeaders(addedLayerId, headers);
   registerZarrTemporalAdapter(addedLayerId, url, {
     headers,
     ...(options.readTimeAttributes ? { readAttributes: options.readTimeAttributes } : {}),
@@ -675,7 +712,7 @@ export async function setZarrLayerSelector(
     | { setSelector?: (selector: Record<string, number | string>) => Promise<void> | void }
     | undefined;
   const native =
-    useAppStore.getState().primaryRenderer === "arcgis" &&
+    isNativeZarrRenderer(useAppStore.getState().primaryRenderer) &&
     useAppStore.getState().layers.some((layer) => layer.id === layerId && layer.type === "zarr");
   if (!native && (!instance || typeof instance.setSelector !== "function")) return false;
 
@@ -805,7 +842,7 @@ const ZARR_DIMENSION_ATTEMPTS = 24;
 async function readZarrDimensionValues(
   layerId: string,
 ): Promise<Record<string, (number | string)[]> | null> {
-  if (useAppStore.getState().primaryRenderer === "arcgis") {
+  if (isNativeZarrRenderer(useAppStore.getState().primaryRenderer)) {
     const layer = useAppStore.getState().layers.find((layer) => layer.id === layerId);
     return layer ? readNativeZarrDimensions(layer) : null;
   }
@@ -898,7 +935,7 @@ function registerZarrTemporalAdapter(
     // The layer may have been removed while the axis was being resolved.
     if (!useAppStore.getState().layers.some((layer) => layer.id === layerId)) return true;
     if (
-      useAppStore.getState().primaryRenderer !== "arcgis" &&
+      !isNativeZarrRenderer(useAppStore.getState().primaryRenderer) &&
       !zarrControl?.getLayersMap().has(layerId)
     )
       return true;
@@ -915,7 +952,7 @@ function registerZarrTemporalAdapter(
         });
       },
     });
-    if (useAppStore.getState().primaryRenderer === "arcgis") {
+    if (isNativeZarrRenderer(useAppStore.getState().primaryRenderer)) {
       // Native layers have no Zarr control to own their temporal cleanup.
       arcgisZarrTemporalUnsubscribes.get(layerId)?.();
       const unsubscribe = useAppStore.subscribe((state, previous) => {
@@ -940,7 +977,7 @@ export function restoreArcgisZarrLayers(): void {
     if (restoredArcgisZarrLayerIds.has(layer.id)) continue;
     trackRestoredArcgisZarrLayer(layer.id);
     void registerZarrTemporalAdapter(layer.id, String(layer.source.url), {
-      headers: layer.source.headers as Record<string, string> | undefined,
+      headers: zarrRequestHeaders(layer),
       refs: layer.source.kerchunkRefs as KerchunkRefs | undefined,
     }).then((registered) => {
       if (!registered) restoredArcgisZarrLayerIds.delete(layer.id);

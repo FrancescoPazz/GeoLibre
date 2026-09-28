@@ -3,10 +3,12 @@ import { useTranslation } from "react-i18next";
 import {
   IDENTIFY_ALL_LAYERS_ID,
   effectiveLayerRenderState,
+  identifyAllIncludes,
   hasActiveLayerFilter,
   isCesiumOnlyLayer,
   isDuckDBQueryLayer,
   pluginOwnsPaint,
+  rendererAppliesOpacity,
   resolveLayerCapabilities,
   supportsBridgedOpacity,
   useAppStore,
@@ -134,6 +136,7 @@ export function LayerRow({
   const { i18n, t } = useTranslation();
   const setLayerVisibility = useAppStore((s) => s.setLayerVisibility);
   const setLayerOpacity = useAppStore((s) => s.setLayerOpacity);
+  const primaryRenderer = useAppStore((s) => s.primaryRenderer);
   const reorderLayer = useAppStore((s) => s.reorderLayer);
   const selectLayer = useAppStore((s) => s.selectLayer);
   const setIdentifyLayer = useAppStore((s) => s.setIdentifyLayer);
@@ -179,8 +182,12 @@ export function LayerRow({
   const identifyActive = identifyLayerId === layer.id;
   // A gesture that takes over map clicks has to turn Identify off, or
   // its toolbar button stays lit over a handler that no longer
-  // answers. All-layer Identify counts the same as this layer's own.
-  const identifyOwnsClicks = identifyActive || identifyLayerId === IDENTIFY_ALL_LAYERS_ID;
+  // answers. All-layer Identify counts the same as this layer's own, unless a
+  // script or project limited it to a list that leaves this layer out.
+  const identifyLayerIds = useAppStore((s) => s.identifyLayerIds);
+  const identifyOwnsClicks =
+    identifyActive ||
+    (identifyLayerId === IDENTIFY_ALL_LAYERS_ID && identifyAllIncludes(layer.id, identifyLayerIds));
   // COGs inspect raw pixel/band values rather than vector features, so
   // the icon's tooltip reflects that distinct action. Time Slider COG
   // and mosaic sources read the same way, at the current timeline
@@ -483,8 +490,11 @@ export function LayerRow({
       {/* A plugin-painted layer (a MapLibre custom WebGL layer)
           has no paint property for opacity to land on, so the
           slider is only shown when the plugin bridged a setter for
-          it — otherwise it would move with no effect (#1445). */}
-      {(!pluginOwnsPaint(layer) || supportsBridgedOpacity(layer.id)) && (
+          it — otherwise it would move with no effect (#1445) — or
+          when the primary renderer draws the layer itself. */}
+      {(!pluginOwnsPaint(layer) ||
+        supportsBridgedOpacity(layer.id) ||
+        rendererAppliesOpacity(layer, primaryRenderer)) && (
         <LayerOpacitySlider
           label={t("layers.opacity")}
           ariaLabel={t("layers.opacityFor", { name: layer.name })}
