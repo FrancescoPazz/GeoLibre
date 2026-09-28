@@ -1,57 +1,141 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  RER3D_TOOL_PANEL_WIDTH,
-  computeRer3dToolPanelSlot,
-  openRer3dToolPanels,
-  positionForRer3dToolPanelSlot,
-  rer3dToolPanelPositionForOpenSet,
-  type Rer3dToolPanelOpenSet,
-} from "../apps/geolibre-desktop/src/hooks/rer3d-tool-panel-layout";
+  FLOATING_MAP_PANEL_ESTIMATED_HEIGHTS,
+  FLOATING_MAP_PANEL_WIDTHS,
+  UNBOUNDED_FLOATING_MAP_LAYOUT,
+  layoutFloatingMapPanels,
+  openFloatingMapPanels,
+  panelFitsInBounds,
+  positionForOpenFloatingMapPanel,
+  type FloatingMapPanelId,
+  type FloatingMapPanelOpenSet,
+} from "../apps/geolibre-desktop/src/hooks/floating-map-panel-layout";
 
-const WIDTH = RER3D_TOOL_PANEL_WIDTH;
-
-function open(over: Partial<Rer3dToolPanelOpenSet>): Rer3dToolPanelOpenSet {
-  return {
+function open(over: Partial<FloatingMapPanelOpenSet>): FloatingMapPanelOpenSet {
+  const base: FloatingMapPanelOpenSet = {
+    measure3d: false,
+    "play-path": false,
     "line-of-sight": false,
     "viewshed-area": false,
-    ...over,
+    "elevation-bands": false,
+    "coords-converter": false,
+    microzonation: false,
   };
+  return { ...base, ...over };
 }
 
-describe("rer-3d tool panel layout", () => {
+const LARGE_BOUNDS = UNBOUNDED_FLOATING_MAP_LAYOUT;
+
+describe("floating map panel layout", () => {
   it("lists open panels in fixed order", () => {
-    assert.deepEqual(openRer3dToolPanels(open({ "viewshed-area": true })), ["viewshed-area"]);
-    assert.deepEqual(openRer3dToolPanels(open({ "line-of-sight": true })), ["line-of-sight"]);
-    assert.deepEqual(openRer3dToolPanels(open({ "line-of-sight": true, "viewshed-area": true })), [
-      "line-of-sight",
-      "viewshed-area",
-    ]);
+    assert.deepEqual(openFloatingMapPanels(open({ "viewshed-area": true })), ["viewshed-area"]);
+    assert.deepEqual(openFloatingMapPanels(open({ "line-of-sight": true })), ["line-of-sight"]);
+    assert.deepEqual(
+      openFloatingMapPanels(open({ "line-of-sight": true, "viewshed-area": true })),
+      ["line-of-sight", "viewshed-area"],
+    );
   });
 
-  it("assigns slots so both panels sit side by side when open together", () => {
+  it("places line of sight and viewshed side by side when both are open", () => {
     const both = open({ "line-of-sight": true, "viewshed-area": true });
-    assert.equal(computeRer3dToolPanelSlot("line-of-sight", both), 0);
-    assert.equal(computeRer3dToolPanelSlot("viewshed-area", both), 1);
-
-    const losPos = rer3dToolPanelPositionForOpenSet("line-of-sight", both, WIDTH);
-    const vsPos = rer3dToolPanelPositionForOpenSet("viewshed-area", both, WIDTH);
+    const losPos = positionForOpenFloatingMapPanel("line-of-sight", both, LARGE_BOUNDS);
+    const vsPos = positionForOpenFloatingMapPanel("viewshed-area", both, LARGE_BOUNDS);
     assert.equal(losPos.x, 12);
-    assert.equal(vsPos.x, 12 + WIDTH + 12);
+    assert.equal(vsPos.x, 12 + FLOATING_MAP_PANEL_WIDTHS["line-of-sight"] + 12);
     assert.equal(losPos.y, vsPos.y);
   });
 
-  it("uses slot 0 when only one panel is open", () => {
-    const onlyVs = open({ "viewshed-area": true });
-    assert.equal(computeRer3dToolPanelSlot("viewshed-area", onlyVs), 0);
-    assert.equal(rer3dToolPanelPositionForOpenSet("viewshed-area", onlyVs, WIDTH).x, 12);
-
-    const onlyLoS = open({ "line-of-sight": true });
-    assert.equal(computeRer3dToolPanelSlot("line-of-sight", onlyLoS), 0);
+  it("uses the left column when only one panel is open", () => {
+    assert.equal(
+      positionForOpenFloatingMapPanel(
+        "viewshed-area",
+        open({ "viewshed-area": true }),
+        LARGE_BOUNDS,
+      ).x,
+      12,
+    );
+    assert.equal(
+      positionForOpenFloatingMapPanel(
+        "line-of-sight",
+        open({ "line-of-sight": true }),
+        LARGE_BOUNDS,
+      ).x,
+      12,
+    );
   });
 
-  it("positions columns from slot math", () => {
-    assert.deepEqual(positionForRer3dToolPanelSlot(0, WIDTH), { x: 12, y: 12 });
-    assert.deepEqual(positionForRer3dToolPanelSlot(1, WIDTH), { x: 324, y: 12 });
+  it("cumulative width avoids overlap between measure3d and microzonation", () => {
+    const set = open({ measure3d: true, microzonation: true });
+    assert.equal(positionForOpenFloatingMapPanel("measure3d", set, LARGE_BOUNDS).x, 12);
+    assert.equal(
+      positionForOpenFloatingMapPanel("microzonation", set, LARGE_BOUNDS).x,
+      12 + FLOATING_MAP_PANEL_WIDTHS.measure3d + 12,
+    );
+  });
+
+  it("shifts later panels when earlier ones in order are open (wide container)", () => {
+    const ids: FloatingMapPanelId[] = [
+      "measure3d",
+      "play-path",
+      "line-of-sight",
+      "viewshed-area",
+      "elevation-bands",
+      "coords-converter",
+      "microzonation",
+    ];
+    const allOpen = open(
+      Object.fromEntries(ids.map((id) => [id, true])) as FloatingMapPanelOpenSet,
+    );
+    let expectedX = 12;
+    for (const id of ids) {
+      assert.equal(positionForOpenFloatingMapPanel(id, allOpen, LARGE_BOUNDS).x, expectedX);
+      expectedX += FLOATING_MAP_PANEL_WIDTHS[id] + 12;
+    }
+  });
+
+  it("wraps to a second row when the next panel would cross the right edge", () => {
+    const bounds = { width: 700, height: 800 };
+    const set = open({ measure3d: true, "play-path": true, "line-of-sight": true });
+    const los = positionForOpenFloatingMapPanel("line-of-sight", set, bounds);
+    const m3 = positionForOpenFloatingMapPanel("measure3d", set, bounds);
+    const pp = positionForOpenFloatingMapPanel("play-path", set, bounds);
+    assert.equal(m3.y, 12);
+    assert.equal(pp.y, 12);
+    assert.ok(los.y > 12, "line-of-sight should wrap to row 2");
+    const margin = 12;
+    for (const [id, pos] of [
+      ["measure3d", m3],
+      ["play-path", pp],
+      ["line-of-sight", los],
+    ] as const) {
+      const w = FLOATING_MAP_PANEL_WIDTHS[id];
+      assert.ok(pos.x + w <= bounds.width - margin, `${id} horizontal overflow`);
+    }
+  });
+
+  it("keeps every open panel inside bounds after wrap and clamp", () => {
+    const bounds = { width: 500, height: 600 };
+    const ids: FloatingMapPanelId[] = [
+      "measure3d",
+      "play-path",
+      "line-of-sight",
+      "viewshed-area",
+      "elevation-bands",
+      "coords-converter",
+      "microzonation",
+    ];
+    const allOpen = open(
+      Object.fromEntries(ids.map((id) => [id, true])) as FloatingMapPanelOpenSet,
+    );
+    const positions = layoutFloatingMapPanels(allOpen, bounds);
+    for (const id of ids) {
+      const pos = positions[id];
+      assert.ok(pos, id);
+      const w = FLOATING_MAP_PANEL_WIDTHS[id];
+      const h = FLOATING_MAP_PANEL_ESTIMATED_HEIGHTS[id];
+      assert.ok(panelFitsInBounds(pos!.x, pos!.y, w, h, bounds), id);
+      assert.ok(pos!.x + w <= bounds.width - 12, `${id} right edge`);
+    }
   });
 });

@@ -11,6 +11,7 @@ import { ElevationBandsPanel } from "./ElevationBandsPanel";
 import { CoordsConverterPanel } from "./CoordsConverterPanel";
 import { QueryPanel } from "./QueryPanel";
 import { MicrozonationPanel } from "./MicrozonationPanel";
+import { FloatingMapPanelLayoutProvider } from "./FloatingMapPanelLayoutContext";
 
 interface Rer3dToolPanelsProps {
   mapControllerRef: RefObject<MapEngine | null>;
@@ -26,7 +27,7 @@ export function Rer3dToolPanels({ mapControllerRef }: Rer3dToolPanelsProps) {
   const { t } = useTranslation();
 
   return (
-    <>
+    <FloatingMapPanelLayoutProvider>
       <SectionErrorBoundary
         label="Measure 3d panel"
         displayName={t("shell.section.measure3dPanel")}
@@ -75,6 +76,6 @@ export function Rer3dToolPanels({ mapControllerRef }: Rer3dToolPanelsProps) {
       >
         <MicrozonationPanel mapControllerRef={mapControllerRef} />
       </SectionErrorBoundary>
-    </>
+    </FloatingMapPanelLayoutProvider>
   );
 }

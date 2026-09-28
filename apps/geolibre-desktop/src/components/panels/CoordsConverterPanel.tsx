@@ -21,6 +21,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
 import { clamp } from "../../lib/clamp";
 import {
   closeCoordsConverterPanel,
@@ -76,7 +77,12 @@ function CoordsConverterCard({
   serviceUrl,
 }: CoordsConverterPanelProps & { serviceUrl: string | undefined }) {
   const { t } = useTranslation();
-  const [position, setPosition] = useState(() => ({ x: EDGE_MARGIN, y: EDGE_MARGIN }));
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useFloatingMapPanelPosition(
+    "coords-converter",
+    PANEL_WIDTH,
+    cardRef,
+  );
   const [inputText, setInputText] = useState("");
   const [conversionKey, setConversionKey] = useState<string | null>(null);
   const [result, setResult] = useState<ConvertedCoordinates | null>(null);
@@ -224,7 +230,8 @@ function CoordsConverterCard({
 
   return (
     <div
-      className="absolute z-30 rounded-lg border border-border map-glass shadow-lg"
+      ref={cardRef}
+      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
       style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
       role="dialog"
       aria-label={t("toolbar.coordsConverter.title")}

@@ -55,6 +55,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { CollapsibleSection } from "../CollapsibleSection";
+import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
 import { clamp } from "../../lib/clamp";
 import { Measure3dProfileChart } from "./Measure3dProfileChart";
 
@@ -89,12 +90,9 @@ export function Measure3dPanel() {
 
 function Measure3dCard({ state }: { state: Measure3dState }) {
   const { t } = useTranslation();
-  const [position, setPosition] = useState(() => ({
-    x: EDGE_MARGIN,
-    y: EDGE_MARGIN,
-  }));
-  const [minimized, setMinimized] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useFloatingMapPanelPosition("measure3d", PANEL_WIDTH, cardRef);
+  const [minimized, setMinimized] = useState(false);
 
   useEffect(() => {
     if (minimized) setMeasure3dHover(null);
@@ -164,7 +162,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
   return (
     <div
       ref={cardRef}
-      className="absolute z-30 rounded-lg border border-border map-glass shadow-lg"
+      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
       style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
       role="dialog"
       aria-label={t("toolbar.measure3d.title")}

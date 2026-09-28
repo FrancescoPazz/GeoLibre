@@ -15,9 +15,9 @@ import {
 } from "@geolibre/plugins";
 import { Button, Input, Label, Slider } from "@geolibre/ui";
 import { Eraser, Radar, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useSyncExternalStore } from "react";
+import { type PointerEvent as ReactPointerEvent, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { useRer3dToolPanelPosition } from "../../hooks/useRer3dToolPanelPosition";
+import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
 import { clamp } from "../../lib/clamp";
 
 const PANEL_WIDTH = 300;
@@ -50,7 +50,12 @@ function formatPoint(point: LngLatAlt, locale: string): string {
 function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const [position, setPosition] = useRer3dToolPanelPosition("viewshed-area", PANEL_WIDTH);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useFloatingMapPanelPosition(
+    "viewshed-area",
+    PANEL_WIDTH,
+    cardRef,
+  );
 
   const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("button,input,select,[role=slider]")) return;
@@ -113,7 +118,8 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
 
   return (
     <div
-      className="absolute z-30 rounded-lg border border-border map-glass shadow-lg"
+      ref={cardRef}
+      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
       style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
       role="dialog"
       aria-label={t("toolbar.viewshedArea.title")}

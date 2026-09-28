@@ -15,8 +15,9 @@ import {
 } from "@geolibre/plugins";
 import { Button, Slider } from "@geolibre/ui";
 import { Pause, Play, Route, Square, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useState, useSyncExternalStore } from "react";
+import { type PointerEvent as ReactPointerEvent, useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
+import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
 import { clamp } from "../../lib/clamp";
 
 const PANEL_WIDTH = 300;
@@ -35,7 +36,8 @@ export function PlayPathPanel() {
 
 function PlayPathCard({ state }: { state: PlayPathState }) {
   const { t } = useTranslation();
-  const [position, setPosition] = useState(() => ({ x: EDGE_MARGIN, y: EDGE_MARGIN }));
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useFloatingMapPanelPosition("play-path", PANEL_WIDTH, cardRef);
 
   const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("button,input,select,label,[role=slider]")) return;
@@ -106,7 +108,8 @@ function PlayPathCard({ state }: { state: PlayPathState }) {
 
   return (
     <div
-      className="absolute z-30 rounded-lg border border-border map-glass shadow-lg"
+      ref={cardRef}
+      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
       style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
       role="dialog"
       aria-label={t("toolbar.playPath.title")}

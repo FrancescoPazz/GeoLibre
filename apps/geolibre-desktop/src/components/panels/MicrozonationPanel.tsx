@@ -19,9 +19,18 @@ import {
 } from "@geolibre/plugins";
 import { Button } from "@geolibre/ui";
 import { Activity, ExternalLink, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { useDraggableCard } from "../../hooks/useDraggableCard";
+import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
+import { clamp } from "../../lib/clamp";
 import { useMicrozonationConfig } from "../../hooks/useMicrozonationConfig";
 import {
   closeMicrozonationPanel,
@@ -30,6 +39,7 @@ import {
 } from "../../lib/microzonation-panel";
 
 const PANEL_WIDTH = 460;
+const EDGE_MARGIN = 12;
 
 interface MicrozonationPanelProps {
   mapControllerRef: RefObject<MapEngine | null>;
@@ -58,7 +68,48 @@ function MicrozonationCard({
   config,
 }: MicrozonationPanelProps & { config: MicrozonationConfig | undefined }) {
   const { t, i18n } = useTranslation();
-  const { position, onDragStart } = useDraggableCard(PANEL_WIDTH);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useFloatingMapPanelPosition(
+    "microzonation",
+    PANEL_WIDTH,
+    cardRef,
+  );
+
+  const onDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button,input,select,label,a")) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const origin = position;
+    const onMove = (move: PointerEvent) => {
+      const card = handle.parentElement;
+      const bounds = card?.parentElement?.getBoundingClientRect();
+      const cardHeight = card?.getBoundingClientRect().height ?? 80;
+      const maxX = Math.max(
+        EDGE_MARGIN,
+        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
+      );
+      const maxY = Math.max(
+        EDGE_MARGIN,
+        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
+      );
+      setPosition({
+        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
+        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
+      });
+    };
+    const onUp = () => {
+      handle.releasePointerCapture(event.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  };
   const [projects, setProjects] = useState<MicrozonationProjects | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -184,7 +235,8 @@ function MicrozonationCard({
 
   return (
     <div
-      className="absolute z-30 flex max-h-[85%] flex-col rounded-lg border border-border map-glass shadow-lg"
+      ref={cardRef}
+      className="pointer-events-auto absolute z-30 flex max-h-[85%] flex-col rounded-lg border border-border map-glass shadow-lg"
       style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
       role="dialog"
       aria-label={t("toolbar.microzonation.title")}
