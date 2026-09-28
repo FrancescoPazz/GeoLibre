@@ -2708,6 +2708,13 @@
     },
     "measure3d": {
       "title": "3D Measure",
+      "collapsePanel": "Collapse panel",
+      "expandPanel": "Expand panel",
+      "sections": {
+        "draw": "Draw and options",
+        "measurement": "Measurement",
+        "notesExport": "Notes and export"
+      },
       "close": "Close",
       "clear": "Clear",
       "mode": "Measure mode",
