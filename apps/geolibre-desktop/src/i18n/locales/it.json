@@ -2703,6 +2703,13 @@
     },
     "measure3d": {
       "title": "Misure 3D",
+      "collapsePanel": "Comprimi pannello",
+      "expandPanel": "Espandi pannello",
+      "sections": {
+        "draw": "Disegna e opzioni",
+        "measurement": "Misure",
+        "notesExport": "Note e esportazione"
+      },
       "close": "Chiudi",
       "clear": "Cancella",
       "mode": "Modalità di misura",
