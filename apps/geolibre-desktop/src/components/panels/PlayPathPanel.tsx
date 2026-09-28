@@ -24,7 +24,7 @@ const EDGE_MARGIN = 12;
 
 /**
  * Play Path panel (Controls → Play Path): fly the camera along the path
- * drawn with 3D Measure. The plugin owns the flight; this renders its
+ * selected in the active layer. The plugin owns the flight; this renders its
  * published state and the controls.
  */
 export function PlayPathPanel() {
@@ -76,6 +76,7 @@ function PlayPathCard({ state }: { state: PlayPathState }) {
   const {
     bound,
     available,
+    routeLocked,
     playing,
     paused,
     countdown,
@@ -173,6 +174,13 @@ function PlayPathCard({ state }: { state: PlayPathState }) {
         )}
         {available && reverse && (playing || paused) && (
           <div className="text-xs text-muted-foreground">{t("toolbar.playPath.reverse")}</div>
+        )}
+
+        {routeLocked && (
+          <div className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-400">
+            <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{t("toolbar.playPath.routeLocked")}</span>
+          </div>
         )}
 
         {bound && pitchTooLow && (

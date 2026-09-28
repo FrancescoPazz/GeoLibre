@@ -198,6 +198,33 @@ function globeApp(globe: ReturnType<typeof makeGlobe>): GeoLibreAppAPI {
 }
 const mapLessApp = { getMap: () => null, getCesiumScene: () => null } as unknown as GeoLibreAppAPI;
 
+function activeLayerApp(
+  globe: ReturnType<typeof makeGlobe>,
+  layers: Record<string, Array<{ geometry: unknown }>>,
+  initialLayerId: string | null,
+) {
+  let selectedLayerId = initialLayerId;
+  const listeners = new Set<(selection: { layerId: string | null; features: [] }) => void>();
+  const app = {
+    getMap: () => null,
+    getCesiumScene: () => globe.handle,
+    getSelectedLayerId: () => selectedLayerId,
+    getLayerFeatures: (layerId: string) => layers[layerId] ?? [],
+    onSelectionChange: (
+      listener: (selection: { layerId: string | null; features: [] }) => void,
+    ) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  } as unknown as GeoLibreAppAPI;
+  return Object.assign(app, {
+    selectLayer: (layerId: string | null) => {
+      selectedLayerId = layerId;
+      for (const listener of listeners) listener({ layerId, features: [] });
+    },
+  });
+}
+
 const tick = (ms = 2) => new Promise((r) => setTimeout(r, ms));
 
 /** Wait until the snapshot satisfies `predicate`, or fail after `limitMs`. */
@@ -298,6 +325,139 @@ describe("play-path tool", () => {
     assert.deepEqual(s.samplingStepRange, [2, 100]);
   });
 
+  it("uses the active layer's first valid line or polygon and updates while idle", async () => {
+    const globe = makeGlobe();
+    const north = P(ORIGIN.lng, ORIGIN.lat + 0.01, 125);
+    const app = activeLayerApp(
+      globe,
+      {
+        line: [
+          { geometry: { type: "Point", coordinates: [A.lng, A.lat] } },
+          {
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [A.lng, A.lat, A.alt],
+                [B.lng, B.lat, B.alt],
+              ],
+            },
+          },
+        ],
+        polygon: [
+          {
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [A.lng, A.lat],
+                  [north.lng, north.lat, north.alt],
+                  [B.lng, B.lat],
+                  [A.lng, A.lat],
+                ],
+              ],
+            },
+          },
+        ],
+        invalid: [{ geometry: { type: "Point", coordinates: [A.lng, A.lat] } }],
+      },
+      "line",
+    );
+    openPlayPathPanel(app);
+    assert.deepEqual(
+      [getPlayPathSnapshot().available, getPlayPathSnapshot().pointCount],
+      [true, 2],
+    );
+    app.selectLayer("polygon");
+    assert.deepEqual(
+      [getPlayPathSnapshot().available, getPlayPathSnapshot().pointCount],
+      [true, 3],
+      "an idle selection immediately replaces the route",
+    );
+    setPlayPathSamplingStep(0);
+    assert.equal(playPath(), true);
+    await until(
+      () =>
+        !getPlayPathSnapshot().playing &&
+        getPlayPathSnapshot().countdown === null &&
+        globe.flights.length >= 3,
+    );
+    assert.ok(
+      Math.abs(Cesium.Math.toDegrees(globe.flights[0].heading)) < 1,
+      "the flight follows the selected polygon's first segment",
+    );
+    app.selectLayer("invalid");
+    assert.deepEqual(
+      [getPlayPathSnapshot().available, getPlayPathSnapshot().pointCount],
+      [false, 0],
+      "an unsuitable active layer does not fall back to an old measurement",
+    );
+  });
+
+  it("locks the selected route through countdown, flight, and pause until stop", async () => {
+    const globe = makeGlobe({ holdTiles: true });
+    const routeB = [
+      P(ORIGIN.lng + 0.04, ORIGIN.lat, 100),
+      P(ORIGIN.lng + 0.04, ORIGIN.lat + 0.01, 100),
+    ];
+    const app = activeLayerApp(
+      globe,
+      {
+        routeA: [
+          {
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [A.lng, A.lat],
+                [B.lng, B.lat],
+                [Cp.lng, Cp.lat],
+              ],
+            },
+          },
+        ],
+        routeB: [
+          {
+            geometry: {
+              type: "LineString",
+              coordinates: routeB.map((point) => [point.lng, point.lat, point.alt]),
+            },
+          },
+        ],
+      },
+      "routeA",
+    );
+    openPlayPathPanel(app);
+    setPlayPathSamplingStep(0);
+    setPlayPathTiming({ countdownTickMs: 1, tileSettleTimeoutMs: 10_000 });
+    assert.equal(playPath(), true);
+    app.selectLayer("routeB");
+    assert.deepEqual(
+      [getPlayPathSnapshot().routeLocked, getPlayPathSnapshot().pointCount],
+      [true, 3],
+      "the countdown keeps its captured route",
+    );
+    await until(() => getPlayPathSnapshot().playing);
+    pausePath();
+    assert.deepEqual(
+      [
+        getPlayPathSnapshot().routeLocked,
+        getPlayPathSnapshot().paused,
+        getPlayPathSnapshot().pointCount,
+      ],
+      [true, true, 3],
+      "a paused route remains locked",
+    );
+    stopPath();
+    assert.deepEqual(
+      [
+        getPlayPathSnapshot().routeLocked,
+        getPlayPathSnapshot().available,
+        getPlayPathSnapshot().pointCount,
+      ],
+      [false, true, 2],
+      "stopping adopts the layer selected during playback",
+    );
+  });
+
   it("counts down, then flies every sample in order, waiting for tiles, and finishes", async () => {
     const globe = makeGlobe();
     drawPath(globe);
@@ -336,7 +496,11 @@ describe("play-path tool", () => {
     assert.ok(Math.abs(Cesium.Math.toDegrees(globe.flights[0].pitch) + 45) < 1e-6);
     const range = Cartesian3.distance(globe.flights[0].destination, at(A));
     assert.ok(range >= PLAY_MIN_RANGE_METERS);
-    assert.equal(getPlayPathSnapshot().currentIndex, 2, "ends on the last sample");
+    assert.equal(
+      getPlayPathSnapshot().currentIndex,
+      0,
+      "returns to the idle route after finishing",
+    );
   });
 
   it("clamps a hand-picked flight step to the range the path allows", () => {
@@ -362,13 +526,6 @@ describe("play-path tool", () => {
         !getPlayPathSnapshot().playing &&
         getPlayPathSnapshot().countdown === null &&
         globe.flights.length >= 3,
-    );
-    assert.equal(getPlayPathSnapshot().reverse, true);
-    assert.ok(
-      Math.abs(
-        Cartesian3.distance(globe.flights[0].destination, at(Cp)) -
-          Cartesian3.distance(globe.flights[0].destination, at(Cp)),
-      ) < 1e-9,
     );
     // Looking west along the path on the way back.
     assert.ok(Math.abs(Cesium.Math.toDegrees(globe.flights[0].heading) - 270) < 1);

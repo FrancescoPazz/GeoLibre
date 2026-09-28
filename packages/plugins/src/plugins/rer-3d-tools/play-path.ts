@@ -1,7 +1,7 @@
 import type { Cartesian3 } from "@cesium/engine";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { GeoLibreAppAPI } from "../../types";
-import { geodesicMeters } from "./draw-geometry";
+import { figuresFromFeatures, geodesicMeters } from "./draw-geometry";
 import { fromLngLatAlt, type LngLatAlt } from "./line-of-sight-geometry";
 import { getMeasure3dSnapshot, subscribeMeasure3d } from "./measure-3d";
 import {
@@ -55,8 +55,10 @@ export interface PlayPathState {
   open: boolean;
   /** \`false\` while no primary globe is mounted. */
   bound: boolean;
-  /** The 3D Measure figure is a path with at least two samples. */
+  /** The active-layer (or legacy 3D Measure) route has at least two samples. */
   available: boolean;
+  /** A countdown, flight, or paused flight owns a captured route. */
+  routeLocked: boolean;
   playing: boolean;
   /** Paused mid-way: play resumes from `currentIndex`. */
   paused: boolean;
@@ -107,6 +109,8 @@ let countdownTimer: ReturnType<typeof setTimeout> | null = null;
 let flightId = 0;
 let abortCurrent: (() => void) | null = null;
 let unsubscribeMeasure: (() => void) | null = null;
+let unsubscribeSelection: (() => void) | null = null;
+let hostApp: GeoLibreAppAPI | null = null;
 
 let snapshot: PlayPathState = buildSnapshot();
 const listeners = new Set<() => void>();
@@ -138,8 +142,33 @@ export function pathForFlight(measure = getMeasure3dSnapshot()): LngLatAlt[] {
   return source;
 }
 
+/** Whether the host can keep Play Path synchronized with its active layer. */
+function hasActiveLayerPathSource(): boolean {
+  return Boolean(
+    hostApp?.getSelectedLayerId && hostApp.getLayerFeatures && hostApp.onSelectionChange,
+  );
+}
+
+/** The first usable line or polygon from the host's active layer. */
+function activeLayerPath(): LngLatAlt[] {
+  const app = hostApp;
+  if (!hasActiveLayerPathSource() || !app?.getSelectedLayerId || !app.getLayerFeatures) return [];
+  const layerId = app.getSelectedLayerId();
+  if (!layerId) return [];
+  try {
+    const figure = figuresFromFeatures(app.getLayerFeatures(layerId)).find(
+      (candidate) =>
+        (candidate.mode === "line" || candidate.mode === "polygon") && candidate.points.length >= 2,
+    );
+    return figure?.points.map((point) => ({ ...point })) ?? [];
+  } catch {
+    // A layer can disappear between selection and feature lookup; treat it as unavailable.
+    return [];
+  }
+}
+
 function livePath(): LngLatAlt[] {
-  return pathForFlight();
+  return hasActiveLayerPathSource() ? activeLayerPath() : pathForFlight();
 }
 
 function pathLength(points: LngLatAlt[]): number {
@@ -174,7 +203,8 @@ function buildSnapshot(): PlayPathState {
   return {
     open,
     bound: isLive(),
-    available: isLive() && livePath().length >= 2,
+    available: isLive() && points.length >= 2,
+    routeLocked: flight !== null,
     playing,
     paused,
     countdown,
@@ -362,6 +392,18 @@ function resolveSamplingStep(points: LngLatAlt[]): number {
   return flightSamplingStep(length, metersPerPixel());
 }
 
+/** Re-read the idle route and its sampling settings after a layer change. */
+function refreshIdleRoute(): void {
+  if (flight) return;
+  const source = isLive() ? livePath() : [];
+  if (source.length >= 2) samplingStepM = resolveSamplingStep(source);
+  else {
+    samplingStepM = SAMPLING_STEP_DISABLED;
+    stepRange = [0, 0];
+  }
+  publish();
+}
+
 /** Ground metres per screen pixel at the camera's height (0 for an orthographic view). */
 function metersPerPixel(): number {
   if (!isLive()) return 0;
@@ -399,9 +441,10 @@ async function run(id: number): Promise<void> {
       await waitForTiles();
       if (!flight || flight.id !== id) return;
       if (i === last) {
+        flight = null;
         playing = false;
         paused = false;
-        publish();
+        refreshIdleRoute();
         return;
       }
       flight.index = next;
@@ -433,7 +476,7 @@ function startCountdown(id: number): void {
   countdownTimer = setTimeout(tick, timing.countdownTickMs);
 }
 
-/** Start (or resume) the flight along the current 3D Measure path. */
+/** Start (or resume) the flight along the current active-layer route. */
 export function playPath(): boolean {
   if (!isLive()) return false;
   if (playing) return true;
@@ -449,13 +492,15 @@ export function playPath(): boolean {
   const Cesium = C();
   const h = handle!;
   const cameraPos = Cesium.Cartesian3.clone(h.camera.positionWC);
-  const vertices = getMeasure3dSnapshot().geometry.points;
-  if (
-    vertices.length >= 2 &&
-    Cesium.Cartesian3.distance(cameraPos, fromLngLatAlt(Cesium, source[0])) >
-      PLAY_PATH_CAMERA_SANITY_METERS
-  ) {
-    source = vertices.map((p) => ({ ...p }));
+  if (!hasActiveLayerPathSource()) {
+    const vertices = getMeasure3dSnapshot().geometry.points;
+    if (
+      vertices.length >= 2 &&
+      Cesium.Cartesian3.distance(cameraPos, fromLngLatAlt(Cesium, source[0])) >
+        PLAY_PATH_CAMERA_SANITY_METERS
+    ) {
+      source = vertices.map((p) => ({ ...p }));
+    }
   }
   samplingStepM = resolveSamplingStep(source);
   const points = resamplePathForFlight(Cesium, source, samplingStepM);
@@ -484,7 +529,7 @@ export function pausePath(): void {
     flight = null;
     playing = false;
     paused = false;
-    publish();
+    refreshIdleRoute();
     return;
   }
   if (!playing) return;
@@ -505,7 +550,7 @@ export function stopPath(): void {
   flight = null;
   playing = false;
   paused = false;
-  publish();
+  refreshIdleRoute();
   if (f && isLive() && f.points.length >= 2) {
     const start = f.reverse ? f.points.length - 1 : 0;
     const neighbour = f.reverse ? start - 1 : start + 1;
@@ -535,8 +580,8 @@ export function setPlayPathSamplingStep(step: number | "auto"): void {
       Number.isFinite(step) && step > 0 ? snapSamplingStep(step) : SAMPLING_STEP_DISABLED;
   }
   if (!flight) {
-    const source = handle ? livePath() : [];
-    samplingStepM = source.length >= 2 ? resolveSamplingStep(source) : SAMPLING_STEP_DISABLED;
+    refreshIdleRoute();
+    return;
   }
   publish();
 }
@@ -554,18 +599,19 @@ function primaryGlobe(app: GeoLibreAppAPI): CesiumSceneHandle | null {
 }
 
 function attach(app: GeoLibreAppAPI): void {
-  if (isLive()) return;
+  hostApp = app;
+  if (hasActiveLayerPathSource()) {
+    unsubscribeSelection ??= app.onSelectionChange?.(() => refreshIdleRoute()) ?? null;
+  } else {
+    unsubscribeMeasure ??= subscribeMeasure3d(() => refreshIdleRoute());
+  }
+  if (isLive()) {
+    refreshIdleRoute();
+    return;
+  }
   handle = primaryGlobe(app);
   if (!handle) return;
-  unsubscribeMeasure ??= subscribeMeasure3d(() => {
-    if (!flight) {
-      const source = livePath();
-      samplingStepM = source.length >= 2 ? resolveSamplingStep(source) : SAMPLING_STEP_DISABLED;
-    }
-    publish();
-  });
-  const source = livePath();
-  samplingStepM = source.length >= 2 ? resolveSamplingStep(source) : SAMPLING_STEP_DISABLED;
+  refreshIdleRoute();
 }
 
 function detach(): void {
@@ -579,6 +625,9 @@ function detach(): void {
   handle = null;
   unsubscribeMeasure?.();
   unsubscribeMeasure = null;
+  unsubscribeSelection?.();
+  unsubscribeSelection = null;
+  hostApp = null;
 }
 
 export function openPlayPathPanel(app: GeoLibreAppAPI): void {
