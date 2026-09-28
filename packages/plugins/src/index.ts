@@ -711,6 +711,7 @@ export {
   type MicrozonationProjects,
   type MicrozonationRecord,
 } from "./plugins/microzonation";
+export {
   DEFAULT_TENNESSEE_GIS_LABELS,
   maplibreTennesseeGisPlugin,
   setTennesseeGisLabels,
