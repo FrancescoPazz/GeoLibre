@@ -31,12 +31,18 @@ Configuration:
 - `GEOLIBRE_OAUTH_CLIENTS`: JSON array of exact public-client registrations:
   ```json
   [
-    {"client_id":"geolibre-web","name":"GeoLibre Web",
-     "redirect_uris":["https://app.example/oauth-callback.html"],
-     "scopes":["read:projects","write:projects","share:public","manage:sessions"]},
-    {"client_id":"geolibre-desktop","name":"GeoLibre Desktop",
-     "redirect_uris":["org.geolibre.desktop:/oauth/callback"],
-     "scopes":["read:projects","write:projects","share:public","manage:sessions"]}
+    {
+      "client_id": "geolibre-web",
+      "name": "GeoLibre Web",
+      "redirect_uris": ["https://app.example/oauth-callback.html"],
+      "scopes": ["read:projects", "write:projects", "share:public", "manage:sessions"]
+    },
+    {
+      "client_id": "geolibre-desktop",
+      "name": "GeoLibre Desktop",
+      "redirect_uris": ["org.geolibre.desktop:/oauth/callback"],
+      "scopes": ["read:projects", "write:projects", "share:public", "manage:sessions"]
+    }
   ]
   ```
   Empty or unset disables OAuth without validating OAuth-only settings. Both

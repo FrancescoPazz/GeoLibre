@@ -314,7 +314,6 @@ const CONSENT_GATED_PLUGIN_IDS: ReadonlySet<string> = new Set([
   REVERSE_GEOCODE_PLUGIN_ID,
 ]);
 
-
 // A deployment that names catalog files (`CATALOG_URLS`) wants the Catalog
 // panel open from the start, the way a geoportal opens on its data tree.
 // Marked default-active rather than activated here: activation needs the
@@ -327,7 +326,6 @@ if (readDeploymentEnvValue("VITE_CATALOG_URLS")?.trim()) {
 export const DEEP_LINKABLE_PLUGIN_IDS: readonly string[] = BUILT_IN_PLUGINS.map(
   (plugin) => plugin.id,
 ).filter((id) => !CONSENT_GATED_PLUGIN_IDS.has(id));
-
 
 // The Timelapse plugin records the map to a video blob but cannot depend on
 // the app's Tauri I/O helpers, so the save step (native dialog under Tauri,

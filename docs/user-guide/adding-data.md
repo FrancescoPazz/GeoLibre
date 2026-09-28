@@ -59,20 +59,20 @@ KML is read by an in-house parser that keeps the file's own symbology, so styled
 
 ## Web services
 
-| Item | Notes |
-| --- | --- |
-| **XYZ Layer** | A raster or vector tile service using a `{z}/{x}/{y}` URL template. |
-| **[WCS Layer](../data-formats.md#wcs-raster-subsets)** | Downloads numerical GeoTIFF subsets from WCS 1.0.0 services. |
-| **WMS Layer** | A Web Map Service layer, with click-to-identify through GetFeatureInfo where supported. In the desktop app, once the layers are retrieved, a layer can be requested in any coordinate reference system it offers; the tiles are reprojected to Web Mercator. |
-| **WFS Layer** | A Web Feature Service layer, with optional automatic refresh. |
-| **WMTS Layer** | A Web Map Tile Service layer. |
-| **OGC API - Features** | An OGC API - Features endpoint; pick a collection and add it as a vector layer. |
-| **OGC Vector Tiles** | An OGC API - Tiles vector tile service. |
-| **ArcGIS Layer** | An ArcGIS FeatureServer, VectorTileServer, MapServer, or ImageServer layer. See [ArcGIS services](#arcgis-services). |
-| **GeoRSS Layer** | A GeoRSS feed, added as points and lines with the feed's titles and descriptions as attributes. |
-| **STAC Layer** | Searches a STAC catalog and adds the matching raster items. |
-| **Video Layer** | Drapes a video over four map corner coordinates, the way MapLibre's video source does. |
-| **Deck.gl Layer** | Renders a deck.gl layer specification over the map, for visualizations MapLibre's own layer types do not cover. |
+| Item                                                   | Notes                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **XYZ Layer**                                          | A raster or vector tile service using a `{z}/{x}/{y}` URL template.                                                                                                                                                                                          |
+| **[WCS Layer](../data-formats.md#wcs-raster-subsets)** | Downloads numerical GeoTIFF subsets from WCS 1.0.0 services.                                                                                                                                                                                                 |
+| **WMS Layer**                                          | A Web Map Service layer, with click-to-identify through GetFeatureInfo where supported. In the desktop app, once the layers are retrieved, a layer can be requested in any coordinate reference system it offers; the tiles are reprojected to Web Mercator. |
+| **WFS Layer**                                          | A Web Feature Service layer, with optional automatic refresh.                                                                                                                                                                                                |
+| **WMTS Layer**                                         | A Web Map Tile Service layer.                                                                                                                                                                                                                                |
+| **OGC API - Features**                                 | An OGC API - Features endpoint; pick a collection and add it as a vector layer.                                                                                                                                                                              |
+| **OGC Vector Tiles**                                   | An OGC API - Tiles vector tile service.                                                                                                                                                                                                                      |
+| **ArcGIS Layer**                                       | An ArcGIS FeatureServer, VectorTileServer, MapServer, or ImageServer layer. See [ArcGIS services](#arcgis-services).                                                                                                                                         |
+| **GeoRSS Layer**                                       | A GeoRSS feed, added as points and lines with the feed's titles and descriptions as attributes.                                                                                                                                                              |
+| **STAC Layer**                                         | Searches a STAC catalog and adds the matching raster items.                                                                                                                                                                                                  |
+| **Video Layer**                                        | Drapes a video over four map corner coordinates, the way MapLibre's video source does.                                                                                                                                                                       |
+| **Deck.gl Layer**                                      | Renders a deck.gl layer specification over the map, for visualizations MapLibre's own layer types do not cover.                                                                                                                                              |
 
 ### ArcGIS services
 

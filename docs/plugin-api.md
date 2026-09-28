@@ -577,7 +577,9 @@ A plugin that adds features from a web service can dress them as the service doe
 
 ```typescript
 const layerId = app.addGeoJsonLayer("Land cover", features);
-const sld = await (await fetch(`${wmsUrl}?service=WMS&version=1.1.1&request=GetStyles&layers=M5:L4`)).text();
+const sld = await (
+  await fetch(`${wmsUrl}?service=WMS&version=1.1.1&request=GetStyles&layers=M5:L4`)
+).text();
 const result = app.importLayerStyle?.(layerId, sld);
 if (result && !result.ok) console.warn(`Style not applied (${result.reason})`, result.warnings);
 ```

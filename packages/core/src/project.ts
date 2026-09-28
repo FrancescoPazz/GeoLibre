@@ -1864,7 +1864,6 @@ function hasRestorableSourceUrl(layer: GeoLibreLayer): boolean {
 export const USE_AUTHENTICATION_METADATA_KEY = "useAuthentication";
 
 function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
-
   layer = withoutLocalRasterBytes(layer);
 
   // A layer whose service is protected by the geoportal sign-in carries the
@@ -1876,7 +1875,6 @@ function prepareLayerForSave(layer: GeoLibreLayer): GeoLibreLayer {
     const { requestHeaders: _requestHeaders, ...source } = layer.source;
     layer = { ...layer, source };
   }
-
 
   layer = portableLayer(layer);
 

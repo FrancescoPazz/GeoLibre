@@ -123,14 +123,14 @@ what `describe_project` showed it without tracking UUIDs.
 
 ### Framing and decoration
 
-| Tool | What it does |
-| --- | --- |
-| `set_view` | Set center, zoom, bearing, and pitch, or pass a `bbox` to frame an area. |
-| `set_basemap` | Switch the background style. |
-| `set_map_legend` | Show the map legend, built from the layers' own symbology. |
-| `add_legend` | Add a legend from a preset, a `{label: color}` map, or paired lists. |
-| `add_colorbar` | Add a colorbar for continuous data. |
-| `add_swipe` | Configure the split-map comparison slider. |
+| Tool             | What it does                                                             |
+| ---------------- | ------------------------------------------------------------------------ |
+| `set_view`       | Set center, zoom, bearing, and pitch, or pass a `bbox` to frame an area. |
+| `set_basemap`    | Switch the background style.                                             |
+| `set_map_legend` | Show the map legend, built from the layers' own symbology.               |
+| `add_legend`     | Add a legend from a preset, a `{label: color}` map, or paired lists.     |
+| `add_colorbar`   | Add a colorbar for continuous data.                                      |
+| `add_swipe`      | Configure the split-map comparison slider.                               |
 
 ### Export
 

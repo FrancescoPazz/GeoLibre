@@ -15,33 +15,33 @@ They are grouped together because they behave the same way, not because they sha
 
 ## At a glance
 
-| Panel | Provider | What you get |
-| --- | --- | --- |
-| [FEMA NFHL](#fema-nfhl) | FEMA | National Flood Hazard Layer WMS layers |
-| [NASA Earthdata](#nasa-earthdata) | NASA GIBS | 1,100+ pre-rendered global imagery layers, by date |
-| [US EPA EnviroAtlas](#us-epa-enviroatlas) | EPA | Environmental and ecosystem map services |
-| [USGS National Map](#usgs-national-map) | USGS | Topo, imagery, hydrography, elevation, and index services |
-| [USGS NLDI](#usgs-nldi) | USGS | Flowline tracing, hydrolocation, basins, and network navigation |
-| [Vantor Open Data](#vantor-open-data) | Vantor | Disaster-event satellite imagery (COG) |
-| [Planet Open Data](#planet-open-data) | Planet Labs | Planet's disaster data releases, through the STAC browser |
-| [Earthdata GIS](#earthdata-gis) | NASA EOSDIS | ArcGIS image, map, and feature services, and published web maps |
-| [OpenAerialMap](#openaerialmap) | OpenAerialMap | Openly licensed drone and aerial imagery |
-| [OSM Downloader](#osm-downloader) | OpenStreetMap / Overpass | Buildings, roads, amenities, waterways, land use, or custom OSM tags |
-| [ArcGIS Hub](#arcgis-hub) | Esri | Public datasets published to ArcGIS Hub |
-| [Tennessee GIS](#tennessee-gis) | State of Tennessee | The geodata.tn.gov open GIS data portal |
-| [US Federal GIS](#us-federal-gis) | US federal agencies | The public GIS portals of 24 federal agencies, from the Census Bureau and NOAA to USGS and FEMA |
-| [US State GIS](#us-state-gis) | US state GIS offices | The public GIS data portals of all 50 states and DC |
-| [US Local GIS](#us-local-gis) | US cities and counties | The GIS and open-data portals of about 150 large US cities, counties, and regional agencies |
-| [Socrata](#socrata) | Socrata | Government open-data portals |
-| [CKAN](#ckan) | HDX | Humanitarian Data Exchange resources |
-| [STAC Catalogs](#stac-catalogs) | any STAC | Any STAC API or static catalog, via STAC Index |
-| [Source Cooperative](#source-cooperative) | Source.coop | Cloud-native products (PMTiles, GeoParquet, COG) |
-| [Natural Earth](#natural-earth) | Natural Earth | The Natural Earth vector and raster themes |
-| [Hugging Face](#hugging-face) | Hugging Face | Geospatial files in dataset repos — and uploads |
-| [Satellite Embeddings](#satellite-embeddings) | Source.coop, Tessera | Pre-computed foundation-model embeddings (AlphaEarth, Tessera, Earth Index, …) |
-| [Fields of the World](#fields-of-the-world) | Source.coop | Global agricultural field boundaries (2024, 2025) |
-| [Ocean Data Platform](#ocean-data-platform) | HUB Ocean | Public ocean datasets: habitats, protected areas, fisheries, observations |
-| [GeoLens](#geolens) | your server | A self-hosted spatial catalog |
+| Panel                                         | Provider                 | What you get                                                                                    |
+| --------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------- |
+| [FEMA NFHL](#fema-nfhl)                       | FEMA                     | National Flood Hazard Layer WMS layers                                                          |
+| [NASA Earthdata](#nasa-earthdata)             | NASA GIBS                | 1,100+ pre-rendered global imagery layers, by date                                              |
+| [US EPA EnviroAtlas](#us-epa-enviroatlas)     | EPA                      | Environmental and ecosystem map services                                                        |
+| [USGS National Map](#usgs-national-map)       | USGS                     | Topo, imagery, hydrography, elevation, and index services                                       |
+| [USGS NLDI](#usgs-nldi)                       | USGS                     | Flowline tracing, hydrolocation, basins, and network navigation                                 |
+| [Vantor Open Data](#vantor-open-data)         | Vantor                   | Disaster-event satellite imagery (COG)                                                          |
+| [Planet Open Data](#planet-open-data)         | Planet Labs              | Planet's disaster data releases, through the STAC browser                                       |
+| [Earthdata GIS](#earthdata-gis)               | NASA EOSDIS              | ArcGIS image, map, and feature services, and published web maps                                 |
+| [OpenAerialMap](#openaerialmap)               | OpenAerialMap            | Openly licensed drone and aerial imagery                                                        |
+| [OSM Downloader](#osm-downloader)             | OpenStreetMap / Overpass | Buildings, roads, amenities, waterways, land use, or custom OSM tags                            |
+| [ArcGIS Hub](#arcgis-hub)                     | Esri                     | Public datasets published to ArcGIS Hub                                                         |
+| [Tennessee GIS](#tennessee-gis)               | State of Tennessee       | The geodata.tn.gov open GIS data portal                                                         |
+| [US Federal GIS](#us-federal-gis)             | US federal agencies      | The public GIS portals of 24 federal agencies, from the Census Bureau and NOAA to USGS and FEMA |
+| [US State GIS](#us-state-gis)                 | US state GIS offices     | The public GIS data portals of all 50 states and DC                                             |
+| [US Local GIS](#us-local-gis)                 | US cities and counties   | The GIS and open-data portals of about 150 large US cities, counties, and regional agencies     |
+| [Socrata](#socrata)                           | Socrata                  | Government open-data portals                                                                    |
+| [CKAN](#ckan)                                 | HDX                      | Humanitarian Data Exchange resources                                                            |
+| [STAC Catalogs](#stac-catalogs)               | any STAC                 | Any STAC API or static catalog, via STAC Index                                                  |
+| [Source Cooperative](#source-cooperative)     | Source.coop              | Cloud-native products (PMTiles, GeoParquet, COG)                                                |
+| [Natural Earth](#natural-earth)               | Natural Earth            | The Natural Earth vector and raster themes                                                      |
+| [Hugging Face](#hugging-face)                 | Hugging Face             | Geospatial files in dataset repos — and uploads                                                 |
+| [Satellite Embeddings](#satellite-embeddings) | Source.coop, Tessera     | Pre-computed foundation-model embeddings (AlphaEarth, Tessera, Earth Index, …)                  |
+| [Fields of the World](#fields-of-the-world)   | Source.coop              | Global agricultural field boundaries (2024, 2025)                                               |
+| [Ocean Data Platform](#ocean-data-platform)   | HUB Ocean                | Public ocean datasets: habitats, protected areas, fisheries, observations                       |
+| [GeoLens](#geolens)                           | your server              | A self-hosted spatial catalog                                                                   |
 
 ---
 
@@ -275,7 +275,7 @@ Browses the public datasets on HUB Ocean's [Ocean Data Platform](https://app.hub
 - **Zoom** fits the map to the dataset's extent, and **Details** opens its page in the ODP catalog, with its full description, provenance, and download options.
 
 !!! note "Public datasets only"
-    The panel lists and reads only datasets shared publicly on ODP; it does not sign in or take an API key. ODP's tile and features endpoints do not allow other websites to read them directly, so GeoLibre reads them through its own tile proxy (`tiles.geolibre.app`). Each dataset keeps its provider's license, shown in the result list; check it before reuse.
+The panel lists and reads only datasets shared publicly on ODP; it does not sign in or take an API key. ODP's tile and features endpoints do not allow other websites to read them directly, so GeoLibre reads them through its own tile proxy (`tiles.geolibre.app`). Each dataset keeps its provider's license, shown in the result list; check it before reuse.
 
 ## GeoLens
 
