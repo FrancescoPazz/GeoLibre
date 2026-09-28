@@ -4,15 +4,12 @@ import { act, fireEvent, render, screen } from "./helpers/dom";
 import { createElement } from "react";
 import type { TerrainProfile } from "../packages/plugins/src/plugins/rer-3d-tools/terrain-profile";
 
-const { Measure3dProfileChart } = await import(
-  "../apps/geolibre-desktop/src/components/panels/Measure3dProfileChart"
-);
-const { Measure3dPanel } = await import(
-  "../apps/geolibre-desktop/src/components/panels/Measure3dPanel"
-);
-const { openMeasure3dPanel, restoreMeasure3d } = await import(
-  "../packages/plugins/src/plugins/rer-3d-tools/measure-3d"
-);
+const { Measure3dProfileChart } =
+  await import("../apps/geolibre-desktop/src/components/panels/Measure3dProfileChart");
+const { Measure3dPanel } =
+  await import("../apps/geolibre-desktop/src/components/panels/Measure3dPanel");
+const { openMeasure3dPanel, restoreMeasure3d } =
+  await import("../packages/plugins/src/plugins/rer-3d-tools/measure-3d");
 
 const profile: TerrainProfile = {
   samples: [
@@ -48,19 +45,15 @@ describe("3D Measure profile chart", () => {
             mapPointerEvents += 1;
           },
         },
-        createElement(Measure3dProfileChart, { profile, hover: null })
-      )
+        createElement(Measure3dProfileChart, { profile, hover: null }),
+      ),
     );
     const chart = screen.getByTestId("measure-3d-chart");
     let wheelCanceled = true;
     act(() => {
       wheelCanceled = fireEvent.wheel(chart, { deltaY: -350, clientX: 148 });
     });
-    assert.equal(
-      wheelCanceled,
-      false,
-      "the chart cancels the browser/map default wheel action"
-    );
+    assert.equal(wheelCanceled, false, "the chart cancels the browser/map default wheel action");
 
     const beforePan = Number(chart.getAttribute("data-viewport-start"));
     const end = Number(chart.getAttribute("data-viewport-end"));
@@ -75,7 +68,7 @@ describe("3D Measure profile chart", () => {
     fireEvent.pointerUp(chart, { pointerId: 1, clientX: 80 });
     assert.ok(
       Number(chart.getAttribute("data-viewport-start")) > beforePan,
-      "dragging left pans later"
+      "dragging left pans later",
     );
     assert.equal(mapPointerEvents, 0, "chart panning does not reach the map");
   });

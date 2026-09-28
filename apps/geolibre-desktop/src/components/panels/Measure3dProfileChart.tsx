@@ -47,11 +47,9 @@ export function Measure3dProfileChart({
         distance: sample.distanceM,
         elevation: sample.alt,
       })),
-    [profile]
+    [profile],
   );
-  const [viewport, setViewport] = useState(() =>
-    fitMeasure3dProfileViewport(points)
-  );
+  const [viewport, setViewport] = useState(() => fitMeasure3dProfileViewport(points));
   const drag = useRef<DragState | null>(null);
   const chartRef = useRef<SVGSVGElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -64,11 +62,11 @@ export function Measure3dProfileChart({
 
   const chartPoints = useMemo(
     () => visibleMeasure3dProfilePoints(points, viewport),
-    [points, viewport]
+    [points, viewport],
   );
   const chart = useMemo(
     () => buildChartGeometry(chartPoints, CHART_WIDTH, CHART_HEIGHT),
-    [chartPoints]
+    [chartPoints],
   );
   const airPath = useMemo(
     () =>
@@ -81,31 +79,28 @@ export function Measure3dProfileChart({
             .toFixed(2)} ${chart.yScale(sample.alt).toFixed(2)}`;
         })
         .join(" "),
-    [chart, profile, viewport.start]
+    [chart, profile, viewport.start],
   );
-  const fullSpan =
-    points[points.length - 1]?.distance - (points[0]?.distance ?? 0);
+  const fullSpan = points[points.length - 1]?.distance - (points[0]?.distance ?? 0);
   const canPan = viewport.end - viewport.start < fullSpan;
   const hovered = hover !== null ? profile.samples[hover] : undefined;
 
-  const distanceAtEvent = (event: { clientX: number }) => {
+  const distanceAtEvent = (event: { clientX?: number }) => {
     const rect = chartRef.current?.getBoundingClientRect();
-    const renderedWidth = rect?.width || CHART_WIDTH;
-    const svgX = ((event.clientX - (rect?.left ?? 0)) / renderedWidth) * CHART_WIDTH;
+    const left = Number.isFinite(rect?.left) ? rect!.left : 0;
+    const renderedWidth =
+      rect && Number.isFinite(rect.width) && rect.width > 0 ? rect.width : CHART_WIDTH;
+    const clientX = Number.isFinite(event.clientX) ? event.clientX : left + renderedWidth / 2;
+    const svgX = ((clientX - left) / renderedWidth) * CHART_WIDTH;
     const plotWidth = CHART_WIDTH - chart.padding.left - chart.padding.right;
-    const fraction = Math.min(
-      1,
-      Math.max(0, (svgX - chart.padding.left) / plotWidth)
-    );
+    const fraction = Math.min(1, Math.max(0, (svgX - chart.padding.left) / plotWidth));
     return viewport.start + fraction * (viewport.end - viewport.start);
   };
 
-  const updateHover = (event: {
-    clientX: number;
-  }) => {
+  const updateHover = (event: { clientX: number }) => {
     const index = nearestMeasure3dProfileSample(
       profile.samples.map((sample) => sample.distanceM),
-      distanceAtEvent(event)
+      distanceAtEvent(event),
     );
     setMeasure3dHover(index >= 0 ? index : null);
   };
@@ -119,14 +114,7 @@ export function Measure3dProfileChart({
     // boundary replace it).
     const anchor = distanceAtEvent(event);
     const factor = Math.exp(event.deltaY * WHEEL_ZOOM_RATE);
-    setViewport((current) =>
-      zoomMeasure3dProfileViewport(
-        current,
-        points,
-        anchor,
-        factor
-      )
-    );
+    setViewport((current) => zoomMeasure3dProfileViewport(current, points, anchor, factor));
   };
 
   const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -153,9 +141,7 @@ export function Measure3dProfileChart({
     const offset =
       ((activeDrag.startX - event.clientX) / width) *
       (activeDrag.viewport.end - activeDrag.viewport.start);
-    setViewport(
-      panMeasure3dProfileViewport(activeDrag.viewport, points, offset)
-    );
+    setViewport(panMeasure3dProfileViewport(activeDrag.viewport, points, offset));
   };
 
   const finishDrag = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -207,11 +193,7 @@ export function Measure3dProfileChart({
         </defs>
         <g clipPath={`url(#${clipId})`}>
           <path d={chart.areaPath} className="fill-emerald-500/20" />
-          <path
-            d={chart.linePath}
-            className="fill-none stroke-emerald-500"
-            strokeWidth={1.5}
-          />
+          <path d={chart.linePath} className="fill-none stroke-emerald-500" strokeWidth={1.5} />
           <path
             d={airPath}
             className="fill-none stroke-red-500"
@@ -252,11 +234,7 @@ export function Measure3dProfileChart({
         >
           {formatMeters(viewport.end)}
         </text>
-        <text
-          x={2}
-          y={chart.padding.top + 8}
-          className="fill-muted-foreground text-[9px]"
-        >
+        <text x={2} y={chart.padding.top + 8} className="fill-muted-foreground text-[9px]">
           {chart.maxElevation.toFixed(0)}
         </text>
         <text
@@ -267,10 +245,7 @@ export function Measure3dProfileChart({
           {chart.minElevation.toFixed(0)}
         </text>
       </svg>
-      <div
-        className="h-4 text-xs tabular-nums text-muted-foreground"
-        aria-live="polite"
-      >
+      <div className="h-4 text-xs tabular-nums text-muted-foreground" aria-live="polite">
         {hovered
           ? `${formatMeters(hovered.distanceM)} · ${hovered.alt.toFixed(1)} m`
           : t("toolbar.measure3d.profile.hoverHint")}

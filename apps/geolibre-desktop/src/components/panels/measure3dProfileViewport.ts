@@ -14,9 +14,7 @@ export interface Measure3dProfileViewport {
   end: number;
 }
 
-function bounds(
-  points: readonly Measure3dProfilePoint[]
-): Measure3dProfileViewport {
+function bounds(points: readonly Measure3dProfilePoint[]): Measure3dProfileViewport {
   const start = points[0]?.distance ?? 0;
   const end = points[points.length - 1]?.distance ?? start;
   return { start, end: Math.max(start, end) };
@@ -28,15 +26,13 @@ function span(viewport: Measure3dProfileViewport): number {
 
 /** Show the whole sampled path. */
 export function fitMeasure3dProfileViewport(
-  points: readonly Measure3dProfilePoint[]
+  points: readonly Measure3dProfilePoint[],
 ): Measure3dProfileViewport {
   return bounds(points);
 }
 
 /** The closest useful zoom limit: never show less than one sampled interval. */
-export function minimumMeasure3dProfileSpan(
-  points: readonly Measure3dProfilePoint[]
-): number {
+export function minimumMeasure3dProfileSpan(points: readonly Measure3dProfilePoint[]): number {
   const fullSpan = span(bounds(points));
   let smallest = Number.POSITIVE_INFINITY;
   for (let i = 1; i < points.length; i += 1) {
@@ -54,7 +50,7 @@ export function zoomMeasure3dProfileViewport(
   viewport: Measure3dProfileViewport,
   points: readonly Measure3dProfilePoint[],
   anchor: number,
-  factor: number
+  factor: number,
 ): Measure3dProfileViewport {
   const full = bounds(points);
   const fullSpan = span(full);
@@ -63,14 +59,11 @@ export function zoomMeasure3dProfileViewport(
   const currentSpan = span(viewport);
   const minSpan = Math.min(fullSpan, minimumMeasure3dProfileSpan(points));
   const nextSpan = Math.min(fullSpan, Math.max(minSpan, currentSpan * factor));
-  const safeAnchor = Math.min(viewport.end, Math.max(viewport.start, anchor));
-  const fraction =
-    currentSpan > 0 ? (safeAnchor - viewport.start) / currentSpan : 0.5;
+  const anchorDistance = Number.isFinite(anchor) ? anchor : (viewport.start + viewport.end) / 2;
+  const safeAnchor = Math.min(viewport.end, Math.max(viewport.start, anchorDistance));
+  const fraction = currentSpan > 0 ? (safeAnchor - viewport.start) / currentSpan : 0.5;
   const unclampedStart = safeAnchor - nextSpan * fraction;
-  const start = Math.min(
-    full.end - nextSpan,
-    Math.max(full.start, unclampedStart)
-  );
+  const start = Math.min(full.end - nextSpan, Math.max(full.start, unclampedStart));
   return { start, end: start + nextSpan };
 }
 
@@ -78,16 +71,13 @@ export function zoomMeasure3dProfileViewport(
 export function panMeasure3dProfileViewport(
   viewport: Measure3dProfileViewport,
   points: readonly Measure3dProfilePoint[],
-  offset: number
+  offset: number,
 ): Measure3dProfileViewport {
   const full = bounds(points);
   const viewportSpan = span(viewport);
   const start = Math.min(
     full.end - viewportSpan,
-    Math.max(
-      full.start,
-      viewport.start + (Number.isFinite(offset) ? offset : 0)
-    )
+    Math.max(full.start, viewport.start + (Number.isFinite(offset) ? offset : 0)),
   );
   return { start, end: start + viewportSpan };
 }
@@ -95,7 +85,7 @@ export function panMeasure3dProfileViewport(
 function interpolate(
   from: Measure3dProfilePoint,
   to: Measure3dProfilePoint,
-  distance: number
+  distance: number,
 ): Measure3dProfilePoint {
   const length = to.distance - from.distance;
   const fraction = length > 0 ? (distance - from.distance) / length : 0;
@@ -112,7 +102,7 @@ function interpolate(
  */
 export function visibleMeasure3dProfilePoints(
   points: readonly Measure3dProfilePoint[],
-  viewport: Measure3dProfileViewport
+  viewport: Measure3dProfileViewport,
 ): Measure3dProfilePoint[] {
   if (points.length === 0) return [];
   const full = bounds(points);
@@ -145,7 +135,7 @@ export function visibleMeasure3dProfilePoints(
 /** Find the source sample nearest a distance represented by the chart cursor. */
 export function nearestMeasure3dProfileSample(
   distances: readonly number[],
-  distance: number
+  distance: number,
 ): number {
   if (distances.length === 0) return -1;
   let nearest = 0;

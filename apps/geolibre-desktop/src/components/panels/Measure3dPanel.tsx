@@ -81,7 +81,7 @@ export function Measure3dPanel() {
   const state = useSyncExternalStore(
     subscribeMeasure3d,
     getMeasure3dSnapshot,
-    getMeasure3dSnapshot
+    getMeasure3dSnapshot,
   );
   if (!state.open) return null;
   return <Measure3dCard state={state} />;
@@ -107,7 +107,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
     if (!card || !bounds) return;
     const maxY = Math.max(
       EDGE_MARGIN,
-      bounds.height - card.getBoundingClientRect().height - EDGE_MARGIN
+      bounds.height - card.getBoundingClientRect().height - EDGE_MARGIN,
     );
     setPosition((current) => {
       const y = clamp(current.y, EDGE_MARGIN, maxY);
@@ -116,8 +116,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
   }, [minimized]);
 
   const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label"))
-      return;
+    if ((event.target as HTMLElement).closest("button,input,select,label")) return;
     event.preventDefault();
     const handle = event.currentTarget;
     handle.setPointerCapture(event.pointerId);
@@ -130,11 +129,11 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
       const cardHeight = card?.getBoundingClientRect().height ?? 80;
       const maxX = Math.max(
         EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN
+        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
       );
       const maxY = Math.max(
         EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN
+        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
       );
       setPosition({
         x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
@@ -152,24 +151,15 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
     handle.addEventListener("pointercancel", handleUp);
   };
 
-  const {
-    mode,
-    options,
-    geometry,
-    measures,
-    bound,
-    sampling,
-    pathCount,
-    activePath,
-    notes,
-  } = state;
+  const { mode, options, geometry, measures, bound, sampling, pathCount, activePath, notes } =
+    state;
   const hasFigure = geometry.points.length > 0;
   const isPath = mode === "line" || mode === "polygon";
   const hint = !bound
     ? t("toolbar.measure3d.unavailable")
     : hasFigure
-    ? t(`toolbar.measure3d.hint.${mode}Next` as const)
-    : t(`toolbar.measure3d.hint.${mode}` as const);
+      ? t(`toolbar.measure3d.hint.${mode}Next` as const)
+      : t(`toolbar.measure3d.hint.${mode}` as const);
 
   return (
     <div
@@ -185,9 +175,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
         onPointerDown={handleDragStart}
       >
         <Ruler className="h-4 w-4 text-sky-500" />
-        <span className="text-sm font-medium">
-          {t("toolbar.measure3d.title")}
-        </span>
+        <span className="text-sm font-medium">{t("toolbar.measure3d.title")}</span>
         <Button
           variant="ghost"
           size="icon"
@@ -205,14 +193,10 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
           className="h-6 w-6"
           aria-expanded={!minimized}
           aria-label={
-            minimized
-              ? t("toolbar.measure3d.expandPanel")
-              : t("toolbar.measure3d.collapsePanel")
+            minimized ? t("toolbar.measure3d.expandPanel") : t("toolbar.measure3d.collapsePanel")
           }
           title={
-            minimized
-              ? t("toolbar.measure3d.expandPanel")
-              : t("toolbar.measure3d.collapsePanel")
+            minimized ? t("toolbar.measure3d.expandPanel") : t("toolbar.measure3d.collapsePanel")
           }
           onClick={() => setMinimized((value) => !value)}
         >
@@ -234,10 +218,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
       </div>
 
       <div className={minimized ? "hidden" : "space-y-3 p-3"}>
-        <CollapsibleSection
-          title={t("toolbar.measure3d.sections.draw")}
-          defaultOpen
-        >
+        <CollapsibleSection title={t("toolbar.measure3d.sections.draw")} defaultOpen>
           <div className="space-y-3">
             <div
               className="grid grid-cols-5 gap-1"
@@ -273,9 +254,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
               }
               data-testid="measure-3d-hint"
             >
-              {!bound && (
-                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              )}
+              {!bound && <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
               <span>{hint}</span>
             </div>
 
@@ -284,9 +263,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                 <input
                   type="checkbox"
                   checked={options.clampToGround}
-                  onChange={(event) =>
-                    setMeasure3dOptions({ clampToGround: event.target.checked })
-                  }
+                  onChange={(event) => setMeasure3dOptions({ clampToGround: event.target.checked })}
                 />
                 {t("toolbar.measure3d.clampToGround")}
               </label>
@@ -294,19 +271,14 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                 <input
                   type="checkbox"
                   checked={options.showLabels}
-                  onChange={(event) =>
-                    setMeasure3dOptions({ showLabels: event.target.checked })
-                  }
+                  onChange={(event) => setMeasure3dOptions({ showLabels: event.target.checked })}
                 />
                 {t("toolbar.measure3d.showLabels")}
               </label>
             </div>
 
             {isPath && (
-              <div
-                className="flex items-center gap-1.5 text-xs"
-                data-testid="measure-3d-paths"
-              >
+              <div className="flex items-center gap-1.5 text-xs" data-testid="measure-3d-paths">
                 <label className="flex items-center gap-1.5">
                   <span className="text-muted-foreground">
                     {t("toolbar.measure3d.paths.label")}
@@ -315,9 +287,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                     className="h-6 rounded border border-border bg-background px-1 text-xs"
                     value={activePath}
                     aria-label={t("toolbar.measure3d.paths.label")}
-                    onChange={(event) =>
-                      setMeasure3dActivePath(Number(event.target.value))
-                    }
+                    onChange={(event) => setMeasure3dActivePath(Number(event.target.value))}
                   >
                     {Array.from({ length: pathCount }, (_, i) => (
                       <option key={i} value={i}>
@@ -349,10 +319,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                   <Minus className="h-3.5 w-3.5" />
                 </Button>
                 {state.sourceName && (
-                  <span
-                    className="ms-auto truncate text-muted-foreground"
-                    title={state.sourceName}
-                  >
+                  <span className="ms-auto truncate text-muted-foreground" title={state.sourceName}>
                     {t("toolbar.measure3d.paths.loadedFrom", {
                       name: state.sourceName,
                     })}
@@ -364,15 +331,9 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
         </CollapsibleSection>
 
         {hasFigure && (
-          <CollapsibleSection
-            title={t("toolbar.measure3d.sections.measurement")}
-            defaultOpen
-          >
+          <CollapsibleSection title={t("toolbar.measure3d.sections.measurement")} defaultOpen>
             <div className="space-y-1" data-testid="measure-3d-result">
-              <Row
-                label={t("toolbar.measure3d.vertices")}
-                value={String(geometry.points.length)}
-              />
+              <Row label={t("toolbar.measure3d.vertices")} value={String(geometry.points.length)} />
               {mode === "circle" && measures.circleRadiusMeters !== null && (
                 <>
                   <RadiusRow
@@ -413,41 +374,29 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                   value={formatSquareMeters(measures.areaSqm)}
                 />
               )}
-              {(mode === "line" || mode === "polygon") &&
-                measures.segmentMeters.length > 1 && (
-                  <div className="pt-1 text-xs text-muted-foreground">
-                    {t("toolbar.measure3d.segments")}:{" "}
-                    <span className="tabular-nums text-foreground">
-                      {measures.segmentMeters
-                        .map((m) => formatMeters(m))
-                        .join(" · ")}
-                    </span>
-                  </div>
-                )}
+              {(mode === "line" || mode === "polygon") && measures.segmentMeters.length > 1 && (
+                <div className="pt-1 text-xs text-muted-foreground">
+                  {t("toolbar.measure3d.segments")}:{" "}
+                  <span className="tabular-nums text-foreground">
+                    {measures.segmentMeters.map((m) => formatMeters(m)).join(" · ")}
+                  </span>
+                </div>
+              )}
             </div>
           </CollapsibleSection>
         )}
 
-        {(mode === "line" || mode === "polygon") &&
-          geometry.points.length >= 2 && (
-            <CollapsibleSection
-              title={t("toolbar.measure3d.profile.title")}
-              defaultOpen
-            >
-              <ProfileSection state={state} />
-            </CollapsibleSection>
-          )}
+        {(mode === "line" || mode === "polygon") && geometry.points.length >= 2 && (
+          <CollapsibleSection title={t("toolbar.measure3d.profile.title")} defaultOpen>
+            <ProfileSection state={state} />
+          </CollapsibleSection>
+        )}
 
         {hasFigure && (
-          <CollapsibleSection
-            title={t("toolbar.measure3d.sections.notesExport")}
-            defaultOpen
-          >
+          <CollapsibleSection title={t("toolbar.measure3d.sections.notesExport")} defaultOpen>
             <div className="space-y-3">
               <label className="block space-y-1 text-xs">
-                <span className="text-muted-foreground">
-                  {t("toolbar.measure3d.notes")}
-                </span>
+                <span className="text-muted-foreground">{t("toolbar.measure3d.notes")}</span>
                 <textarea
                   className="min-h-[3rem] w-full resize-y rounded border border-border bg-background px-2 py-1 text-xs"
                   value={notes}
@@ -468,7 +417,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                     saveMeasure3dAsLayer(
                       t("toolbar.measure3d.layerName", {
                         mode: t(`toolbar.measure3d.modes.${mode}` as const),
-                      })
+                      }),
                     )
                   }
                 >
@@ -485,7 +434,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                     exportMeasure3dSummary(
                       t("toolbar.measure3d.layerName", {
                         mode: t(`toolbar.measure3d.modes.${mode}` as const),
-                      })
+                      }),
                     )
                   }
                 >
@@ -503,7 +452,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                       exportMeasure3dProfileCsv(
                         t("toolbar.measure3d.layerName", {
                           mode: t(`toolbar.measure3d.modes.${mode}` as const),
-                        })
+                        }),
                       )
                     }
                   >
@@ -538,9 +487,7 @@ function ProfileSection({ state }: { state: Measure3dState }) {
     geoidAvailable,
   } = state;
   const [min, max] = samplingStepRange;
-  const steps = SAMPLING_STEP_SERIES.filter(
-    (step) => step >= min && step <= max
-  );
+  const steps = SAMPLING_STEP_SERIES.filter((step) => step >= min && step <= max);
 
   return (
     <div className="space-y-2" data-testid="measure-3d-profile">
@@ -556,25 +503,19 @@ function ProfileSection({ state }: { state: Measure3dState }) {
             type="checkbox"
             checked={samplingStepAuto}
             onChange={(event) =>
-              setMeasure3dSamplingStep(
-                event.target.checked ? "auto" : samplingStepM || min
-              )
+              setMeasure3dSamplingStep(event.target.checked ? "auto" : samplingStepM || min)
             }
           />
           {t("toolbar.measure3d.profile.autoStep")}
         </label>
         <label className="flex items-center gap-1.5">
-          <span className="text-muted-foreground">
-            {t("toolbar.measure3d.profile.step")}
-          </span>
+          <span className="text-muted-foreground">{t("toolbar.measure3d.profile.step")}</span>
           <select
             className="h-6 rounded border border-border bg-background px-1 text-xs"
             value={samplingStepM}
             disabled={samplingStepAuto || steps.length === 0}
             aria-label={t("toolbar.measure3d.profile.step")}
-            onChange={(event) =>
-              setMeasure3dSamplingStep(Number(event.target.value))
-            }
+            onChange={(event) => setMeasure3dSamplingStep(Number(event.target.value))}
           >
             <option value={SAMPLING_STEP_DISABLED}>
               {t("toolbar.measure3d.profile.verticesOnly")}
@@ -588,17 +529,13 @@ function ProfileSection({ state }: { state: Measure3dState }) {
         </label>
         <label
           className="flex items-center gap-1.5"
-          title={
-            geoidAvailable ? undefined : t("toolbar.measure3d.profile.noGeoid")
-          }
+          title={geoidAvailable ? undefined : t("toolbar.measure3d.profile.noGeoid")}
         >
           <input
             type="checkbox"
             checked={heightsAboveSeaLevel}
             disabled={!geoidAvailable}
-            onChange={(event) =>
-              setMeasure3dHeightsAboveSeaLevel(event.target.checked)
-            }
+            onChange={(event) => setMeasure3dHeightsAboveSeaLevel(event.target.checked)}
           />
           {t("toolbar.measure3d.profile.meanSeaLevel")}
         </label>
@@ -610,14 +547,11 @@ function ProfileSection({ state }: { state: Measure3dState }) {
             label={t("toolbar.measure3d.profile.ground")}
             value={formatMeters(profile.totalGroundM)}
           />
-          <Row
-            label={t("toolbar.measure3d.profile.air")}
-            value={formatMeters(profile.totalAirM)}
-          />
+          <Row label={t("toolbar.measure3d.profile.air")} value={formatMeters(profile.totalAirM)} />
           <Row
             label={t("toolbar.measure3d.profile.elevation")}
             value={`${profile.minAlt.toFixed(0)} – ${profile.maxAlt.toFixed(
-              0
+              0,
             )} m (Δ ${(profile.maxAlt - profile.minAlt).toFixed(0)} m)`}
           />
           {!profile.detailed && (
