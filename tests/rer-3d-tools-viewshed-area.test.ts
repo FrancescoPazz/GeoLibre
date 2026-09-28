@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_VIEWSHED_AREA_SETTINGS,
   VIEWSHED_AREA_DEBOUNCE_MS,
+  armViewshedAreaPlacement,
   clearViewshedArea,
   closeViewshedAreaPanel,
   getViewshedAreaProjectState,
@@ -28,6 +29,7 @@ import {
   restoreViewshedArea,
   setViewshedAreaSettings,
 } from "../packages/plugins/src/plugins/rer-3d-tools/viewshed-area";
+import { resetSightAndViewshedPlacement } from "../packages/plugins/src/plugins/rer-3d-tools/line-of-sight-viewshed-input";
 import { rer3dToolsPlugin } from "../packages/plugins/src/plugins/rer-3d-tools";
 import type { GeoLibreAppAPI } from "../packages/plugins/src/types";
 
@@ -305,6 +307,7 @@ const mapLessApp = { getMap: () => null, getCesiumScene: () => null } as unknown
 describe("viewshed area tool", () => {
   beforeEach(() => {
     restoreViewshedArea(mapLessApp, undefined);
+    resetSightAndViewshedPlacement();
   });
 
   it("opens unbound on the 2D map and binds when the globe mounts", () => {
@@ -335,6 +338,23 @@ describe("viewshed area tool", () => {
     assert.equal(s.status, "ready");
     assert.equal(s.visibleFraction, 1, "flat ground is all seen");
     assert.ok(s.cellSizeMeters && s.cellSizeMeters > 0);
+  });
+
+  it("moves the observer by click only while placement is armed", async () => {
+    const globe = makeGlobe({ terrain: () => 0 });
+    openViewshedAreaPanel(globeApp(globe));
+    globe.click(ORIGIN);
+    await settle();
+    const firstLng = getViewshedAreaSnapshot().observer?.lng ?? 0;
+    globe.click({ lng: ORIGIN.lng + 0.01, lat: ORIGIN.lat, alt: 0 });
+    await settle();
+    assert.equal(getViewshedAreaSnapshot().observer?.lng, firstLng, "disarmed clicks do not move");
+    armViewshedAreaPlacement();
+    globe.click({ lng: ORIGIN.lng + 0.01, lat: ORIGIN.lat, alt: 0 });
+    await settle();
+    assert.ok(
+      Math.abs((getViewshedAreaSnapshot().observer?.lng ?? 0) - (ORIGIN.lng + 0.01)) < 1e-9,
+    );
   });
 
   it("hides ground behind a wall, and a moved observer recomputes", async () => {
@@ -404,6 +424,8 @@ describe("viewshed area tool", () => {
     assert.deepEqual(globe.ids(), []);
     openViewshedAreaPanel(globeApp(globe));
     assert.ok(globe.ids().includes("geolibre-viewshed-area-observer"));
+    assert.equal(getViewshedAreaSnapshot().placementActive, false);
+    assert.equal(globe.canvas.style.cursor, "");
     clearViewshedArea();
     assert.equal(getViewshedAreaSnapshot().observer, null);
     assert.equal(globe.canvas.style.cursor, "crosshair");

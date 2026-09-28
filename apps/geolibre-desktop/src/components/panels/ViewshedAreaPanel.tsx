@@ -3,6 +3,8 @@ import {
   VIEWSHED_AREA_HEIGHT_MIN,
   VIEWSHED_AREA_RADIUS_MAX,
   VIEWSHED_AREA_RADIUS_MIN,
+  armViewshedAreaPlacement,
+  cancelViewshedAreaPlacement,
   clearViewshedArea,
   closeViewshedAreaPanel,
   getViewshedAreaSnapshot,
@@ -13,8 +15,9 @@ import {
 } from "@geolibre/plugins";
 import { Button, Input, Label, Slider } from "@geolibre/ui";
 import { Eraser, Radar, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useState, useSyncExternalStore } from "react";
+import { type PointerEvent as ReactPointerEvent, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
+import { useRer3dToolPanelPosition } from "../../hooks/useRer3dToolPanelPosition";
 import { clamp } from "../../lib/clamp";
 
 const PANEL_WIDTH = 300;
@@ -47,7 +50,7 @@ function formatPoint(point: LngLatAlt, locale: string): string {
 function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
-  const [position, setPosition] = useState(() => ({ x: EDGE_MARGIN, y: EDGE_MARGIN }));
+  const [position, setPosition] = useRer3dToolPanelPosition("viewshed-area", PANEL_WIDTH);
 
   const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("button,input,select,[role=slider]")) return;
@@ -85,13 +88,20 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
     handle.addEventListener("pointercancel", handleUp);
   };
 
-  const { phase, settings, status, visibleFraction, cellSizeMeters, observer } = state;
+  const { phase, settings, status, visibleFraction, cellSizeMeters, observer, placementActive } =
+    state;
   const hint =
     phase === "unavailable"
       ? t("toolbar.viewshedArea.unavailable")
-      : phase === "observer"
+      : placementActive
         ? t("toolbar.viewshedArea.clickObserver")
-        : t("toolbar.viewshedArea.moveObserver");
+        : phase === "observer"
+          ? t("toolbar.viewshedArea.chooseObserver")
+          : t("toolbar.viewshedArea.chooseMoveObserver");
+  const placeLabel =
+    phase === "observer"
+      ? t("toolbar.viewshedArea.placeObserver")
+      : t("toolbar.viewshedArea.moveObserverAction");
   const statusText =
     status === "computing"
       ? t("toolbar.viewshedArea.computing")
@@ -149,6 +159,31 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
           {phase === "unavailable" && <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
           <span>{hint}</span>
         </div>
+
+        {phase !== "unavailable" && (
+          <div className="flex flex-wrap gap-1.5" data-testid="viewshed-area-placement">
+            <Button
+              type="button"
+              variant={placementActive ? "default" : "outline"}
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => armViewshedAreaPlacement()}
+            >
+              {placeLabel}
+            </Button>
+            {placementActive && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => cancelViewshedAreaPlacement()}
+              >
+                {t("toolbar.viewshedArea.cancelPlacement")}
+              </Button>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-2">
           <NumberField

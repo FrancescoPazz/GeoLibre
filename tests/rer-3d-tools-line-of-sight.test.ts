@@ -12,6 +12,7 @@ import {
 } from "../packages/plugins/src/plugins/rer-3d-tools/line-of-sight-geometry";
 import {
   DEFAULT_LINE_OF_SIGHT_SETTINGS,
+  armLineOfSightNewLine,
   clearLineOfSight,
   closeLineOfSightPanel,
   getLineOfSightProjectState,
@@ -24,6 +25,7 @@ import {
   setLineOfSightSettings,
   subscribeLineOfSight,
 } from "../packages/plugins/src/plugins/rer-3d-tools/line-of-sight";
+import { resetSightAndViewshedPlacement } from "../packages/plugins/src/plugins/rer-3d-tools/line-of-sight-viewshed-input";
 import { rer3dToolsPlugin } from "../packages/plugins/src/plugins/rer-3d-tools";
 import type { GeoLibreAppAPI } from "../packages/plugins/src/types";
 
@@ -345,6 +347,7 @@ function ids(globe: ReturnType<typeof makeGlobe>): string[] {
 describe("line-of-sight tool", () => {
   beforeEach(() => {
     restoreLineOfSight(mapLessApp, undefined);
+    resetSightAndViewshedPlacement();
   });
 
   it("declares both engines and is off by default", () => {
@@ -475,11 +478,16 @@ describe("line-of-sight tool", () => {
     assert.equal(getLineOfSightSnapshot().result?.occluded, true);
   });
 
-  it("starts over from a new observer on a third click, and clears on demand", () => {
+  it("starts a new line only when armed, and clears on demand", () => {
     const globe = makeGlobe();
     openLineOfSightPanel(globeApp(globe));
     globe.click(at(ORIGIN.lng, ORIGIN.lat, 500));
     globe.click(at(ORIGIN.lng + 0.05, ORIGIN.lat, 500));
+    assert.equal(getLineOfSightSnapshot().phase, "done");
+    globe.click(at(ORIGIN.lng + 0.1, ORIGIN.lat, 500));
+    assert.equal(getLineOfSightSnapshot().phase, "done", "clicks are ignored while disarmed");
+    armLineOfSightNewLine();
+    assert.equal(getLineOfSightSnapshot().placementActive, true);
     globe.click(at(ORIGIN.lng + 0.1, ORIGIN.lat, 500));
     const state = getLineOfSightSnapshot();
     assert.equal(state.phase, "target");
@@ -503,6 +511,8 @@ describe("line-of-sight tool", () => {
     assert.equal(globe.canvas.style.cursor, "");
     openLineOfSightPanel(globeApp(globe));
     assert.equal(getLineOfSightSnapshot().phase, "done");
+    assert.equal(getLineOfSightSnapshot().placementActive, false);
+    assert.equal(globe.canvas.style.cursor, "");
     assert.equal(ids(globe).length, 3);
   });
 
@@ -541,6 +551,7 @@ describe("line-of-sight tool", () => {
     const state = getLineOfSightSnapshot();
     assert.equal(state.open, true);
     assert.equal(state.phase, "done");
+    assert.equal(state.placementActive, false);
     assert.equal(state.settings.targetHeight, 2);
     assert.ok(state.result);
     assert.equal(ids(reopened).length, 3);
