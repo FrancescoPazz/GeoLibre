@@ -141,7 +141,10 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
       closeAriaLabel={t("toolbar.measure3d.close")}
       testId={FLOATING_MAP_PANEL_TEST_ID.measure3d}
       onMinimizedChange={(minimized) => {
-        if (minimized) setMeasure3dHover(null);
+        if (minimized) {
+          setMeasure3dHover(null);
+          setMeasure3dDrawingActive(false);
+        }
       }}
       headerActions={
         <Button

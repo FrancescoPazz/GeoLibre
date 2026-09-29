@@ -10,7 +10,7 @@ const { Measure3dPanel } =
   await import("../apps/geolibre-desktop/src/components/panels/Measure3dPanel");
 const { FloatingMapPanelLayoutProvider } =
   await import("../apps/geolibre-desktop/src/components/panels/FloatingMapPanelLayoutContext");
-const { openMeasure3dPanel, restoreMeasure3d } =
+const { getMeasure3dSnapshot, openMeasure3dPanel, restoreMeasure3d } =
   await import("../packages/plugins/src/plugins/rer-3d-tools/measure-3d");
 
 const profile: TerrainProfile = {
@@ -77,6 +77,7 @@ describe("3D Measure profile chart", () => {
 
   it("keeps section collapse state when the panel body is minimized and restored", () => {
     act(() => openMeasure3dPanel({} as never));
+    assert.equal(getMeasure3dSnapshot().drawingActive, true);
     render(createElement(FloatingMapPanelLayoutProvider, null, createElement(Measure3dPanel)));
 
     const drawSection = screen.getByRole("button", {
@@ -87,8 +88,10 @@ describe("3D Measure profile chart", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Minimize to icon" }));
     assert.equal(screen.queryByTestId("measure-3d-panel"), null);
+    assert.equal(getMeasure3dSnapshot().drawingActive, false);
 
     fireEvent.click(screen.getByRole("button", { name: "Restore 3D Measure" }));
+    assert.equal(getMeasure3dSnapshot().drawingActive, false);
     assert.equal(
       screen.getByRole("button", { name: "Draw and options" }).getAttribute("aria-expanded"),
       "false",

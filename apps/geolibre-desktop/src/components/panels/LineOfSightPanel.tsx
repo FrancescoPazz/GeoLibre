@@ -94,6 +94,9 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
       onClose={() => closeLineOfSightPanel()}
       closeAriaLabel={t("toolbar.lineOfSight.close")}
       testId={FLOATING_MAP_PANEL_TEST_ID["line-of-sight"]}
+      onMinimizedChange={(minimized) => {
+        if (minimized) cancelLineOfSightPlacement();
+      }}
       headerActions={
         <Button
           variant="ghost"

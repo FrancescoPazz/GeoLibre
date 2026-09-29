@@ -94,6 +94,9 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
       onClose={() => closeViewshedAreaPanel()}
       closeAriaLabel={t("toolbar.viewshedArea.close")}
       testId={FLOATING_MAP_PANEL_TEST_ID["viewshed-area"]}
+      onMinimizedChange={(minimized) => {
+        if (minimized) cancelViewshedAreaPlacement();
+      }}
       headerActions={
         <Button
           variant="ghost"
