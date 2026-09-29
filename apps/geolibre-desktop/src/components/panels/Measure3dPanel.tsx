@@ -15,6 +15,7 @@ import {
   saveMeasure3dAsLayer,
   setMeasure3dActivePath,
   setMeasure3dCircleRadius,
+  setMeasure3dDrawingActive,
   setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,
   setMeasure3dMode,
@@ -104,15 +105,27 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
     });
   }, [iconMinimized, layout?.layoutVersion, setPosition]);
 
-  const { mode, options, geometry, measures, bound, sampling, pathCount, activePath, notes } =
-    state;
+  const {
+    mode,
+    options,
+    geometry,
+    measures,
+    bound,
+    sampling,
+    pathCount,
+    activePath,
+    notes,
+    drawingActive,
+  } = state;
   const hasFigure = geometry.points.length > 0;
   const isPath = mode === "line" || mode === "polygon";
   const hint = !bound
     ? t("toolbar.measure3d.unavailable")
-    : hasFigure
-      ? t(`toolbar.measure3d.hint.${mode}Next` as const)
-      : t(`toolbar.measure3d.hint.${mode}` as const);
+    : !drawingActive
+      ? t("toolbar.measure3d.hint.paused")
+      : hasFigure
+        ? t(`toolbar.measure3d.hint.${mode}Next` as const)
+        : t(`toolbar.measure3d.hint.${mode}` as const);
 
   return (
     <FloatingMapToolPanelShell
@@ -176,6 +189,31 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
                 );
               })}
             </div>
+
+            {bound && (
+              <div className="flex flex-wrap gap-1.5" data-testid="measure-3d-drawing">
+                <Button
+                  type="button"
+                  variant={drawingActive ? "default" : "outline"}
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setMeasure3dDrawingActive(true)}
+                >
+                  {t("toolbar.measure3d.placeOnMap")}
+                </Button>
+                {drawingActive && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setMeasure3dDrawingActive(false)}
+                  >
+                    {t("toolbar.measure3d.pausePlacing")}
+                  </Button>
+                )}
+              </div>
+            )}
 
             <div
               className={

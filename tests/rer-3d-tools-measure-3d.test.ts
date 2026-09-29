@@ -21,6 +21,7 @@ import {
   reattachMeasure3d,
   restoreMeasure3d,
   setMeasure3dHover,
+  setMeasure3dDrawingActive,
   setMeasure3dMode,
   setMeasure3dOptions,
   setMeasure3dSamplingStep,
@@ -532,6 +533,36 @@ describe("measure-3d tool", () => {
     const s = getMeasure3dSnapshot();
     assert.equal(s.geometry.points.length, 2);
     assert.equal(s.measures.segmentMeters.length, 1);
+  });
+
+  it("pauses and resumes ground placement without blocking vertex drag", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    assert.equal(getMeasure3dSnapshot().drawingActive, true);
+    globe.click(A);
+    setMeasure3dDrawingActive(false);
+    assert.equal(getMeasure3dSnapshot().drawingActive, false);
+    assert.equal(globe.canvas.style.cursor, "");
+    globe.click(B);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 1);
+    globe.drag(0, B);
+    assert.ok(Math.abs(getMeasure3dSnapshot().geometry.points[0].lng - B.lng) < 1e-9);
+    setMeasure3dDrawingActive(true);
+    assert.equal(globe.canvas.style.cursor, "crosshair");
+    globe.click(C);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 2);
+  });
+
+  it("persists drawingActive false in project state", () => {
+    const globe = makeGlobe();
+    openMeasure3dPanel(globeApp(globe));
+    setMeasure3dDrawingActive(false);
+    const saved = getMeasure3dProjectState();
+    assert.ok(saved);
+    assert.equal(saved.drawingActive, false);
+    restoreMeasure3d(mapLessApp, undefined);
+    restoreMeasure3d(globeApp(makeGlobe()), saved);
+    assert.equal(getMeasure3dSnapshot().drawingActive, false);
   });
 
   it("changes mode, options and clears through the store", () => {

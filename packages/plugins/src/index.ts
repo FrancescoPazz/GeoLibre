@@ -1556,6 +1556,7 @@ export {
   removeMeasure3dPath,
   setMeasure3dActivePath,
   setMeasure3dCircleRadius,
+  setMeasure3dDrawingActive,
   setMeasure3dNotes,
   HOVER_TOLERANCE_PIXELS,
   computeLineOfSight,

@@ -2738,6 +2738,8 @@
       },
       "close": "Close",
       "clear": "Clear",
+      "placeOnMap": "Place on map",
+      "pausePlacing": "Pause placing",
       "mode": "Measure mode",
       "modes": {
         "line": "Line",
@@ -2748,6 +2750,7 @@
       },
       "unavailable": "3D measuring needs the 3D globe. Open one beside the map with View → Split View and its 3D globe toggle, or make it the map with View → Rendering engine → Cesium 3D.",
       "hint": {
+        "paused": "Placing is paused. Turn on Place on map to add vertices, or drag existing ones to adjust.",
         "line": "Click the globe to start a line.",
         "lineNext": "Click to add a vertex, click a segment to insert one, drag a vertex to move it.",
         "polygon": "Click the globe to start a polygon.",

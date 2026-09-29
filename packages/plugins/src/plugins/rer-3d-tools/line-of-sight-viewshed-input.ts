@@ -1,19 +1,28 @@
 /**
- * The Line of Sight and Viewshed Area tools share a Cesium canvas but retain
- * separate ScreenSpaceEventHandlers.  Cesium delivers a click to each handler,
- * so this small coordinator gives empty-ground placement to exactly one tool
- * while still letting either tool recognise and drag its own marker.
+ * Line of Sight, Viewshed Area, and 3D Measure share a Cesium canvas but retain
+ * separate ScreenSpaceEventHandlers. Cesium delivers a click to each handler,
+ * so this coordinator gives empty-ground placement to exactly one sight tool
+ * while 3D Measure defers when that placement is armed. Each tool still
+ * recognises and drags its own graphics; cursor priority is resolved here.
  */
 
 export type SightAndViewshedToolId = "line-of-sight" | "viewshed-area";
 
+export type Rer3dCanvasToolId = SightAndViewshedToolId | "measure-3d";
+
+const MEASURE_3D_TOOL_ID: Rer3dCanvasToolId = "measure-3d";
+
 interface CanvasRegistration {
   canvas: HTMLCanvasElement;
   previousCursor: string;
-  tools: Set<SightAndViewshedToolId>;
+  tools: Set<Rer3dCanvasToolId>;
 }
 
 let activeTool: SightAndViewshedToolId | null = null;
+/** Whether 3D Measure is actively placing vertices (crosshair + clicks). */
+let measureDrawingPointerActive = false;
+/** Set when a sight tool consumes a ground click that disarms placement in the same event. */
+let suppressMeasureGroundClick = false;
 const listeners = new Set<() => void>();
 const rewireListeners = new Set<(tool: SightAndViewshedToolId) => void>();
 const canvases = new Map<HTMLCanvasElement, CanvasRegistration>();
@@ -38,8 +47,19 @@ export function runWithSightAndViewshedInputTool<T>(
 }
 
 function refreshCursor(registration: CanvasRegistration): void {
-  registration.canvas.style.cursor =
-    activeTool && registration.tools.has(activeTool) ? "crosshair" : registration.previousCursor;
+  if (activeTool && registration.tools.has(activeTool)) {
+    registration.canvas.style.cursor = "crosshair";
+    return;
+  }
+  if (
+    !activeTool &&
+    measureDrawingPointerActive &&
+    registration.tools.has(MEASURE_3D_TOOL_ID)
+  ) {
+    registration.canvas.style.cursor = "crosshair";
+    return;
+  }
+  registration.canvas.style.cursor = registration.previousCursor;
 }
 
 function publish(): void {
@@ -67,6 +87,25 @@ export function isSightAndViewshedPlacementActive(tool: SightAndViewshedToolId):
   return activeTool === tool;
 }
 
+export function isSightAndViewshedPlacementArmed(): boolean {
+  return activeTool !== null;
+}
+
+/** Call when a sight tool finishes empty-ground placement on this click (especially when disarming). */
+export function markSightAndViewshedGroundClickHandled(): void {
+  suppressMeasureGroundClick = true;
+}
+
+/** Whether 3D Measure should ignore a left click (handlers run in registration order). */
+export function shouldMeasureDeferGroundClick(): boolean {
+  if (isSightAndViewshedPlacementArmed()) return true;
+  if (suppressMeasureGroundClick) {
+    suppressMeasureGroundClick = false;
+    return true;
+  }
+  return false;
+}
+
 export function activateSightAndViewshedPlacement(tool: SightAndViewshedToolId): void {
   if (activeTool === tool) return;
   activeTool = tool;
@@ -81,11 +120,7 @@ export function cancelSightAndViewshedPlacement(tool: SightAndViewshedToolId): v
   publish();
 }
 
-/** Register a bound tool and restore the original cursor after the last one leaves. */
-export function registerSightAndViewshedCanvas(
-  tool: SightAndViewshedToolId,
-  canvas: HTMLCanvasElement,
-): () => void {
+function registerRer3dCanvas(tool: Rer3dCanvasToolId, canvas: HTMLCanvasElement): () => void {
   let registration = canvases.get(canvas);
   if (!registration) {
     registration = { canvas, previousCursor: canvas.style.cursor, tools: new Set() };
@@ -93,7 +128,7 @@ export function registerSightAndViewshedCanvas(
   }
   registration.tools.add(tool);
   refreshCursor(registration);
-  if (registration.tools.size > 1) {
+  if (tool !== MEASURE_3D_TOOL_ID && registration.tools.size > 1) {
     for (const listener of rewireListeners) listener(tool);
   }
 
@@ -108,6 +143,26 @@ export function registerSightAndViewshedCanvas(
     }
     refreshCursor(current);
   };
+}
+
+/** Register a bound sight tool and restore the original cursor after the last one leaves. */
+export function registerSightAndViewshedCanvas(
+  tool: SightAndViewshedToolId,
+  canvas: HTMLCanvasElement,
+): () => void {
+  return registerRer3dCanvas(tool, canvas);
+}
+
+/** Register 3D Measure on the canvas for shared cursor priority. */
+export function registerMeasure3dCanvas(canvas: HTMLCanvasElement): () => void {
+  return registerRer3dCanvas(MEASURE_3D_TOOL_ID, canvas);
+}
+
+/** Sync whether measure should show the crosshair while its panel is bound to the globe. */
+export function setMeasure3dDrawingPointerActive(active: boolean): void {
+  if (measureDrawingPointerActive === active) return;
+  measureDrawingPointerActive = active;
+  refreshAll();
 }
 
 /** Runtime reset used by each tool's project-reset lifecycle. */
@@ -141,4 +196,9 @@ export function isSightAndViewshedMarkerEntity(id: unknown): boolean {
 /** Non-marker graphics (sight lines, viewshed fill, radius ring). */
 export function isSightAndViewshedOverlayEntity(id: unknown): boolean {
   return isSightAndViewshedEntity(id) && !isSightAndViewshedMarkerEntity(id);
+}
+
+/** Any entity drawn by 3D Measure (vertices, lines, labels, fill). */
+export function isMeasureDrawEntity(id: unknown): boolean {
+  return typeof id === "string" && id.startsWith("geolibre-draw");
 }

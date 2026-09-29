@@ -11,6 +11,7 @@ import {
   type PathHit,
 } from "./draw-geometry";
 import type { LngLatAlt } from "./line-of-sight-geometry";
+import { setMeasure3dDrawingPointerActive } from "./line-of-sight-viewshed-input";
 import {
   buildMultiPathFeatureCollection,
   measureFileStem,
@@ -83,6 +84,8 @@ export interface Measure3dState {
   activePath: number;
   /** The name of the layer the active path was loaded from, if it was. */
   sourceName: string | null;
+  /** When true, ground clicks add vertices; when false, only drag existing vertices. */
+  drawingActive: boolean;
 }
 
 /** How long after the last edit (a drag settling) before the terrain is read. */
@@ -94,6 +97,7 @@ interface StoredPath extends MeasurePath {
 }
 
 let open = false;
+let drawingActive = true;
 let mode: DrawMode = "line";
 let options: DrawOptions = { ...DEFAULT_DRAW_OPTIONS };
 let geometry: DrawGeometry = { mode, points: [], closed: false };
@@ -169,6 +173,7 @@ function buildSnapshot(): Measure3dState {
     pathCount: paths.length,
     activePath,
     sourceName,
+    drawingActive,
   };
 }
 
@@ -479,11 +484,13 @@ function attach(app: GeoLibreAppAPI): void {
   syncBackground();
   // Restore whatever figure the store holds (a reopened panel, a loaded project).
   drawing.setGeometry({ ...geometry, mode });
+  drawing.setDrawingEnabled(drawingActive);
 }
 
 function detach(): void {
   const current = drawing;
   drawing = null;
+  setMeasure3dDrawingPointerActive(false);
   current?.destroy();
   samplingRequest += 1;
   if (samplingTimer) clearTimeout(samplingTimer);
@@ -503,6 +510,14 @@ export function openMeasure3dPanel(app: GeoLibreAppAPI): void {
 export function closeMeasure3dPanel(_app?: GeoLibreAppAPI): void {
   open = false;
   detach();
+  publish();
+}
+
+/** Turn ground-click placement on or off while the panel stays open. */
+export function setMeasure3dDrawingActive(active: boolean): void {
+  if (drawingActive === active) return;
+  drawingActive = active;
+  liveDrawing()?.setDrawingEnabled(active);
   publish();
 }
 
@@ -684,6 +699,7 @@ export function exportMeasure3dProfileCsv(name: string): boolean {
 }
 
 function resetToDefaults(): void {
+  drawingActive = true;
   mode = "line";
   options = { ...DEFAULT_DRAW_OPTIONS };
   geometry = { mode, points: [], closed: false };
@@ -755,6 +771,7 @@ export function restoreMeasure3d(app: GeoLibreAppAPI, state: unknown): boolean {
     raw.samplingStep > 0
       ? snapSamplingStep(raw.samplingStep)
       : SAMPLING_STEP_DISABLED;
+  drawingActive = raw.drawingActive === false ? false : true;
   if (raw.open === true) {
     open = true;
     detach();
@@ -780,7 +797,8 @@ export function getMeasure3dProjectState(): Record<string, unknown> | undefined 
     mode === "line" &&
     defaultOptions &&
     samplingStepAuto &&
-    heightsAboveSeaLevel === getElevationMeanSeaLevelDefault()
+    heightsAboveSeaLevel === getElevationMeanSeaLevelDefault() &&
+    drawingActive
   ) {
     return undefined;
   }
@@ -788,6 +806,7 @@ export function getMeasure3dProjectState(): Record<string, unknown> | undefined 
     open,
     mode,
     ...options,
+    ...(drawingActive ? {} : { drawingActive: false }),
     // The active path at the top level too, so a build that predates
     // multi-path measurements still finds its figure.
     points: geometry.points,

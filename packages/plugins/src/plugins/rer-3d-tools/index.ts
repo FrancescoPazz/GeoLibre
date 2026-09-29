@@ -153,12 +153,16 @@ export {
 export {
   activateSightAndViewshedPlacement,
   cancelSightAndViewshedPlacement,
+  isMeasureDrawEntity,
   isSightAndViewshedEntity,
   isSightAndViewshedMarkerEntity,
   isSightAndViewshedOverlayEntity,
   isSightAndViewshedPlacementActive,
+  isSightAndViewshedPlacementArmed,
+  registerMeasure3dCanvas,
   resetSightAndViewshedPlacement,
   subscribeSightAndViewshedPlacement,
+  type Rer3dCanvasToolId,
   type SightAndViewshedToolId,
 } from "./line-of-sight-viewshed-input";
 export {
@@ -198,6 +202,7 @@ export {
   restoreMeasure3d,
   setMeasure3dActivePath,
   setMeasure3dCircleRadius,
+  setMeasure3dDrawingActive,
   setMeasure3dGeoid,
   setMeasure3dHeightsAboveSeaLevel,
   setMeasure3dHover,

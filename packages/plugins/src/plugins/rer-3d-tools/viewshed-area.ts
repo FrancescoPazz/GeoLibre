@@ -19,8 +19,10 @@ import {
 import {
   activateSightAndViewshedPlacement,
   cancelSightAndViewshedPlacement,
+  isMeasureDrawEntity,
   isSightAndViewshedMarkerEntity,
   isSightAndViewshedPlacementActive,
+  markSightAndViewshedGroundClickHandled,
   registerSightAndViewshedCanvas,
   resetSightAndViewshedPlacement,
   runWithSightAndViewshedInputTool,
@@ -427,7 +429,8 @@ function endDrag(b: Binding): void {
 
 function entityBlocksPlacement(b: Binding, position: Cartesian2): boolean {
   const picked = b.handle.scene.pick(position) as { id?: { id?: unknown } } | undefined;
-  return isSightAndViewshedMarkerEntity(picked?.id?.id);
+  const id = picked?.id?.id;
+  return isSightAndViewshedMarkerEntity(id) || isMeasureDrawEntity(id);
 }
 
 function onClick(b: Binding, position: Cartesian2): void {
@@ -437,6 +440,7 @@ function onClick(b: Binding, position: Cartesian2): void {
   const picked = pickGroundPosition(C, viewer, position);
   if (!picked) return;
   moveObserver(b, toLngLatAlt(C, picked));
+  markSightAndViewshedGroundClickHandled();
 }
 
 function bindViewshedAreaHandlers(b: Binding, handle: CesiumSceneHandle): void {

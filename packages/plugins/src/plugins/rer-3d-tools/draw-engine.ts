@@ -30,6 +30,12 @@ import {
   toLngLatAlt,
   type LngLatAlt,
 } from "./line-of-sight-geometry";
+import {
+  isSightAndViewshedEntity,
+  registerMeasure3dCanvas,
+  setMeasure3dDrawingPointerActive,
+  shouldMeasureDeferGroundClick,
+} from "./line-of-sight-viewshed-input";
 
 type CesiumNs = CesiumSceneHandle["Cesium"];
 
@@ -96,7 +102,8 @@ export class CesiumDrawing {
   private lastHover: PathHit | null = null;
   private onHover: ((hit: PathHit | null) => void) | null = null;
   private readonly handler: ScreenSpaceEventHandler;
-  private readonly previousCursor: string;
+  private readonly releaseCanvas: () => void;
+  private drawingEnabled = true;
   private destroyed = false;
 
   constructor(
@@ -105,8 +112,8 @@ export class CesiumDrawing {
     private readonly onChange: (geometry: DrawGeometry, measures: DrawMeasures) => void,
   ) {
     const { Cesium: C, viewer } = handle;
-    this.previousCursor = viewer.canvas.style.cursor;
-    viewer.canvas.style.cursor = "crosshair";
+    this.releaseCanvas = registerMeasure3dCanvas(viewer.canvas);
+    setMeasure3dDrawingPointerActive(this.drawingEnabled);
     this.handler = new C.ScreenSpaceEventHandler(viewer.canvas);
     this.handler.setInputAction(
       (m: { position: Cartesian2 }) => this.onLeftDown(m.position),
@@ -175,6 +182,17 @@ export class CesiumDrawing {
     this.redrawBackground();
   }
 
+  /** When false, ignore ground clicks that add vertices; vertex drag still works. */
+  setDrawingEnabled(enabled: boolean): void {
+    if (this.drawingEnabled === enabled) return;
+    this.drawingEnabled = enabled;
+    if (this.live()) setMeasure3dDrawingPointerActive(enabled);
+    if (!enabled) {
+      this.preview = null;
+      this.redraw();
+    }
+  }
+
   /** Replace the figure (a project restore, or an edit from the panel). */
   setGeometry(geometry: DrawGeometry): void {
     this.mode = geometry.mode;
@@ -205,7 +223,8 @@ export class CesiumDrawing {
       this.removeEntities();
       this.removeBackgroundEntities();
       this.setMarker(null);
-      viewer.canvas.style.cursor = this.previousCursor;
+      this.releaseCanvas();
+      setMeasure3dDrawingPointerActive(false);
       this.handle.requestRender();
     }
     if (!this.handler.isDestroyed()) this.handler.destroy();
@@ -256,7 +275,7 @@ export class CesiumDrawing {
       this.notify();
       return;
     }
-    if (this.mode === "circle" && this.points.length === 1) {
+    if (this.drawingEnabled && this.mode === "circle" && this.points.length === 1) {
       const ground = this.ground(position);
       if (!ground) return;
       this.preview = ground;
@@ -306,7 +325,10 @@ export class CesiumDrawing {
   }
 
   private onLeftClick(position: Cartesian2): void {
-    if (!this.live() || this.dragging) return;
+    if (!this.live() || this.dragging || !this.drawingEnabled) return;
+    if (shouldMeasureDeferGroundClick()) return;
+    const picked = this.handle.scene.pick(position) as { id?: { id?: unknown } } | undefined;
+    if (isSightAndViewshedEntity(picked?.id?.id)) return;
     const vertex = this.vertexAt(position);
     if (vertex !== null) {
       // The first vertex closes a polygon; any other vertex is just a vertex.

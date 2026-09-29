@@ -20,12 +20,20 @@ import {
 import {
   VIEWSHED_AREA_DEBOUNCE_MS,
   armViewshedAreaPlacement,
+  cancelViewshedAreaPlacement,
   clearViewshedArea,
   closeViewshedAreaPanel,
   getViewshedAreaSnapshot,
   openViewshedAreaPanel,
   restoreViewshedArea,
 } from "../packages/plugins/src/plugins/rer-3d-tools/viewshed-area";
+import {
+  closeMeasure3dPanel,
+  getMeasure3dSnapshot,
+  openMeasure3dPanel,
+  restoreMeasure3d,
+  setMeasure3dDrawingActive,
+} from "../packages/plugins/src/plugins/rer-3d-tools/measure-3d";
 import type { GeoLibreAppAPI } from "../packages/plugins/src/types";
 
 const ORIGIN = { lng: 11.0, lat: 44.3, alt: 0 };
@@ -35,6 +43,7 @@ type ClickListener = (movement: { position: Cesium.Cartesian2 }) => void;
 type MotionListener = (movement: { endPosition: Cesium.Cartesian2 }) => void;
 
 const INPUT_TOOL_KEY = "__geolibreSightViewshedInputTool";
+const MEASURE_HANDLER_KEY = "__geolibreMeasure3dNextHandler";
 type InputTool = "line-of-sight" | "viewshed-area";
 
 function setInputTool(tool: InputTool): void {
@@ -49,6 +58,11 @@ function openLoS(app: GeoLibreAppAPI): void {
 function openVs(app: GeoLibreAppAPI): void {
   setInputTool("viewshed-area");
   openViewshedAreaPanel(app);
+}
+
+function openMeasure(app: GeoLibreAppAPI): void {
+  (globalThis as Record<string, boolean>)[MEASURE_HANDLER_KEY] = true;
+  openMeasure3dPanel(app);
 }
 
 /** Re-register line-of-sight handlers after viewshed binds the same canvas. */
@@ -120,17 +134,23 @@ function makeSharedGlobe() {
   };
   const losActions = new Map<string, ClickListener | MotionListener>();
   const vsActions = new Map<string, ClickListener | MotionListener>();
+  const measureActions = new Map<string, ClickListener | MotionListener>();
   let handlerCount = 0;
   class FakeHandler {
     readonly #actions: Map<string, ClickListener | MotionListener>;
-    readonly #owner: InputTool;
     constructor() {
       handlerCount += 1;
-      this.#owner =
-        getSightAndViewshedInputRegistrationTool() ??
-        (globalThis as Record<string, InputTool | undefined>)[INPUT_TOOL_KEY] ??
-        "line-of-sight";
-      this.#actions = this.#owner === "viewshed-area" ? vsActions : losActions;
+      const reg = getSightAndViewshedInputRegistrationTool();
+      const globals = globalThis as Record<string, InputTool | boolean | undefined>;
+      if (reg) {
+        this.#actions = reg === "viewshed-area" ? vsActions : losActions;
+      } else if (globals[MEASURE_HANDLER_KEY]) {
+        globals[MEASURE_HANDLER_KEY] = false;
+        this.#actions = measureActions;
+      } else {
+        const key = globals[INPUT_TOOL_KEY] ?? "line-of-sight";
+        this.#actions = key === "viewshed-area" ? vsActions : losActions;
+      }
     }
     setInputAction(fn: ClickListener | MotionListener, type: unknown) {
       const key = String(type);
@@ -162,6 +182,7 @@ function makeSharedGlobe() {
     for (const key of INPUT_EVENT_KEYS[type] ?? [type]) {
       fire(losActions, key, movement);
       fire(vsActions, key, movement);
+      fire(measureActions, key, movement);
     }
   };
   const sampleTerrainMostDetailed = async (_p: unknown, positions: Cesium.Cartographic[]) => {
@@ -249,6 +270,7 @@ describe("line of sight and viewshed shared placement", () => {
   beforeEach(() => {
     restoreLoS(mapLessApp, undefined);
     restoreVs(mapLessApp, undefined);
+    restoreMeasure3d(mapLessApp, undefined);
     resetSightAndViewshedPlacement();
   });
 
@@ -382,5 +404,97 @@ describe("line of sight and viewshed shared placement", () => {
     await settle();
     assert.equal(getLineOfSightSnapshot().phase, "done");
     assert.equal(getViewshedAreaSnapshot().phase, "done");
+  });
+});
+
+describe("3D measure with line of sight and viewshed", () => {
+  beforeEach(() => {
+    restoreLoS(mapLessApp, undefined);
+    restoreVs(mapLessApp, undefined);
+    restoreMeasure3d(mapLessApp, undefined);
+    resetSightAndViewshedPlacement();
+  });
+
+  it("does not add measure vertices while line of sight placement is armed", () => {
+    const globe = makeSharedGlobe();
+    const app = globeApp(globe);
+    openMeasure(app);
+    openLoS(app);
+    assert.equal(getLineOfSightSnapshot().placementActive, true);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 0);
+    globe.clickGround(ORIGIN.lng, ORIGIN.lat, 500);
+    assert.equal(getLineOfSightSnapshot().phase, "target");
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 0);
+  });
+
+  it("adds measure vertices when sight placement is idle", () => {
+    const globe = makeSharedGlobe();
+    const app = globeApp(globe);
+    openMeasure(app);
+    openLoS(app);
+    globe.clickGround(ORIGIN.lng, ORIGIN.lat, 500);
+    globe.clickGround(ORIGIN.lng + 0.05, ORIGIN.lat, 500);
+    const losDone = getLineOfSightSnapshot();
+    assert.equal(losDone.phase, "done");
+    assert.equal(losDone.placementActive, false);
+    globe.clickGround(ORIGIN.lng + 0.01, ORIGIN.lat + 0.01, 500);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 1);
+    assert.equal(getLineOfSightSnapshot().phase, "done");
+  });
+
+  it("does not add measure vertices while viewshed placement is armed", async () => {
+    const globe = makeSharedGlobe();
+    const app = globeApp(globe);
+    openMeasure(app);
+    openVs(app);
+    armViewshedAreaPlacement();
+    globe.clickGround(ORIGIN.lng, ORIGIN.lat, 0);
+    await settle();
+    assert.ok(getViewshedAreaSnapshot().observer);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 0);
+  });
+
+  it("ignores clicks on sight markers and blocks viewshed placement on measure vertices", async () => {
+    const globe = makeSharedGlobe();
+    const app = globeApp(globe);
+    openMeasure(app);
+    globe.clickGround(ORIGIN.lng, ORIGIN.lat, 500);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 1);
+    openLoS(app);
+    refreshLoSInput(app);
+    globe.clickOnEntity("geolibre-draw-vertex-0");
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 1);
+    openVs(app);
+    armViewshedAreaPlacement();
+    globe.clickOnEntity("geolibre-draw-vertex-0");
+    assert.equal(getViewshedAreaSnapshot().observer, null);
+    globe.clickOnEntity("geolibre-line-of-sight-observer");
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 1);
+  });
+
+  it("lets sight tools place while measure placing is paused", async () => {
+    const globe = makeSharedGlobe();
+    const app = globeApp(globe);
+    openMeasure(app);
+    setMeasure3dDrawingActive(false);
+    openVs(app);
+    armViewshedAreaPlacement();
+    globe.clickGround(ORIGIN.lng, ORIGIN.lat, 0);
+    await settle();
+    assert.ok(getViewshedAreaSnapshot().observer);
+    assert.equal(getMeasure3dSnapshot().geometry.points.length, 0);
+  });
+
+  it("keeps crosshair for measure when sight placement is disarmed", async () => {
+    const globe = makeSharedGlobe();
+    const app = globeApp(globe);
+    openMeasure(app);
+    assert.equal(globe.canvas.style.cursor, "crosshair");
+    openVs(app);
+    assert.equal(globe.canvas.style.cursor, "crosshair");
+    cancelViewshedAreaPlacement();
+    assert.equal(globe.canvas.style.cursor, "crosshair");
+    closeMeasure3dPanel(app);
+    assert.equal(globe.canvas.style.cursor, "");
   });
 });

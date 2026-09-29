@@ -2716,6 +2716,8 @@
       },
       "close": "Chiudi",
       "clear": "Cancella",
+      "placeOnMap": "Posiziona sulla mappa",
+      "pausePlacing": "Pausa inserimento",
       "mode": "Modalità di misura",
       "modes": {
         "line": "Linea",
@@ -2726,6 +2728,7 @@
       },
       "unavailable": "Le misure 3D richiedono il globo 3D. Aprine uno accanto alla mappa da Vista → Vista divisa e il suo interruttore globo 3D, oppure rendilo la mappa da Vista → Motore di rendering → Cesium 3D.",
       "hint": {
+        "paused": "L'inserimento è in pausa. Attiva Posiziona sulla mappa per aggiungere vertici, oppure trascina quelli esistenti per modificarli.",
         "line": "Clicca sul globo per iniziare una linea.",
         "lineNext": "Clicca per aggiungere un vertice, clicca un segmento per inserirne uno, trascina un vertice per spostarlo.",
         "polygon": "Clicca sul globo per iniziare un poligono.",
