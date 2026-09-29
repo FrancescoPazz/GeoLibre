@@ -666,7 +666,9 @@ export function saveMeasure3dAsLayer(name: string): string | null {
   if (!hostApp || !C) return null;
   const collection = buildMultiPathFeatureCollection(C, getMeasure3dPaths());
   if (collection.features.length === 0) return null;
-  return hostApp.addGeoJsonLayer(name, collection);
+  const id = hostApp.addGeoJsonLayer(name, collection);
+  setMeasure3dDrawingActive(false);
+  return id;
 }
 
 /** The plain-text summary of the active path, or null when there is none. */

@@ -32,12 +32,22 @@ describe("applyPlanetaryBasemap", () => {
     const before = useAppStore.getState().preferences.map;
     useAppStore.getState().applyPlanetaryBasemap(moon);
     const after = useAppStore.getState().preferences.map;
-    assert.deepEqual(after, { ...before, ellipsoidId: "moon" });
+    assert.deepEqual(after, {
+      ...before,
+      ellipsoidId: "moon",
+      cesiumBasemap: "project",
+    });
   });
 
   it("does not rewrite preferences when the ellipsoid already matches", () => {
-    // The default project is already on Earth, so applying an Earth basemap
-    // must not touch (or replace the reference of) the preferences object.
+    // The default project is already on Earth with no pinned Cesium override,
+    // so applying an Earth basemap must not touch the preferences object.
+    useAppStore.setState((s) => ({
+      preferences: {
+        ...s.preferences,
+        map: { ...s.preferences.map, cesiumBasemap: "project" },
+      },
+    }));
     const before = useAppStore.getState().preferences;
     useAppStore.getState().applyPlanetaryBasemap(earth);
     const state = useAppStore.getState();

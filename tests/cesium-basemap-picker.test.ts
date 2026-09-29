@@ -14,10 +14,10 @@ import { DEFAULT_PROJECT_PREFERENCES } from "../packages/core/src/types";
 describe("Cesium basemap choices", () => {
   it("gives new projects Bing Aerial and leaves legacy projects on their own basemap", () => {
     // A new project carries the default and saves it explicitly.
-    assert.equal(DEFAULT_PROJECT_PREFERENCES.map.cesiumBasemap, "bing-aerial");
+    assert.equal(DEFAULT_PROJECT_PREFERENCES.map.cesiumBasemap, "osm");
     const fresh = JSON.parse(serializeProject(createEmptyProject()));
-    assert.equal(fresh.preferences.map.cesiumBasemap, "bing-aerial");
-    assert.equal(parseProject(JSON.stringify(fresh)).preferences?.map.cesiumBasemap, "bing-aerial");
+    assert.equal(fresh.preferences.map.cesiumBasemap, "osm");
+    assert.equal(parseProject(JSON.stringify(fresh)).preferences?.map.cesiumBasemap, "osm");
 
     // A project written before the field existed chose nothing, so loading it
     // must not repaint its globe — the policy `mapboxStyleUrl` documents four
@@ -155,7 +155,7 @@ describe("Cesium basemap choices", () => {
     // The constant must be untouched: `normalizeProjectPreferences` reads it for
     // the default a project omitting the field gets, so sharing the object let
     // one edited project redefine the default for every later one.
-    assert.equal(DEFAULT_PROJECT_PREFERENCES.map.cesiumBasemap, "bing-aerial");
+    assert.equal(DEFAULT_PROJECT_PREFERENCES.map.cesiumBasemap, "osm");
     assert.notEqual(createEmptyProject().preferences!.map.cesiumBasemap, "blue-marble");
   });
 

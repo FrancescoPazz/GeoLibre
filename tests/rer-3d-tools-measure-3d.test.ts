@@ -837,6 +837,7 @@ describe("measure-3d save and summary", () => {
     const { app, layers } = recordingApp(globe);
     openMeasure3dPanel(app);
     assert.equal(saveMeasure3dAsLayer("Misura"), null, "nothing to save yet");
+    assert.equal(getMeasure3dSnapshot().drawingActive, true);
     globe.click(A);
     globe.click(B);
     await settle();
@@ -844,6 +845,8 @@ describe("measure-3d save and summary", () => {
     assert.equal(id, "layer-1");
     // The figure, its two vertices, and the sampled profile line.
     assert.deepEqual(layers, [{ name: "Misura 3D — Linea", features: 4 }]);
+    assert.equal(getMeasure3dSnapshot().drawingActive, false);
+    assert.equal(globe.canvas.style.cursor, "");
   });
 
   it("writes the summary through the host with a file-safe name", () => {

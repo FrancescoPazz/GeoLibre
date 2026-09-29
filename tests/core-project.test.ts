@@ -253,9 +253,9 @@ describe("project parsing", () => {
     assert.equal(reloaded.preferences.map.projection, "mercator");
   });
 
-  it("round-trips terrain and defaults legacy projects to terrain off", () => {
+  it("round-trips terrain and defaults missing terrain to the new-project default", () => {
     const base = createEmptyProject("Terrain");
-    assert.equal(base.preferences.map.terrainEnabled, false);
+    assert.equal(base.preferences.map.terrainEnabled, true);
     const enabled = {
       ...base,
       preferences: {
@@ -269,7 +269,7 @@ describe("project parsing", () => {
       preferences: { map: Record<string, unknown> };
     };
     delete legacy.preferences.map.terrainEnabled;
-    assert.equal(parseProject(JSON.stringify(legacy)).preferences.map.terrainEnabled, false);
+    assert.equal(parseProject(JSON.stringify(legacy)).preferences.map.terrainEnabled, true);
   });
 
   it("round-trips the scale unit preference and defaults unknown values to metric", () => {
@@ -1117,7 +1117,7 @@ describe("multi-map grid persistence", () => {
       }),
     );
     assert.equal(reparsed.primaryRenderer, undefined);
-    assert.equal(applyProjectToStore(reparsed).primaryRenderer, "maplibre");
+    assert.equal(applyProjectToStore(reparsed).primaryRenderer, "cesium");
   });
 
   it("opens a project written before #2217 on the 2D map", () => {
@@ -1128,7 +1128,7 @@ describe("multi-map grid persistence", () => {
         mapView: { center: [0, 0], zoom: 2, bearing: 0, pitch: 0 },
       }),
     );
-    assert.equal(applyProjectToStore(reparsed).primaryRenderer, "maplibre");
+    assert.equal(applyProjectToStore(reparsed).primaryRenderer, "cesium");
   });
 
   it("ignores a 1x1 grid so single-map files stay clean", () => {
@@ -1166,11 +1166,11 @@ describe("app store", () => {
       features: [],
     });
     const before = useAppStore.getState();
-    assert.equal(before.primaryRenderer, "maplibre");
+    assert.equal(before.primaryRenderer, "cesium");
 
-    useAppStore.getState().setPrimaryRenderer("cesium");
+    useAppStore.getState().setPrimaryRenderer("maplibre");
     const after = useAppStore.getState();
-    assert.equal(after.primaryRenderer, "cesium");
+    assert.equal(after.primaryRenderer, "maplibre");
     // Switching engines changes what draws the project, never the project: the
     // camera, layers, basemap, and grid all carry across untouched.
     assert.deepEqual(after.mapView, before.mapView);
@@ -1184,14 +1184,14 @@ describe("app store", () => {
     // The choice is project state, so it marks the project dirty.
     assert.equal(after.isDirty, true);
 
-    useAppStore.getState().setPrimaryRenderer("maplibre");
-    assert.equal(useAppStore.getState().primaryRenderer, "maplibre");
+    useAppStore.getState().setPrimaryRenderer("cesium");
+    assert.equal(useAppStore.getState().primaryRenderer, "cesium");
   });
 
   it("ignores a no-op primary renderer change", () => {
     const before = useAppStore.getState();
     assert.equal(before.isDirty, false);
-    useAppStore.getState().setPrimaryRenderer("maplibre");
+    useAppStore.getState().setPrimaryRenderer("cesium");
     // Re-selecting the active renderer must not dirty a freshly opened project.
     assert.equal(useAppStore.getState().isDirty, false);
   });

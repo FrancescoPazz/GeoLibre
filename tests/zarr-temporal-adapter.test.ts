@@ -168,6 +168,8 @@ beforeEach(() => {
   selectorCalls.length = 0;
   addsInFlight = 0;
   maxAddsInFlight = 0;
+  useAppStore.getState().newProject({ name: "zarr-temporal" });
+  useAppStore.setState({ primaryRenderer: "maplibre" });
   installStubModule();
 });
 
