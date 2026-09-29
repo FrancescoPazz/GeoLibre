@@ -51,11 +51,7 @@ function refreshCursor(registration: CanvasRegistration): void {
     registration.canvas.style.cursor = "crosshair";
     return;
   }
-  if (
-    !activeTool &&
-    measureDrawingPointerActive &&
-    registration.tools.has(MEASURE_3D_TOOL_ID)
-  ) {
+  if (!activeTool && measureDrawingPointerActive && registration.tools.has(MEASURE_3D_TOOL_ID)) {
     registration.canvas.style.cursor = "crosshair";
     return;
   }
