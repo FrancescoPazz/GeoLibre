@@ -13,14 +13,14 @@ import {
   type ElevationBandsState,
 } from "@geolibre/plugins";
 import { Button, Slider } from "@geolibre/ui";
-import { Eraser, Mountain, Plus, Trash2, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useRef, useSyncExternalStore } from "react";
+import { Eraser, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
-import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 
 const PANEL_WIDTH = 340;
-const EDGE_MARGIN = 12;
 
 /**
  * Elevation bands panel (Controls → Elevation bands): colour the globe's
@@ -45,42 +45,7 @@ function ElevationBandsCard({ state }: { state: ElevationBandsState }) {
     PANEL_WIDTH,
     cardRef,
   );
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label,[role=slider]")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON["elevation-bands"];
 
   const { bound, bands, opacity, applied, aboveSeaLevel, geoidAvailable, geoidOffsetMeters } =
     state;
@@ -89,20 +54,19 @@ function ElevationBandsCard({ state }: { state: ElevationBandsState }) {
   const colorField = "h-7 w-8 cursor-pointer rounded border border-border bg-background p-0.5";
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.elevationBands.title")}
-      data-testid="elevation-bands-panel"
-    >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Mountain className="h-4 w-4 text-lime-600" />
-        <span className="text-sm font-medium">{t("toolbar.elevationBands.title")}</span>
+    <FloatingMapToolPanelShell
+      id="elevation-bands"
+      title={t("toolbar.elevationBands.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closeElevationBandsPanel()}
+      closeAriaLabel={t("toolbar.elevationBands.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID["elevation-bands"]}
+      headerActions={
         <Button
           variant="ghost"
           size="icon"
@@ -114,17 +78,8 @@ function ElevationBandsCard({ state }: { state: ElevationBandsState }) {
         >
           <Eraser className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.elevationBands.close")}
-          onClick={() => closeElevationBandsPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
+      }
+    >
       <div className="space-y-3 p-3">
         {!bound && (
           <div
@@ -252,6 +207,6 @@ function ElevationBandsCard({ state }: { state: ElevationBandsState }) {
           </span>
         </div>
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }

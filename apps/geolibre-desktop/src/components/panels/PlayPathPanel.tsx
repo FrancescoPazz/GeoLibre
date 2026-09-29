@@ -14,14 +14,14 @@ import {
   type PlayPathState,
 } from "@geolibre/plugins";
 import { Button, Slider } from "@geolibre/ui";
-import { Pause, Play, Route, Square, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useRef, useSyncExternalStore } from "react";
+import { Pause, Play, Square, TriangleAlert } from "lucide-react";
+import { useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
-import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 
 const PANEL_WIDTH = 300;
-const EDGE_MARGIN = 12;
 
 /**
  * Play Path panel (Controls → Play Path): fly the camera along the path
@@ -38,42 +38,7 @@ function PlayPathCard({ state }: { state: PlayPathState }) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useFloatingMapPanelPosition("play-path", PANEL_WIDTH, cardRef);
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label,[role=slider]")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON["play-path"];
 
   const {
     bound,
@@ -107,53 +72,45 @@ function PlayPathCard({ state }: { state: PlayPathState }) {
             : t("toolbar.playPath.ready");
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.playPath.title")}
-      data-testid="play-path-panel"
+    <FloatingMapToolPanelShell
+      id="play-path"
+      title={t("toolbar.playPath.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closePlayPathPanel()}
+      closeAriaLabel={t("toolbar.playPath.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID["play-path"]}
+      headerActions={
+        <>
+          <Button
+            variant={active ? "default" : "outline"}
+            size="icon"
+            className="ms-auto h-6 w-6"
+            aria-label={active ? t("toolbar.playPath.pause") : t("toolbar.playPath.play")}
+            title={active ? t("toolbar.playPath.pause") : t("toolbar.playPath.play")}
+            disabled={!available}
+            onClick={() => (active ? pausePath() : playPath())}
+          >
+            {active ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label={t("toolbar.playPath.stop")}
+            title={t("toolbar.playPath.stop")}
+            disabled={!active && !paused}
+            onClick={() => stopPath()}
+          >
+            <Square className="h-3.5 w-3.5" />
+          </Button>
+        </>
+      }
     >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Route className="h-4 w-4 text-violet-500" />
-        <span className="text-sm font-medium">{t("toolbar.playPath.title")}</span>
-        <Button
-          variant={active ? "default" : "outline"}
-          size="icon"
-          className="ms-auto h-6 w-6"
-          aria-label={active ? t("toolbar.playPath.pause") : t("toolbar.playPath.play")}
-          title={active ? t("toolbar.playPath.pause") : t("toolbar.playPath.play")}
-          disabled={!available}
-          onClick={() => (active ? pausePath() : playPath())}
-        >
-          {active ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.playPath.stop")}
-          title={t("toolbar.playPath.stop")}
-          disabled={!active && !paused}
-          onClick={() => stopPath()}
-        >
-          <Square className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.playPath.close")}
-          onClick={() => closePlayPathPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
       <div className="space-y-3 p-3">
         <div
           className={
@@ -239,6 +196,6 @@ function PlayPathCard({ state }: { state: PlayPathState }) {
           </label>
         </div>
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }

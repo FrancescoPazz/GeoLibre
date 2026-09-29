@@ -18,6 +18,7 @@ function open(over: Partial<FloatingMapPanelOpenSet>): FloatingMapPanelOpenSet {
     "play-path": false,
     "line-of-sight": false,
     "viewshed-area": false,
+    "globe-clipping": false,
     "elevation-bands": false,
     "coords-converter": false,
     microzonation: false,
@@ -44,6 +45,15 @@ describe("floating map panel layout", () => {
     assert.equal(losPos.x, 12);
     assert.equal(vsPos.x, 12 + FLOATING_MAP_PANEL_WIDTHS["line-of-sight"] + 12);
     assert.equal(losPos.y, vsPos.y);
+  });
+
+  it("places viewshed and globe clipping side by side when both are open", () => {
+    const both = open({ "viewshed-area": true, "globe-clipping": true });
+    const vsPos = positionForOpenFloatingMapPanel("viewshed-area", both, LARGE_BOUNDS);
+    const gcPos = positionForOpenFloatingMapPanel("globe-clipping", both, LARGE_BOUNDS);
+    assert.equal(vsPos.x, 12);
+    assert.equal(gcPos.x, 12 + FLOATING_MAP_PANEL_WIDTHS["viewshed-area"] + 12);
+    assert.equal(vsPos.y, gcPos.y);
   });
 
   it("uses the left column when only one panel is open", () => {
@@ -80,6 +90,7 @@ describe("floating map panel layout", () => {
       "play-path",
       "line-of-sight",
       "viewshed-area",
+      "globe-clipping",
       "elevation-bands",
       "coords-converter",
       "microzonation",
@@ -121,6 +132,7 @@ describe("floating map panel layout", () => {
       "play-path",
       "line-of-sight",
       "viewshed-area",
+      "globe-clipping",
       "elevation-bands",
       "coords-converter",
       "microzonation",

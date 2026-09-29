@@ -14,14 +14,14 @@ import {
   type LngLatAlt,
 } from "@geolibre/plugins";
 import { Button, Input, Label } from "@geolibre/ui";
-import { Check, Eraser, Eye, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useRef, useSyncExternalStore } from "react";
+import { Check, Eraser, TriangleAlert } from "lucide-react";
+import { useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
-import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 
 const PANEL_WIDTH = 300;
-const EDGE_MARGIN = 12;
 
 /**
  * Line of sight panel (Controls → Line of Sight).
@@ -64,42 +64,7 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
     PANEL_WIDTH,
     cardRef,
   );
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON["line-of-sight"];
 
   const { phase, result, settings, placementActive, placementIntent } = state;
   const hint =
@@ -117,20 +82,19 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
   const showPlacementControls = phase !== "unavailable";
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.lineOfSight.title")}
-      data-testid="line-of-sight-panel"
-    >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Eye className="h-4 w-4 text-emerald-500" />
-        <span className="text-sm font-medium">{t("toolbar.lineOfSight.title")}</span>
+    <FloatingMapToolPanelShell
+      id="line-of-sight"
+      title={t("toolbar.lineOfSight.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closeLineOfSightPanel()}
+      closeAriaLabel={t("toolbar.lineOfSight.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID["line-of-sight"]}
+      headerActions={
         <Button
           variant="ghost"
           size="icon"
@@ -142,17 +106,8 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
         >
           <Eraser className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.lineOfSight.close")}
-          onClick={() => closeLineOfSightPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
+      }
+    >
       <div className="space-y-3 p-3">
         <div
           className={
@@ -280,7 +235,7 @@ function LineOfSightCard({ state }: { state: LineOfSightState }) {
           </div>
         )}
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }
 

@@ -7,6 +7,9 @@ interface CollapsibleSectionProps {
   title: string;
   /** Whether the body starts expanded (default: collapsed). */
   defaultOpen?: boolean;
+  /** Controlled open state (e.g. survives parent unmount on panel minimize). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }
 
@@ -19,9 +22,16 @@ interface CollapsibleSectionProps {
 export function CollapsibleSection({
   title,
   defaultOpen = false,
+  open: openProp,
+  onOpenChange,
   children,
 }: CollapsibleSectionProps) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const open = openProp ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (openProp === undefined) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const contentId = useId();
   return (
     <div className="space-y-2">
@@ -29,7 +39,7 @@ export function CollapsibleSection({
         type="button"
         aria-expanded={open}
         aria-controls={contentId}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
       >
         <ChevronRight

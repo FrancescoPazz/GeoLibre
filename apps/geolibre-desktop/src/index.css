@@ -524,6 +524,43 @@ body,
   margin: 4px !important;
 }
 
+/* Minimized floating map tool panels (bottom-end dock). */
+.geolibre-floating-map-panel-icon {
+  align-items: center;
+  box-sizing: border-box;
+  display: flex;
+  height: 29px;
+  justify-content: center;
+  width: 29px;
+  border-radius: 4px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow:
+    0 0 0 2px hsl(var(--background) / 0.5),
+    0 1px 2px rgb(0 0 0 / 0.1);
+  cursor: pointer;
+  line-height: 0;
+  padding: 0;
+}
+
+.geolibre-floating-map-panel-icon:hover {
+  background: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.geolibre-floating-map-panel-icon:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.geolibre-floating-map-panel-icon svg {
+  display: block;
+  flex: 0 0 auto;
+  height: 16px;
+  width: 16px;
+}
+
 .geolibre-components-control .maplibre-gl-control-grid-floating-panel {
   box-sizing: border-box;
   max-width: min(340px, calc(100vw - 32px));

@@ -14,14 +14,14 @@ import {
   type ViewshedAreaState,
 } from "@geolibre/plugins";
 import { Button, Input, Label, Slider } from "@geolibre/ui";
-import { Eraser, Radar, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useRef, useSyncExternalStore } from "react";
+import { Eraser, TriangleAlert } from "lucide-react";
+import { useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
-import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 
 const PANEL_WIDTH = 300;
-const EDGE_MARGIN = 12;
 
 /**
  * Viewshed area panel (Controls → Viewshed area).
@@ -56,42 +56,7 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
     PANEL_WIDTH,
     cardRef,
   );
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,[role=slider]")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON["viewshed-area"];
 
   const { phase, settings, status, visibleFraction, cellSizeMeters, observer, placementActive } =
     state;
@@ -117,20 +82,19 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
           : null;
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.viewshedArea.title")}
-      data-testid="viewshed-area-panel"
-    >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Radar className="h-4 w-4 text-emerald-500" />
-        <span className="text-sm font-medium">{t("toolbar.viewshedArea.title")}</span>
+    <FloatingMapToolPanelShell
+      id="viewshed-area"
+      title={t("toolbar.viewshedArea.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closeViewshedAreaPanel()}
+      closeAriaLabel={t("toolbar.viewshedArea.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID["viewshed-area"]}
+      headerActions={
         <Button
           variant="ghost"
           size="icon"
@@ -142,17 +106,8 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
         >
           <Eraser className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.viewshedArea.close")}
-          onClick={() => closeViewshedAreaPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
+      }
+    >
       <div className="space-y-3 p-3">
         <div
           className={
@@ -267,7 +222,7 @@ function ViewshedAreaCard({ state }: { state: ViewshedAreaState }) {
 
         <p className="text-[11px] text-muted-foreground">{t("toolbar.viewshedArea.caveat")}</p>
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }
 

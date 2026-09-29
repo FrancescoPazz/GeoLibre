@@ -9,9 +9,8 @@ import {
 } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import { Button, Input } from "@geolibre/ui";
-import { Copy, Crosshair, LocateFixed, Move3d, X } from "lucide-react";
+import { Copy, Crosshair, LocateFixed } from "lucide-react";
 import {
-  type PointerEvent as ReactPointerEvent,
   type RefObject,
   useCallback,
   useEffect,
@@ -22,7 +21,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
-import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 import {
   closeCoordsConverterPanel,
   isCoordsConverterPanelVisible,
@@ -30,7 +30,6 @@ import {
 } from "../../lib/coords-converter-panel";
 
 const PANEL_WIDTH = 360;
-const EDGE_MARGIN = 12;
 /** Zoom the "centre map" button flies to: the 0.005° box the old panel framed. */
 const CENTER_ZOOM = 15;
 
@@ -83,6 +82,7 @@ function CoordsConverterCard({
     PANEL_WIDTH,
     cardRef,
   );
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON["coords-converter"];
   const [inputText, setInputText] = useState("");
   const [conversionKey, setConversionKey] = useState<string | null>(null);
   const [result, setResult] = useState<ConvertedCoordinates | null>(null);
@@ -91,42 +91,6 @@ function CoordsConverterCard({
   const [placing, setPlacing] = useState(false);
   const disposePlacement = useRef<(() => void) | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
 
   const input = useMemo(() => parseCoordinateInput(inputText), [inputText]);
   const conversions = conversionsForInput(input?.cartographic ?? true);
@@ -229,31 +193,19 @@ function CoordsConverterCard({
   const iconButton = "h-7 w-7 shrink-0";
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.coordsConverter.title")}
-      data-testid="coords-converter-panel"
+    <FloatingMapToolPanelShell
+      id="coords-converter"
+      title={t("toolbar.coordsConverter.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closeCoordsConverterPanel()}
+      closeAriaLabel={t("toolbar.coordsConverter.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID["coords-converter"]}
     >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Move3d className="h-4 w-4 text-sky-500" />
-        <span className="text-sm font-medium">{t("toolbar.coordsConverter.title")}</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="ms-auto h-6 w-6"
-          aria-label={t("toolbar.coordsConverter.close")}
-          onClick={() => closeCoordsConverterPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
       <div className="space-y-3 p-3 text-xs">
         {!serviceUrl && (
           <p className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-600 dark:text-amber-400">
@@ -388,6 +340,6 @@ function CoordsConverterCard({
           )}
         </div>
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }

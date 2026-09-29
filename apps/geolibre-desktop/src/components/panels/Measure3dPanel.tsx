@@ -28,8 +28,6 @@ import {
 import { Button } from "@geolibre/ui";
 import {
   Circle,
-  ChevronDown,
-  ChevronUp,
   Eraser,
   FileSpreadsheet,
   FileText,
@@ -38,25 +36,19 @@ import {
   Minus,
   Pentagon,
   Plus,
-  Ruler,
   Spline,
   TriangleAlert,
   TriangleRight,
-  X,
   type LucideIcon,
 } from "lucide-react";
-import {
-  type PointerEvent as ReactPointerEvent,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { CollapsibleSection } from "../CollapsibleSection";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
 import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { useOptionalFloatingMapPanelLayoutContext } from "./FloatingMapPanelLayoutContext";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 import { Measure3dProfileChart } from "./Measure3dProfileChart";
 
 const PANEL_WIDTH = 320;
@@ -91,15 +83,14 @@ export function Measure3dPanel() {
 function Measure3dCard({ state }: { state: Measure3dState }) {
   const { t } = useTranslation();
   const cardRef = useRef<HTMLDivElement>(null);
+  const layout = useOptionalFloatingMapPanelLayoutContext();
   const [position, setPosition] = useFloatingMapPanelPosition("measure3d", PANEL_WIDTH, cardRef);
-  const [minimized, setMinimized] = useState(false);
-
-  useEffect(() => {
-    if (minimized) setMeasure3dHover(null);
-  }, [minimized]);
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON.measure3d;
+  const iconMinimized = layout?.isMinimized("measure3d") ?? false;
+  const [drawSectionOpen, setDrawSectionOpen] = useState(true);
 
   useLayoutEffect(() => {
-    if (minimized) return;
+    if (iconMinimized) return;
     const card = cardRef.current;
     const bounds = card?.parentElement?.getBoundingClientRect();
     if (!card || !bounds) return;
@@ -111,43 +102,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
       const y = clamp(current.y, EDGE_MARGIN, maxY);
       return y === current.y ? current : { ...current, y };
     });
-  }, [minimized]);
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
+  }, [iconMinimized, layout?.layoutVersion, setPosition]);
 
   const { mode, options, geometry, measures, bound, sampling, pathCount, activePath, notes } =
     state;
@@ -160,20 +115,22 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
       : t(`toolbar.measure3d.hint.${mode}` as const);
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.measure3d.title")}
-      data-testid="measure-3d-panel"
-    >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Ruler className="h-4 w-4 text-sky-500" />
-        <span className="text-sm font-medium">{t("toolbar.measure3d.title")}</span>
+    <FloatingMapToolPanelShell
+      id="measure3d"
+      title={t("toolbar.measure3d.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closeMeasure3dPanel()}
+      closeAriaLabel={t("toolbar.measure3d.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID.measure3d}
+      onMinimizedChange={(minimized) => {
+        if (minimized) setMeasure3dHover(null);
+      }}
+      headerActions={
         <Button
           variant="ghost"
           size="icon"
@@ -185,38 +142,14 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
         >
           <Eraser className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-expanded={!minimized}
-          aria-label={
-            minimized ? t("toolbar.measure3d.expandPanel") : t("toolbar.measure3d.collapsePanel")
-          }
-          title={
-            minimized ? t("toolbar.measure3d.expandPanel") : t("toolbar.measure3d.collapsePanel")
-          }
-          onClick={() => setMinimized((value) => !value)}
+      }
+    >
+      <div className="space-y-3 p-3">
+        <CollapsibleSection
+          title={t("toolbar.measure3d.sections.draw")}
+          open={drawSectionOpen}
+          onOpenChange={setDrawSectionOpen}
         >
-          {minimized ? (
-            <ChevronDown className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronUp className="h-3.5 w-3.5" />
-          )}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.measure3d.close")}
-          onClick={() => closeMeasure3dPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
-      <div className={minimized ? "hidden" : "space-y-3 p-3"}>
-        <CollapsibleSection title={t("toolbar.measure3d.sections.draw")} defaultOpen>
           <div className="space-y-3">
             <div
               className="grid grid-cols-5 gap-1"
@@ -463,7 +396,7 @@ function Measure3dCard({ state }: { state: Measure3dState }) {
           </CollapsibleSection>
         )}
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }
 

@@ -2626,6 +2626,11 @@
     }
   },
   "toolbar": {
+    "mapToolPanel": {
+      "minimize": "Minimize to icon",
+      "restore": "Restore panel",
+      "restoreNamed": "Restore {{title}}"
+    },
     "menu": {
       "project": "Progetto",
       "import": "Importa",

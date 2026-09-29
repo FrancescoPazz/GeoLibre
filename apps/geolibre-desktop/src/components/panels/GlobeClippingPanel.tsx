@@ -6,13 +6,14 @@ import {
   type GlobeClippingState,
 } from "@geolibre/plugins";
 import { Button } from "@geolibre/ui";
-import { Eraser, Scissors, TriangleAlert, X } from "lucide-react";
-import { type PointerEvent as ReactPointerEvent, useState, useSyncExternalStore } from "react";
+import { Eraser, Scissors, TriangleAlert } from "lucide-react";
+import { useRef, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { clamp } from "../../lib/clamp";
+import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 
 const PANEL_WIDTH = 300;
-const EDGE_MARGIN = 12;
 
 /**
  * Globe clipping panel (Controls → Globe clipping): cut a hole in the
@@ -32,43 +33,13 @@ export function GlobeClippingPanel() {
 
 function GlobeClippingCard({ state }: { state: GlobeClippingState }) {
   const { t } = useTranslation();
-  const [position, setPosition] = useState(() => ({ x: EDGE_MARGIN, y: EDGE_MARGIN }));
-
-  const handleDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const handleMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const handleUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", handleMove);
-      handle.removeEventListener("pointerup", handleUp);
-      handle.removeEventListener("pointercancel", handleUp);
-    };
-    handle.addEventListener("pointermove", handleMove);
-    handle.addEventListener("pointerup", handleUp);
-    handle.addEventListener("pointercancel", handleUp);
-  };
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useFloatingMapPanelPosition(
+    "globe-clipping",
+    PANEL_WIDTH,
+    cardRef,
+  );
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON["globe-clipping"];
 
   const { bound, layers, activeLayerId, pending, halfWidthMeters } = state;
   const warning = !bound
@@ -83,19 +54,19 @@ function GlobeClippingCard({ state }: { state: GlobeClippingState }) {
       : t("toolbar.globeClipping.cut", { size: Math.round((halfWidthMeters ?? 0) * 2) });
 
   return (
-    <div
-      className="absolute z-30 rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.globeClipping.title")}
-      data-testid="globe-clipping-panel"
-    >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={handleDragStart}
-      >
-        <Scissors className="h-4 w-4 text-orange-500" />
-        <span className="text-sm font-medium">{t("toolbar.globeClipping.title")}</span>
+    <FloatingMapToolPanelShell
+      id="globe-clipping"
+      title={t("toolbar.globeClipping.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={() => closeGlobeClippingPanel()}
+      closeAriaLabel={t("toolbar.globeClipping.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID["globe-clipping"]}
+      headerActions={
         <Button
           variant="ghost"
           size="icon"
@@ -107,17 +78,8 @@ function GlobeClippingCard({ state }: { state: GlobeClippingState }) {
         >
           <Eraser className="h-3.5 w-3.5" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("toolbar.globeClipping.close")}
-          onClick={() => closeGlobeClippingPanel()}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-
+      }
+    >
       <div className="space-y-3 p-3">
         {warning ? (
           <div
@@ -153,6 +115,6 @@ function GlobeClippingCard({ state }: { state: GlobeClippingState }) {
 
         <p className="text-xs text-muted-foreground">{t("toolbar.globeClipping.help")}</p>
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }

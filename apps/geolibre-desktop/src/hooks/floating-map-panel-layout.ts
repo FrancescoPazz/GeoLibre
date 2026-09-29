@@ -2,12 +2,18 @@ export const FLOATING_MAP_PANEL_EDGE_MARGIN = 12;
 const PANEL_GAP = 12;
 export const FLOATING_MAP_ROW_GAP = 12;
 
+/** Matches maplibre-gl-components control grid collapsed control size. */
+export const FLOATING_MAP_PANEL_ICON_SIZE = 29;
+/** Matches `.maplibre-gl-control-grid-content > * { margin: 4px }` spacing. */
+export const FLOATING_MAP_PANEL_ICON_GAP = 4;
+
 /** Map floating tool cards laid out left-to-right when multiple are open. */
 export type FloatingMapPanelId =
   | "measure3d"
   | "play-path"
   | "line-of-sight"
   | "viewshed-area"
+  | "globe-clipping"
   | "elevation-bands"
   | "coords-converter"
   | "microzonation";
@@ -17,6 +23,7 @@ export const FLOATING_MAP_PANEL_ORDER: FloatingMapPanelId[] = [
   "play-path",
   "line-of-sight",
   "viewshed-area",
+  "globe-clipping",
   "elevation-bands",
   "coords-converter",
   "microzonation",
@@ -27,6 +34,7 @@ export const FLOATING_MAP_PANEL_WIDTHS: Record<FloatingMapPanelId, number> = {
   "play-path": 300,
   "line-of-sight": 300,
   "viewshed-area": 300,
+  "globe-clipping": 300,
   "elevation-bands": 340,
   "coords-converter": 360,
   microzonation: 460,
@@ -37,12 +45,34 @@ export const FLOATING_MAP_PANEL_ESTIMATED_HEIGHTS: Record<FloatingMapPanelId, nu
   "play-path": 280,
   "line-of-sight": 320,
   "viewshed-area": 360,
+  "globe-clipping": 260,
   "elevation-bands": 380,
   "coords-converter": 340,
   microzonation: 420,
 };
 
 export type FloatingMapPanelOpenSet = Record<FloatingMapPanelId, boolean>;
+
+export type FloatingMapPanelMinimizedSet = Partial<Record<FloatingMapPanelId, boolean>>;
+
+/** Open panels that are not minimized to the icon dock. */
+export function expandedFloatingMapPanelOpenSet(
+  open: FloatingMapPanelOpenSet,
+  minimized: FloatingMapPanelMinimizedSet = {},
+): FloatingMapPanelOpenSet {
+  const expanded = { ...open };
+  for (const id of FLOATING_MAP_PANEL_ORDER) {
+    if (minimized[id]) expanded[id] = false;
+  }
+  return expanded;
+}
+
+export function minimizedFloatingMapPanels(
+  open: FloatingMapPanelOpenSet,
+  minimized: FloatingMapPanelMinimizedSet = {},
+): FloatingMapPanelId[] {
+  return FLOATING_MAP_PANEL_ORDER.filter((id) => open[id] && minimized[id]);
+}
 
 export type FloatingMapLayoutBounds = { width: number; height: number };
 
@@ -109,7 +139,9 @@ export function layoutFloatingMapPanels(
   open: FloatingMapPanelOpenSet,
   bounds: FloatingMapLayoutBounds,
   sizes: FloatingMapLayoutSizes = {},
+  minimized: FloatingMapPanelMinimizedSet = {},
 ): Partial<Record<FloatingMapPanelId, { x: number; y: number }>> {
+  open = expandedFloatingMapPanelOpenSet(open, minimized);
   const widths = floatingMapPanelWidths(sizes.widths);
   const heights = floatingMapPanelHeights(sizes.heights);
   const positions: Partial<Record<FloatingMapPanelId, { x: number; y: number }>> = {};
@@ -140,13 +172,37 @@ export function layoutFloatingMapPanels(
 }
 
 /** Position for one panel (uses shared row-major layout). */
+/**
+ * Bottom-end vertical stack for minimized tool panel icons (avoids bottom-left
+ * scale/collab/bounds badges and top-left ControlGrid).
+ */
+export function layoutFloatingMapPanelMinimizedIcons(
+  open: FloatingMapPanelOpenSet,
+  bounds: FloatingMapLayoutBounds,
+  minimized: FloatingMapPanelMinimizedSet = {},
+): Partial<Record<FloatingMapPanelId, { x: number; y: number }>> {
+  const ids = minimizedFloatingMapPanels(open, minimized);
+  const positions: Partial<Record<FloatingMapPanelId, { x: number; y: number }>> = {};
+  const margin = FLOATING_MAP_PANEL_EDGE_MARGIN;
+  const size = FLOATING_MAP_PANEL_ICON_SIZE;
+  const gap = FLOATING_MAP_PANEL_ICON_GAP;
+  const x = Math.max(margin, bounds.width - margin - size);
+  let y = bounds.height - margin - size;
+  for (const id of ids) {
+    positions[id] = { x, y: Math.max(margin, y) };
+    y -= size + gap;
+  }
+  return positions;
+}
+
 export function positionForOpenFloatingMapPanel(
   id: FloatingMapPanelId,
   open: FloatingMapPanelOpenSet,
   bounds: FloatingMapLayoutBounds = UNBOUNDED_FLOATING_MAP_LAYOUT,
   sizes: FloatingMapLayoutSizes = {},
+  minimized: FloatingMapPanelMinimizedSet = {},
 ): { x: number; y: number } {
-  const positions = layoutFloatingMapPanels(open, bounds, sizes);
+  const positions = layoutFloatingMapPanels(open, bounds, sizes, minimized);
   return (
     positions[id] ?? {
       x: FLOATING_MAP_PANEL_EDGE_MARGIN,

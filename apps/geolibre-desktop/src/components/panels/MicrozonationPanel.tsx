@@ -18,19 +18,12 @@ import {
   type MicrozonationRecord,
 } from "@geolibre/plugins";
 import { Button } from "@geolibre/ui";
-import { Activity, ExternalLink, X } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type PointerEvent as ReactPointerEvent,
-  type RefObject,
-} from "react";
+import { ExternalLink } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useFloatingMapPanelPosition } from "../../hooks/useFloatingMapPanelPosition";
-import { clamp } from "../../lib/clamp";
+import { FLOATING_MAP_PANEL_ICON, FLOATING_MAP_PANEL_TEST_ID } from "./floating-map-panel-meta";
+import { FloatingMapToolPanelShell } from "./FloatingMapToolPanelShell";
 import { useMicrozonationConfig } from "../../hooks/useMicrozonationConfig";
 import {
   closeMicrozonationPanel,
@@ -39,7 +32,6 @@ import {
 } from "../../lib/microzonation-panel";
 
 const PANEL_WIDTH = 460;
-const EDGE_MARGIN = 12;
 
 interface MicrozonationPanelProps {
   mapControllerRef: RefObject<MapEngine | null>;
@@ -74,42 +66,8 @@ function MicrozonationCard({
     PANEL_WIDTH,
     cardRef,
   );
+  const { Icon, className: iconClassName } = FLOATING_MAP_PANEL_ICON.microzonation;
 
-  const onDragStart = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button,input,select,label,a")) return;
-    event.preventDefault();
-    const handle = event.currentTarget;
-    handle.setPointerCapture(event.pointerId);
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const origin = position;
-    const onMove = (move: PointerEvent) => {
-      const card = handle.parentElement;
-      const bounds = card?.parentElement?.getBoundingClientRect();
-      const cardHeight = card?.getBoundingClientRect().height ?? 80;
-      const maxX = Math.max(
-        EDGE_MARGIN,
-        (bounds?.width ?? window.innerWidth) - PANEL_WIDTH - EDGE_MARGIN,
-      );
-      const maxY = Math.max(
-        EDGE_MARGIN,
-        (bounds?.height ?? window.innerHeight) - cardHeight - EDGE_MARGIN,
-      );
-      setPosition({
-        x: clamp(origin.x + (move.clientX - startX), EDGE_MARGIN, maxX),
-        y: clamp(origin.y + (move.clientY - startY), EDGE_MARGIN, maxY),
-      });
-    };
-    const onUp = () => {
-      handle.releasePointerCapture(event.pointerId);
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
-    };
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
-    handle.addEventListener("pointercancel", onUp);
-  };
   const [projects, setProjects] = useState<MicrozonationProjects | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -234,30 +192,21 @@ function MicrozonationCard({
   );
 
   return (
-    <div
-      ref={cardRef}
-      className="pointer-events-auto absolute z-30 flex max-h-[85%] flex-col rounded-lg border border-border map-glass shadow-lg"
-      style={{ left: position.x, top: position.y, width: PANEL_WIDTH }}
-      role="dialog"
-      aria-label={t("toolbar.microzonation.title")}
-      data-testid="microzonation-panel"
+    <FloatingMapToolPanelShell
+      id="microzonation"
+      title={t("toolbar.microzonation.title")}
+      icon={Icon}
+      iconClassName={iconClassName}
+      width={PANEL_WIDTH}
+      cardRef={cardRef}
+      position={position}
+      setPosition={setPosition}
+      onClose={closeMicrozonationPanel}
+      closeAriaLabel={t("toolbar.microzonation.close")}
+      testId={FLOATING_MAP_PANEL_TEST_ID.microzonation}
+      cardClassName="flex max-h-[85%] flex-col"
+      dragIgnoreSelector="button,input,select,label,a"
     >
-      <div
-        className="flex cursor-grab items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 px-3 py-2 active:cursor-grabbing"
-        onPointerDown={onDragStart}
-      >
-        <Activity className="h-4 w-4 text-sky-500" />
-        <span className="text-sm font-medium">{t("toolbar.microzonation.title")}</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="ms-auto h-6 w-6"
-          aria-label={t("toolbar.microzonation.close")}
-          onClick={closeMicrozonationPanel}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
-      </div>
       <div className="min-h-0 space-y-3 overflow-y-auto p-3 text-xs">
         {!config ? (
           <p className="text-muted-foreground">{t("toolbar.microzonation.unconfigured")}</p>
@@ -578,6 +527,6 @@ function MicrozonationCard({
           </>
         )}
       </div>
-    </div>
+    </FloatingMapToolPanelShell>
   );
 }
