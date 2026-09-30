@@ -127,6 +127,7 @@ import type { ProjectFileActions } from "../../hooks/useProjectFileActions";
 import { useToolbarPanels } from "../../hooks/useToolbarPanels";
 import { useVectorTileGeometryBackfill } from "../../hooks/useVectorTileGeometryBackfill";
 import type { ThemeMode } from "../../hooks/useThemeMode";
+import { resolveAppName } from "../../lib/app-name";
 import { isMobile } from "../../lib/is-mobile";
 import { isTauri } from "../../lib/tauri-io";
 import { isMaptoolkitBasemapActive } from "../../lib/maptoolkit-basemap";
@@ -2278,7 +2279,8 @@ export function TopToolbar({
   // name from tauri.ios.conf.json, the home-screen icon, and the store listing),
   // so titling it "GeoLibre Desktop" there contradicts every other surface.
   const branding = useBranding();
-  const appTitle = branding.name ?? (isTauri() && !isMobile() ? "GeoLibre Desktop" : "GeoLibre");
+  // A deployment can replace either with its own name (GEOLIBRE_APP_NAME).
+  const appTitle = resolveAppName(isTauri() && !isMobile() ? "GeoLibre Desktop" : "GeoLibre");
   const brandMark = branding.logoUrl ? (
     <img src={branding.logoUrl} alt="" className="h-6 max-w-32 object-contain" />
   ) : (

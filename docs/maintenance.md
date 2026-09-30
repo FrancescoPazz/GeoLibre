@@ -18,12 +18,18 @@ suite.
 ### Patched packages (`patches/`)
 
 `postinstall` applies the `patch-package` patches in `patches/`, and each patch
-file names the exact version it was made against. `@carbonplan/zarr-layer` is
-declared with an exact version (no `^`) in both `apps/geolibre-desktop` and
-`packages/plugins` so a routine install can never move it past the patched
-version. To bump it, regenerate the patch against the new version (or drop it if
-upstream fixed the bug), rename the patch file, and update both declarations and
-`package-lock.json` in the same PR.
+file names the exact version it was made against. A bump that moves a patched
+package past that version fails `npm install` in CI. Regenerate the patch
+against the new version (or drop it if upstream fixed the bug), rename the patch
+file, and update `package-lock.json` in the same PR.
+
+`@carbonplan/zarr-layer` is declared with an exact version (no `^`) in both
+`apps/geolibre-desktop` and `packages/plugins`. It carried a patch until 0.10.0,
+which shipped the same non-throwing uniform lookups upstream (the layer vanished
+at zoom >= 12 on Mesa GPUs without them). Before bumping it, confirm
+`createShaderProgram` in its `dist/index.js` still looks up `shift_x`,
+`shift_y` and `u_worldXOffset` with `gl.getUniformLocation`, not
+`mustGetUniformLocation`.
 
 ### `geolibre-wasm` (`packages/processing/package.json`)
 
@@ -315,6 +321,22 @@ layer, before `loadPointCloud` resolves; it throws if not.
 `tests/lidar-url-layer.test.ts` pins the GeoLibre side of both. Re-read
 `loadPointCloud` on a bump.
 
+The point cloud annotator (`packages/plugins/src/plugins/point-cloud-annotation/`)
+edits the control's loaded points through the point-editing API the package
+added in 0.18 (`getPointCloudData`, `refreshPointColors`, `getRenderSettings`,
+`pauseStreaming`/`resumeStreaming`, `isStreamingLoading`,
+`DeckOverlay.getViewport`), all called from `lidar-access.ts`. Two things are not
+compiler checked. Edits write into the arrays `getPointCloudData` returns, which
+relies on them being the buffers the layers render from (for a streamed cloud,
+views of the loader's buffers). Saved labels are keyed by `nodeRanges`
+(`(node key, index - start)`), so a change in how the loaders order a node's
+points would silently re-apply labels to the wrong points. `ASPRS_CLASSES` in
+`classes.ts` hand-mirrors the package's unexported `CLASSIFICATION_COLORS`;
+`tests/point-cloud-annotation.test.ts` reads the real colours back through
+`ColorSchemeProcessor` and fails on drift. Run
+`npx playwright test e2e/point-cloud-annotation.spec.ts --project=features` on
+a bump.
+
 ### `maplibre-gl-splat` (`packages/plugins/package.json`) — private internals
 
 `packages/plugins/src/plugins/components/splatting.ts` reaches into
@@ -337,6 +359,24 @@ and placement restore stop working without an error.
 not catch that either: re-read `loadSplat` / `loadModel` in the package on a bump.
 Better still, upstream an id option and a per-asset placement getter and delete
 the patching.
+
+### `@geoman-io/maplibre-geoman-free` (`packages/plugins/package.json`) — change-mode internals
+
+Geoman's change mode removes a vertex on right-click, but only for LineString,
+Polygon and MultiPolygon. `installMultiLineVertexRemoval` in
+`packages/plugins/src/plugins/maplibre-geo-editor.ts` adds MultiLineString
+(discussion #2750). It hooks `geoman.actionInstances` and wraps the
+`edit__change` action's `cutVertex`, reading the `featureData` / `markerData`
+payload and calling `fireFeatureUpdatedEvent`. None of that is checked by the
+compiler. `patch-package` is no help here: the app loads the nested copies
+under `packages/plugins` and `apps/geolibre-desktop`, not the root one.
+
+If a bump renames the action key or those members, the wrapper silently stops
+applying and MultiLineString vertices go back to logging
+`EditChange.cutVertex: feature not updated`. On a bump, re-read `cutVertex` in
+the package's `dist/maplibre-geoman.es.js`, then right-click a MultiLineString
+vertex in Edit mode. If upstream adds MultiLineString support, delete the
+wrapper.
 
 ### `zarr-cesium` (`packages/map/package.json`) — private internals
 

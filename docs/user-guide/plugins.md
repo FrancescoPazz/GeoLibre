@@ -10,29 +10,30 @@ The **Plugins** menu lists every available plugin under **Activate plugin**. Cli
 
 The built-in plugins are:
 
-| Plugin                 | What it adds                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Layer Control**      | The on-map layer list. On by default.                                                                                                                                                                                                                                                                                                                                                                  |
-| **GeoEditor**          | Drawing, vertex editing, and deletion tools for GeoJSON layers.                                                                                                                                                                                                                                                                                                                                        |
-| **Annotations**        | The map-annotation toolbar and Elements panel. See [Annotations](map-controls.md#annotations-and-the-elements-panel).                                                                                                                                                                                                                                                                                  |
-| **Basemaps**           | A basemap gallery for switching the background map, from the same catalog as the [Change basemap dialog](adding-data.md#basemaps).                                                                                                                                                                                                                                                                     |
-| **Web Services**       | A submenu of catalog and service browsers: FEMA NFHL, NASA Earthdata, US EPA EnviroAtlas, USGS National Map, USGS NLDI, Vantor Open Data, Planet Open Data, Earthdata GIS, OpenAerialMap, ArcGIS Hub, Socrata, CKAN, STAC Catalogs, Source Cooperative, Natural Earth, Hugging Face, Satellite Embeddings, Fields of the World, Ocean Data Platform, and GeoLens. See [Web Services](web-services.md). |
-| **Historical Imagery** | Browse historical aerial and satellite imagery for a location.                                                                                                                                                                                                                                                                                                                                         |
-| **Time Slider**        | Filter a temporal layer by a date or number field.                                                                                                                                                                                                                                                                                                                                                     |
-| **Timelapse**          | Animate annual cloudless basemaps (EOX Sentinel-2, and NASA GIBS Landsat/WELD and MODIS land cover) with a provider picker and legend.                                                                                                                                                                                                                                                                 |
-| **Overture Maps**      | Browse and add Overture Maps themes.                                                                                                                                                                                                                                                                                                                                                                   |
-| **GeoAgent**           | An in-map AI agent panel.                                                                                                                                                                                                                                                                                                                                                                              |
-| **USGS LiDAR**         | Clip a USGS point cloud to an area of interest and download the result as COPC.                                                                                                                                                                                                                                                                                                                        |
-| **Street View**        | Google Street View panoramas at a clicked point.                                                                                                                                                                                                                                                                                                                                                       |
-| **Mapillary**          | Mapillary street-level imagery.                                                                                                                                                                                                                                                                                                                                                                        |
-| **Elevation Profile**  | A terrain profile along a drawn line, or along the line features currently selected on a layer.                                                                                                                                                                                                                                                                                                        |
-| **Layer Swipe**        | A swipe bar comparing two layers.                                                                                                                                                                                                                                                                                                                                                                      |
-| **DGGS**               | A submenu of discrete global grid overlays — H3, S2, A5, DGGRID, DGGAL, OLC, Geohash, and Tilecode — each rendering its grid over the current view, identifying a cell, and exporting the grid or selection.                                                                                                                                                                                           |
-| **Flight Simulator**   | Fly over terrain and 3D layers with keyboard controls.                                                                                                                                                                                                                                                                                                                                                 |
-| **God's Eye View**     | Explore live earthquakes, satellite orbits, flights, transit, public cameras, bike share, radio stations, infrastructure, and more on the Cesium globe. Feed toggles and clock speed are saved with the project.                                                                                                                                                                                       |
-| **SamGeo**             | Segment imagery into vector features. See [AI Segmentation](segmentation.md).                                                                                                                                                                                                                                                                                                                          |
+| Plugin                     | What it adds                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Layer Control**          | The on-map layer list. On by default.                                                                                                                                                                                                                                                                                                                                                                  |
+| **GeoEditor**              | Drawing, vertex editing, and deletion tools for GeoJSON layers.                                                                                                                                                                                                                                                                                                                                        |
+| **Annotations**            | The map-annotation toolbar and Elements panel. See [Annotations](map-controls.md#annotations-and-the-elements-panel).                                                                                                                                                                                                                                                                                  |
+| **Basemaps**               | A basemap gallery for switching the background map, from the same catalog as the [Change basemap dialog](adding-data.md#basemaps).                                                                                                                                                                                                                                                                     |
+| **Web Services**           | A submenu of catalog and service browsers: FEMA NFHL, NASA Earthdata, US EPA EnviroAtlas, USGS National Map, USGS NLDI, Vantor Open Data, Planet Open Data, Earthdata GIS, OpenAerialMap, ArcGIS Hub, Socrata, CKAN, STAC Catalogs, Source Cooperative, Natural Earth, Hugging Face, Satellite Embeddings, Fields of the World, Ocean Data Platform, and GeoLens. See [Web Services](web-services.md). |
+| **Historical Imagery**     | Browse historical aerial and satellite imagery for a location.                                                                                                                                                                                                                                                                                                                                         |
+| **Time Slider**            | Filter a temporal layer by a date or number field.                                                                                                                                                                                                                                                                                                                                                     |
+| **Timelapse**              | Animate annual cloudless basemaps (EOX Sentinel-2, and NASA GIBS Landsat/WELD and MODIS land cover) with a provider picker and legend.                                                                                                                                                                                                                                                                 |
+| **Overture Maps**          | Browse and add Overture Maps themes.                                                                                                                                                                                                                                                                                                                                                                   |
+| **GeoAgent**               | An in-map AI agent panel.                                                                                                                                                                                                                                                                                                                                                                              |
+| **USGS LiDAR**             | Clip a USGS point cloud to an area of interest and download the result as COPC.                                                                                                                                                                                                                                                                                                                        |
+| **Street View**            | Google Street View panoramas at a clicked point.                                                                                                                                                                                                                                                                                                                                                       |
+| **Mapillary**              | Mapillary street-level imagery.                                                                                                                                                                                                                                                                                                                                                                        |
+| **Elevation Profile**      | A terrain profile along a drawn line, or along the line features currently selected on a layer.                                                                                                                                                                                                                                                                                                        |
+| **Layer Swipe**            | A swipe bar comparing two layers.                                                                                                                                                                                                                                                                                                                                                                      |
+| **DGGS**                   | A submenu of discrete global grid overlays — H3, S2, A5, DGGRID, DGGAL, OLC, Geohash, and Tilecode — each rendering its grid over the current view, identifying a cell, and exporting the grid or selection.                                                                                                                                                                                           |
+| **Flight Simulator**       | Fly over terrain and 3D layers with keyboard controls.                                                                                                                                                                                                                                                                                                                                                 |
+| **God's Eye View**         | Explore live earthquakes, satellite orbits, flights, transit, public cameras, bike share, radio stations, infrastructure, and more on the Cesium globe. Feed toggles and clock speed are saved with the project.                                                                                                                                                                                       |
+| **SamGeo**                 | Segment imagery into vector features. See [AI Segmentation](segmentation.md).                                                                                                                                                                                                                                                                                                                          |
+| **Point Cloud Annotation** | Select LiDAR points with a box or lasso, assign ASPRS classes, and export the edited cloud as LAS 1.4 or a Segments.ai label. See [Point cloud annotation](point-cloud-annotation.md).                                                                                                                                                                                                                 |
 
-Most entries open a submenu that **activates** the plugin and **positions** its on-map control in any corner: top left, top right, bottom left, or bottom right. A few behave differently: **Flight Simulator** and **SamGeo** toggle directly with no submenu, and **Web Services** and **DGGS** open a list of their sub-plugins instead.
+Most entries open a submenu that **activates** the plugin and **positions** its on-map control in any corner: top left, top right, bottom left, or bottom right. A few behave differently: **Flight Simulator**, **SamGeo**, and **Point Cloud Annotation** toggle directly with no submenu, and **Web Services** and **DGGS** open a list of their sub-plugins instead.
 
 God's Eye View is inspired by the MIT-licensed
 [bilawalsidhu/gods-eye-view](https://github.com/bilawalsidhu/gods-eye-view),
@@ -76,69 +77,70 @@ as `maplibre-gl-nasa-earthdata`, works too. See
 [Deep-linking a plugin](embedding.md#deep-linking-a-plugin) for how it combines
 with a shared project and the read-only viewer.
 
-| Plugin               | Link name              |
-| -------------------- | ---------------------- |
-| Layer Control        | `layer-control`        |
-| GeoEditor            | `geo-editor`           |
-| Annotations          | `annotations`          |
-| Dimensions           | `dimensions`           |
-| Basemaps             | `basemap-control`      |
-| FEMA NFHL            | `fema-wms`             |
-| NASA Earthdata       | `nasa-earthdata`       |
-| US EPA EnviroAtlas   | `enviroatlas`          |
-| USGS National Map    | `national-map`         |
-| USGS NLDI            | `usgs-nldi`            |
-| Vantor Open Data     | `vantor`               |
-| Planet Open Data     | `planet-open-data`     |
-| Portolan             | `portolan`             |
-| Earthdata GIS        | `earthdata-gis`        |
-| OpenAerialMap        | `openaerialmap`        |
-| OSM Downloader       | `osm-downloader`       |
-| IGN LiDAR HD         | `ign-lidar-hd`         |
-| ArcGIS Hub           | `arcgis-hub`           |
-| Tennessee GIS        | `tennessee-gis`        |
-| US Federal GIS       | `us-federal-gis`       |
-| US State GIS         | `us-state-gis`         |
-| US Local GIS         | `us-local-gis`         |
-| Socrata              | `socrata`              |
-| CKAN                 | `ckan`                 |
-| STAC Catalogs        | `stac-catalogs`        |
-| Source Cooperative   | `source-coop`          |
-| Natural Earth        | `natural-earth`        |
-| Hugging Face         | `huggingface`          |
-| Satellite Embeddings | `satellite-embeddings` |
-| Fields of the World  | `fields-of-the-world`  |
-| Ocean Data Platform  | `ocean-data-platform`  |
-| GeoLens              | `geolens`              |
-| Historical Imagery   | `esri-wayback`         |
-| Time Slider          | `time-slider`          |
-| Timelapse            | `timelapse`            |
-| Overture Maps        | `overture-maps`        |
-| GeoAgent             | `geoagent`             |
-| USGS LiDAR           | `usgs-lidar`           |
-| Street View          | `streetview`           |
-| Mapillary            | `mapillary`            |
-| Elevation Profile    | `elevation-profile`    |
-| Layer Swipe          | `swipe`                |
-| Gridlines            | `graticule`            |
-| H3 Grid              | `h3-grid`              |
-| S2 Grid              | `s2-grid`              |
-| A5 Grid              | `a5-grid`              |
-| DGGRID               | `dggrid`               |
-| DGGAL                | `dggal`                |
-| OLC                  | `olc`                  |
-| Geohash              | `geohash`              |
-| Tilecode             | `tilecode`             |
-| Clouds               | `clouds`               |
-| Precipitation        | `precipitation`        |
-| Atmospheric Effects  | `atmosphere-effects`   |
-| Sun Simulation       | `sun`                  |
-| Route Animation      | `route-animation`      |
-| Flight Simulator     | `flight-simulator`     |
-| God's Eye View       | `gods-eye-view`        |
-| SamGeo               | `samgeo`               |
-| Deck.gl Layer        | `deckgl-viz`           |
-| Components           | `components`           |
+| Plugin                 | Link name                |
+| ---------------------- | ------------------------ |
+| Layer Control          | `layer-control`          |
+| GeoEditor              | `geo-editor`             |
+| Annotations            | `annotations`            |
+| Dimensions             | `dimensions`             |
+| Basemaps               | `basemap-control`        |
+| FEMA NFHL              | `fema-wms`               |
+| NASA Earthdata         | `nasa-earthdata`         |
+| US EPA EnviroAtlas     | `enviroatlas`            |
+| USGS National Map      | `national-map`           |
+| USGS NLDI              | `usgs-nldi`              |
+| Vantor Open Data       | `vantor`                 |
+| Planet Open Data       | `planet-open-data`       |
+| Portolan               | `portolan`               |
+| Earthdata GIS          | `earthdata-gis`          |
+| OpenAerialMap          | `openaerialmap`          |
+| OSM Downloader         | `osm-downloader`         |
+| IGN LiDAR HD           | `ign-lidar-hd`           |
+| ArcGIS Hub             | `arcgis-hub`             |
+| Tennessee GIS          | `tennessee-gis`          |
+| US Federal GIS         | `us-federal-gis`         |
+| US State GIS           | `us-state-gis`           |
+| US Local GIS           | `us-local-gis`           |
+| Socrata                | `socrata`                |
+| CKAN                   | `ckan`                   |
+| STAC Catalogs          | `stac-catalogs`          |
+| Source Cooperative     | `source-coop`            |
+| Natural Earth          | `natural-earth`          |
+| Hugging Face           | `huggingface`            |
+| Satellite Embeddings   | `satellite-embeddings`   |
+| Fields of the World    | `fields-of-the-world`    |
+| Ocean Data Platform    | `ocean-data-platform`    |
+| GeoLens                | `geolens`                |
+| Historical Imagery     | `esri-wayback`           |
+| Time Slider            | `time-slider`            |
+| Timelapse              | `timelapse`              |
+| Overture Maps          | `overture-maps`          |
+| GeoAgent               | `geoagent`               |
+| USGS LiDAR             | `usgs-lidar`             |
+| Point Cloud Annotation | `point-cloud-annotation` |
+| Street View            | `streetview`             |
+| Mapillary              | `mapillary`              |
+| Elevation Profile      | `elevation-profile`      |
+| Layer Swipe            | `swipe`                  |
+| Gridlines              | `graticule`              |
+| H3 Grid                | `h3-grid`                |
+| S2 Grid                | `s2-grid`                |
+| A5 Grid                | `a5-grid`                |
+| DGGRID                 | `dggrid`                 |
+| DGGAL                  | `dggal`                  |
+| OLC                    | `olc`                    |
+| Geohash                | `geohash`                |
+| Tilecode               | `tilecode`               |
+| Clouds                 | `clouds`                 |
+| Precipitation          | `precipitation`          |
+| Atmospheric Effects    | `atmosphere-effects`     |
+| Sun Simulation         | `sun`                    |
+| Route Animation        | `route-animation`        |
+| Flight Simulator       | `flight-simulator`       |
+| God's Eye View         | `gods-eye-view`          |
+| SamGeo                 | `samgeo`                 |
+| Deck.gl Layer          | `deckgl-viz`             |
+| Components             | `components`             |
 
 Directions and reverse geocoding are not listed: they send what you click to a
 public server, so they only open from the menu, after their one-time notice.
