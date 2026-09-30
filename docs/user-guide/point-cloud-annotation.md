@@ -46,7 +46,7 @@ Scroll to zoom and right-drag to tilt or rotate as usual.
 ## Custom classes
 
 Open **Custom classes** under the assign controls to add classes of your own
-(for example *Car* or *Solar panel*). Give each a code from 19 to 255 (ASPRS
+(for example _Car_ or _Solar panel_). Give each a code from 19 to 255 (ASPRS
 reserves 19-63 for future standard classes and leaves 64-255 to users, so the
 panel suggests the first free code from 64), a name and a colour, then press
 **Add**. A custom class can be assigned, locked and boxed like a standard
