@@ -4,9 +4,12 @@ import {
   effectiveLayerRenderState,
   getSpatialExtensionPath,
   hasPathTraversal,
+  isImdfZipBlob,
+  probeImdfZipUrl,
+  shouldZoomToNewLayers,
   useAppStore,
 } from "@geolibre/core";
-import type { GeoLibreLayer, LayerGroup } from "@geolibre/core";
+import type { GeoLibreLayer, ImdfUrlProbe, LayerGroup } from "@geolibre/core";
 // Imported from the `/errors` subpath, a standalone entry point holding just
 // these helpers. The package root re-exports VectorControl, so importing from
 // there would statically pull the control's module graph in and undo the
@@ -25,8 +28,11 @@ import type {
   GeoLibrePickedVectorFile,
 } from "../types";
 import {
+  adoptVectorControlLayers,
+  isAdoptedVectorLayer,
   isEmbeddableLocalVectorLayer,
   isVectorControlStoreLayer,
+  needsAdoptedVectorReplay,
   rememberControlVectorRenderState,
   resetVectorStoreSyncSuspension,
   resumeVectorStoreSync,
@@ -37,8 +43,9 @@ import {
   wireVectorStoreSync,
 } from "./vector-layer-sync";
 import { bridgeVectorControlToStore, exceedsCesiumVectorLimit } from "./vector-cesium-bridge";
-import { applyVectorContainerColors, groupVectorContainerImports } from "./vector-container-group";
+import { applyInitialVectorStyles, groupVectorContainerImports } from "./vector-container-group";
 import { readableStacLayerHref } from "./stac-signing";
+import { focusPanel, restorePanelFocus } from "./panel-focus";
 import type { FeatureCollection } from "geojson";
 
 const vectorControlPosition: GeoLibreMapControlPosition = "top-left";
@@ -82,6 +89,18 @@ const SAMPLE_VECTOR_DATASETS: VectorSampleDataset[] = [
     url: "https://data.source.coop/giswqs/opengeos/las-vegas-buildings.geojson",
   },
   {
+    // OpenStreetMap indoor mapping (rooms and corridors with a `level`), for
+    // 3D indoor views (#3341). Data © OpenStreetMap contributors, ODbL.
+    label: "Berlin Hbf indoor (OSM)",
+    url: "https://data.source.coop/giswqs/opengeos/berlin-hbf-indoor.geojson",
+  },
+  {
+    // Apple's IMDF sample venue (MIT licensed), opened by GeoLibre's IMDF
+    // importer as stacked, floor-picker-linked layers (#3341).
+    label: "Dinoseum indoor venue (IMDF)",
+    url: "https://data.source.coop/giswqs/opengeos/Dinoseum.zip",
+  },
+  {
     label: "H3 building counts",
     url: "https://data.source.coop/giswqs/opengeos/building_count_h3.parquet",
   },
@@ -103,6 +122,14 @@ let vectorControl: VectorControl | null = null;
 let vectorControlMounted = false;
 let openPanelTimeout: number | null = null;
 let restorePanelExpandTimeout: number | null = null;
+/**
+ * The `projectGeneration` in which the user last opened the panel, or null once
+ * it is closed. A restore pass for that same project (the map finishing its
+ * first style load, a basemap swap) must not apply the project's saved panel
+ * state over the user's newer choice: opening Add Data → Vector Layer before
+ * the basemap loaded used to show the panel and then hide it again (#2895).
+ */
+let panelOpenedInGeneration: number | null = null;
 /**
  * Layer ids with an `addData` replay in flight, from project restore or from
  * replayVectorControlLayerById.
@@ -182,9 +209,13 @@ export function setKmlFileImportHandler(handler: KmlFileImportHandler | null): v
  * @param app - The GeoLibre app API.
  */
 export function openVectorLayerPanel(app: GeoLibreAppAPI): void {
+  const openedInGeneration = useAppStore.getState().projectGeneration;
   void (async () => {
     const control = await ensureVectorControl(app);
     if (!control) return;
+    // Recorded only once the control exists, so a failed open never makes a
+    // later restore skip the project's saved panel state.
+    panelOpenedInGeneration = openedInGeneration;
     // Defer by one task so the control finishes its mount cycle before the
     // panel is shown and expanded, matching the other standalone panels
     // (Earth Engine, 3D Tiles, raster); expanding in the same task as
@@ -205,6 +236,8 @@ export function openVectorLayerPanel(app: GeoLibreAppAPI): void {
         applyVectorPanelClass(control);
         wireDesktopFilePicker(control, app);
         wireKmlFileImporter(control);
+        // Take keyboard focus off the menu trigger and into the panel (#2895).
+        focusPanel((control as unknown as VectorControlInternals)._panel, VECTOR_CLOSE_SELECTOR);
       } catch (error) {
         console.error("[GeoLibre] Failed to open the vector layer panel", error);
       }
@@ -215,6 +248,7 @@ export function openVectorLayerPanel(app: GeoLibreAppAPI): void {
 }
 
 export function closeVectorLayerPanel(app: GeoLibreAppAPI): void {
+  panelOpenedInGeneration = null;
   if (openPanelTimeout !== null) {
     window.clearTimeout(openPanelTimeout);
     openPanelTimeout = null;
@@ -279,7 +313,9 @@ export async function getVectorLayerPropertyValues(
  * @param app - The GeoLibre app API.
  */
 export function restoreVectorLayers(app: GeoLibreAppAPI): void {
-  const hasVectorLayers = useAppStore.getState().layers.some(isVectorControlStoreLayer);
+  // Adopted layers ride along: one saved by URL or path has no features until
+  // the control reads them again, and adoption then hands them back.
+  const hasVectorLayers = useAppStore.getState().layers.some(needsVectorControlReplay);
   if (!hasVectorLayers && !vectorControl) return;
 
   void (async () => {
@@ -291,7 +327,7 @@ export function restoreVectorLayers(app: GeoLibreAppAPI): void {
     const storeLayerIds = new Set(
       useAppStore
         .getState()
-        .layers.filter(isVectorControlStoreLayer)
+        .layers.filter(needsVectorControlReplay)
         .map((layer) => layer.id),
     );
 
@@ -316,7 +352,11 @@ export function restoreVectorLayers(app: GeoLibreAppAPI): void {
       // Isolated so a DOM error from the panel-state restore cannot abort
       // the layer replay below.
       try {
-        applyRestoredVectorPanelState(control, panelCollapsed);
+        // The user opened the panel after this project loaded, so their choice
+        // is newer than the saved state; leave the panel as they left it.
+        if (panelOpenedInGeneration !== useAppStore.getState().projectGeneration) {
+          applyRestoredVectorPanelState(control, panelCollapsed);
+        }
       } catch (error) {
         console.error("[GeoLibre] Failed to restore vector panel state", error);
       }
@@ -329,7 +369,7 @@ export function restoreVectorLayers(app: GeoLibreAppAPI): void {
         useAppStore.getState().layerGroups.map((group) => [group.id, group] as const),
       );
       for (const layer of useAppStore.getState().layers) {
-        if (!isVectorControlStoreLayer(layer)) continue;
+        if (!needsVectorControlReplay(layer)) continue;
         // Project loading can invoke this restore pass more than once before
         // the first pass finishes. addData does not expose the layer through
         // getLayer until its async ingest completes, so getLayer alone lets the
@@ -473,6 +513,17 @@ export function restoreVectorLayers(app: GeoLibreAppAPI): void {
 }
 
 /**
+ * Whether a store layer's data has to come from the vector control: a
+ * control-drawn layer, or an adopted one saved without its features.
+ *
+ * @param layer - A store layer.
+ * @returns True when restore or refresh must replay it through the control.
+ */
+function needsVectorControlReplay(layer: GeoLibreLayer): boolean {
+  return isVectorControlStoreLayer(layer) || needsAdoptedVectorReplay(layer);
+}
+
+/**
  * Replays one saved Add Vector Layer layer into the control, preserving its
  * id, name, visibility, opacity, and persisted render/style state. The source
  * is a URL (URL-backed layers), a File re-read from disk (desktop local-file
@@ -545,6 +596,7 @@ export function replayVectorLayer(
  * record of it, which is why {@link reloadVectorControlLayer} returns undefined
  * for it. The layer panel's refresh (the button and the auto-refresh tick)
  * falls through to this, so the next successful fetch brings the layer back.
+ * The same path refreshes an adopted layer, which the control never holds.
  *
  * URL-backed only. A local-file layer needs the host's filesystem reader, which
  * lives with the restore path rather than in this module, and an embedded-source
@@ -573,7 +625,11 @@ export async function replayVectorControlLayerById(
 
   const state = useAppStore.getState();
   const layer = state.layers.find((candidate) => candidate.id === id);
-  if (!layer || !isVectorControlStoreLayer(layer)) return undefined;
+  // An adopted layer is never in the control, so refreshing one always lands
+  // here: the replay re-fetches the URL and adoption swaps the new features in.
+  if (!layer || !(isVectorControlStoreLayer(layer) || isAdoptedVectorLayer(layer))) {
+    return undefined;
+  }
 
   const url = typeof layer.source.url === "string" && layer.source.url ? layer.source.url : null;
   if (!url) return undefined;
@@ -937,14 +993,95 @@ function createVectorControl(
   const panelStateSyncHandler: VectorControlEventHandler = () => syncVectorLayersToStore(control);
   control.on("expand", panelStateSyncHandler);
   control.on("collapse", panelStateSyncHandler);
-  groupVectorContainerImports(control, (name, ids, style) => {
-    applyVectorContainerColors(ids, style);
-    useAppStore.getState().addLayerGroup(name, ids);
-  });
+  groupVectorContainerImports(
+    control,
+    (name, ids) => useAppStore.getState().addLayerGroup(name, ids),
+    // Every add, not only containers: a single layer gets its palette color too.
+    // Relies on the store already holding the new layers when addData
+    // resolves: the `layeradded` handler above syncs them synchronously.
+    applyInitialVectorStyles,
+  );
+  // After the container grouping above, so its addData wrapper runs inside this
+  // one and a container's tables are grouped before they are adopted.
+  wireVectorAdoption(control);
+  // Outermost: an IMDF zip URL never reaches the control at all.
+  wireImdfUrlImports(control);
   wireVectorStoreSync(control);
   patchVectorControlOnRemove(control, panelStateSyncHandler);
+  defaultVectorFitToPreference(control);
 
   return control;
+}
+
+/**
+ * Makes the control's "fit to the new layer" default follow the project's
+ * Map Preferences instead of the upstream `true`.
+ *
+ * The control's own panel calls `control.addData` without `fitBounds`, so the
+ * instance method is wrapped; a caller that passes `fitBounds` explicitly
+ * (project restore passes `false`) is left alone.
+ *
+ * @param control - The vector control whose `addData` is wrapped.
+ */
+function defaultVectorFitToPreference(control: VectorControl): void {
+  const addData = control.addData.bind(control);
+  control.addData = (source, options) =>
+    addData(source, {
+      ...options,
+      fitBounds: options?.fitBounds ?? shouldZoomToNewLayers(),
+    });
+}
+
+/**
+ * Adopts the control's small GeoJSON-mode layers into GeoLibre once they have
+ * loaded, so a layer added through Add Vector Layer gets the same Style panel
+ * as a drag-and-drop one (opengeos/GeoLibre#2715). See
+ * {@link adoptVectorControlLayers} for what stays with the control.
+ *
+ * Every load goes through `addData` (the panel's own inputs, a dropped
+ * container, a URL add, a project restore), so wrapping it catches them all.
+ * Adoption waits for the load to settle, and runs a task later, for two
+ * reasons: a container import groups its tables when its `addData` resolves,
+ * and callers such as {@link addVectorFileToMap} count the new layers in the
+ * control right after awaiting it. The layer events cover the remaining ways a
+ * layer becomes adoptable, such as a render-mode switch in the panel.
+ *
+ * @param control - The vector control to wire.
+ */
+function wireVectorAdoption(control: VectorControl): void {
+  // Ids of loads still in flight. A container's tables are `${id}-<table>`, so
+  // they are held back by prefix until their own load settles.
+  const loading = new Set<string>();
+  const isLoading = (id: string) => {
+    for (const prefix of loading) {
+      if (id === prefix || id.startsWith(`${prefix}-`)) return true;
+    }
+    return false;
+  };
+  let timer: number | null = null;
+  const schedule = () => {
+    if (timer !== null) return;
+    timer = window.setTimeout(() => {
+      timer = null;
+      // A control torn down since (a renderer switch) has no layers to hand over.
+      if (control !== vectorControl) return;
+      void adoptVectorControlLayers(control, { skip: isLoading });
+    }, 0);
+  };
+
+  const addData = control.addData.bind(control);
+  control.addData = async (source, options: VectorLayerOptions = {}) => {
+    const id = options.id ?? crypto.randomUUID();
+    loading.add(id);
+    try {
+      return await addData(source, { ...options, id });
+    } finally {
+      loading.delete(id);
+      schedule();
+    }
+  };
+  control.on("layeradded", schedule);
+  control.on("layerupdated", schedule);
 }
 
 function patchVectorControlOnRemove(
@@ -1057,18 +1194,24 @@ function applyVectorPanelClass(control: VectorControl): void {
   internals._panel?.classList.add(VECTOR_PANEL_CLASS);
 }
 
+const VECTOR_CLOSE_SELECTOR = ".vector-control-close";
+
 // The upstream close button only collapses the panel, leaving the map
 // button visible. Hide the whole control too so closing the panel restores
 // the pre-open map, like dismissing the dialog it replaces. Loaded layers
 // keep rendering; the layer panel still manages them.
 function wireVectorCloseButton(control: VectorControl): void {
   const panel = (control as unknown as VectorControlInternals)._panel;
-  const closeButton = panel?.querySelector<HTMLElement>(".vector-control-close");
+  const closeButton = panel?.querySelector<HTMLElement>(VECTOR_CLOSE_SELECTOR);
   if (!closeButton || closeButton.dataset.geolibreCloseWired === "true") {
     return;
   }
   closeButton.dataset.geolibreCloseWired = "true";
-  closeButton.addEventListener("click", () => hideVectorControl(control));
+  closeButton.addEventListener("click", () => {
+    panelOpenedInGeneration = null;
+    restorePanelFocus(panel);
+    hideVectorControl(control);
+  });
 }
 
 // On desktop the host can read a chosen `.shp`'s sidecar files from the same
@@ -1099,17 +1242,118 @@ function wireDesktopFilePicker(control: VectorControl, app: GeoLibreAppAPI): voi
         // This handler preempts the native input's `change` event entirely, so
         // a KML/KMZ-only selection has to be routed to the host importer here
         // too — `wireKmlFileImporter` never sees a desktop pick.
-        if (
-          await routeKmlFileSelection(picked.map(({ file, sourcePath }) => ({ file, sourcePath })))
-        ) {
-          return;
-        }
-        await addPickedVectorFiles(control, picked);
+        const selection = picked.map(({ file, sourcePath }) => ({ file, sourcePath }));
+        if (await routeKmlFileSelection(selection)) return;
+        // IMDF zips go to the host importer one by one; the rest of the
+        // selection (shapefile zips, other formats) loads as before.
+        const rest = new Set((await routeImdfFileSelection(selection)).map(({ file }) => file));
+        if (rest.size === 0) return;
+        await addPickedVectorFiles(
+          control,
+          picked.filter(({ file }) => rest.has(file)),
+        );
       } catch (error) {
         console.error("[GeoLibre] Failed to load vector files from the desktop picker", error);
       }
     })();
   });
+}
+
+/** Whether a selected file is named like a zip. */
+function isZipFileName(file: File): boolean {
+  return /\.zip$/i.test(file.name);
+}
+
+/**
+ * Hand the IMDF zips of a selection to the host importer (which builds each
+ * venue's stacked, floor-picker-linked layers) and return the rest, which the
+ * vector control loads as before. Only each zip's central directory is read
+ * to decide (see `isImdfZipBlob` in `@geolibre/core`). Without a host importer
+ * everything is returned.
+ *
+ * @param files - The selected files.
+ * @returns The files that are not IMDF archives, in selection order.
+ */
+export async function routeImdfFileSelection(
+  files: readonly KmlFileImport[],
+): Promise<KmlFileImport[]> {
+  if (!kmlFileImportHandler) return [...files];
+  const imdf: KmlFileImport[] = [];
+  const rest: KmlFileImport[] = [];
+  for (const entry of files) {
+    if (isZipFileName(entry.file) && (await isImdfZipBlob(entry.file))) imdf.push(entry);
+    else rest.push(entry);
+  }
+  if (imdf.length > 0) {
+    try {
+      await kmlFileImportHandler(imdf);
+    } catch (error) {
+      // The host importer reports its own failures; the rest still loads.
+      console.error("[GeoLibre] Failed to import the IMDF archive", error);
+    }
+  }
+  return rest;
+}
+
+/** Whether a URL's path names a `.zip` (ignoring the query and fragment). */
+function isZipUrl(source: string): boolean {
+  try {
+    return /\.zip$/i.test(new URL(source).pathname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Route an IMDF zip loaded by URL (the panel's Load button or its sample menu)
+ * to the host importer instead of the vector control, which would read it as
+ * a zipped shapefile. Any other URL, a zip that is not IMDF, or a zip that
+ * cannot be fetched is passed to the control unchanged, so its own error
+ * reporting still applies. A restore replay (an explicit `id`) is never IMDF,
+ * since IMDF layers are store layers, and is passed straight through.
+ *
+ * @param control - The vector control whose `addData` is wrapped.
+ */
+export function wireImdfUrlImports(control: Pick<VectorControl, "addData">): void {
+  const addData = control.addData.bind(control);
+  control.addData = async (source, options = {}) => {
+    if (typeof source !== "string" || options.id || !kmlFileImportHandler || !isZipUrl(source)) {
+      return addData(source, options);
+    }
+    // Range requests read only the zip's central directory. On a host that
+    // ignores Range, a non-IMDF zip of up to 32 MB is downloaded by the probe
+    // and again by the control (see probeImdfZipUrl).
+    let probe: ImdfUrlProbe;
+    try {
+      probe = await probeImdfZipUrl(source);
+    } catch {
+      return addData(source, options);
+    }
+    if (!probe.imdf) return addData(source, options);
+    let bytes = probe.bytes;
+    if (!bytes) {
+      // A network failure here still falls back to the control, as the probe does.
+      const body = await fetch(source)
+        .then((response) => (response.ok ? response.arrayBuffer() : null))
+        .catch(() => null);
+      if (!body) return addData(source, options);
+      bytes = new Uint8Array(body);
+    }
+    const rawName = new URL(source).pathname.split("/").pop() || "venue.zip";
+    let name = rawName;
+    try {
+      name = decodeURIComponent(rawName);
+    } catch {
+      // A malformed escape keeps the raw name; the import still proceeds.
+    }
+    await kmlFileImportHandler([
+      { file: new File([bytes as BlobPart], name, { type: "application/zip" }) },
+    ]);
+    // The layers are store layers, not the control's: there is no control
+    // layer to report. The panel ignores the value; the URL helpers read the
+    // control's layer list instead.
+    return { id: "", name } as unknown as Awaited<ReturnType<VectorControl["addData"]>>;
+  };
 }
 
 /** Whether every selected file is a KML/KMZ (and there is at least one). */
@@ -1134,11 +1378,56 @@ function wireKmlFileImporter(control: VectorControl): void {
   const fileInput = panel?.querySelector<HTMLInputElement>('input[type="file"]');
   if (!fileInput || fileInput.dataset.geolibreKmlImporterWired === "true") return;
   fileInput.dataset.geolibreKmlImporterWired = "true";
+  // `change` events this listener re-dispatched after taking the IMDF zips
+  // out of a selection; they go on to the KML check and the control.
+  const redispatched = new WeakSet<Event>();
+  /** Hand the remaining files back to the control through its own `change` handling. */
+  const redispatch = (rest: File[], all: number) => {
+    if (rest.length === 0) {
+      fileInput.value = "";
+      return;
+    }
+    if (rest.length < all) {
+      try {
+        const transfer = new DataTransfer();
+        for (const file of rest) transfer.items.add(file);
+        fileInput.files = transfer.files;
+      } catch {
+        // No DataTransfer (an old engine): load the rest directly instead.
+        fileInput.value = "";
+        void addPickedVectorFiles(
+          control,
+          rest.map((file) => ({ file, companionFiles: [] })),
+        ).catch((error) => console.error("[GeoLibre] Failed to load the selected files", error));
+        return;
+      }
+    }
+    const next = new Event("change", { bubbles: true });
+    redispatched.add(next);
+    fileInput.dispatchEvent(next);
+  };
   fileInput.addEventListener(
     "change",
     (event) => {
       // A browser File has no filesystem path, so no `sourcePath` here.
       const files = Array.from(fileInput.files ?? [], (file) => ({ file }));
+      if (
+        !redispatched.has(event) &&
+        kmlFileImportHandler &&
+        files.some(({ file }) => isZipFileName(file))
+      ) {
+        // Whether a zip is IMDF takes an async read (of its central directory
+        // only), so hold the event back, then hand every non-IMDF file to the
+        // control's own change handling, untouched.
+        event.stopImmediatePropagation();
+        void routeImdfFileSelection(files).then((rest) =>
+          redispatch(
+            rest.map(({ file }) => file),
+            files.length,
+          ),
+        );
+        return;
+      }
       if (!kmlFileImportHandler || !isKmlFileSelection(files)) return;
       // Capture-phase interception keeps the vector control from reporting
       // "Dataset does not contain any layers" for overlay-only documents.

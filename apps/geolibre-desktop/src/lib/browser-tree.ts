@@ -8,12 +8,13 @@
  *
  * It covers three top-level sections — **Services** (grouped by service kind,
  * mirroring the Add Data web-service sources: XYZ, WMS, WFS, WMTS, ArcGIS),
- * **Recent** (recently opened projects), and **Databases** (saved PostGIS
- * connections that expand to their schemas and spatial tables). Local-file
- * sections come in a later phase.
+ * **Recent** (recently opened projects), and **Databases** (PostgreSQL and SQL
+ * Server connections, each grouped by engine and expandable to spatial tables).
+ * Local-file sections come in a later phase.
  */
 
 import {
+  serviceFieldString,
   type ServiceLibraryEntry,
   type ServiceLibraryKind,
 } from "../components/layout/add-data/service-library";
@@ -21,10 +22,11 @@ import type { AddDataKind } from "../components/layout/add-data/types";
 import type { FavoriteKind } from "./browser-favorites";
 import type { RecentProjectEntry } from "@geolibre/core";
 
+import type { DatabaseTableIdentity } from "./database-tables";
 /** The kind of node, which determines its icon and click behavior. */
 export type BrowserNodeKind =
   | "section" // a static top-level group (Services, Recent, Databases)
-  | "category" // a service-kind grouping (XYZ, WMS, WFS, WMTS, ArcGIS)
+  | "category" // a service-kind grouping or database-engine group
   | "service" // a saved-service leaf that adds a layer when activated
   | "recent-project" // a recent project that opens when activated
   | "connection" // a saved database connection; expands to its schemas/tables
@@ -33,6 +35,7 @@ export type BrowserNodeKind =
   | "folder" // a filesystem directory; expands to its subfolders/loadable files
   | "file" // a loadable file on disk that adds a layer when activated
   | "library-layer" // a saved Layer Library entry, re-added when activated
+  | "arcgis-sublayer" // one sublayer of a saved ArcGIS MapServer, added on its own
   | "info"; // a non-interactive status row (loading / error)
 
 /** One node in the Browser tree. */
@@ -52,14 +55,16 @@ export interface BrowserNode {
   serviceKind?: ServiceLibraryKind;
   /**
    * The Add Data source this node's "New connection" (＋) action opens — set on
-   * service-kind category groups (their kind) and the Databases section
-   * ("postgres"). Absent means the node shows no ＋.
+   * service-kind categories and database-engine groups. Absent means the node
+   * shows no ＋.
    */
   newConnectionKind?: AddDataKind;
   /** True on the Files section, whose ＋ opens a folder picker (kind `section`). */
   addFolderAction?: boolean;
   /** The saved database connection string a `connection`/`table` node belongs to. */
   connectionString?: string;
+  /** Saved SQL Server profile id of a `connection`/`table` node. */
+  mssqlConnectionId?: string;
   /** The schema of a `table` node. */
   tableSchema?: string;
   /** The table name of a `table` node. */
@@ -90,6 +95,22 @@ export interface BrowserNode {
   deployment?: boolean;
   /** The project path a recent node opens (kind `recent-project`). */
   projectPath?: string;
+  /**
+   * The MapServer sublayer id an `arcgis-sublayer` node adds. Absent on the
+   * service's "All layers" row, which adds the saved service as configured.
+   */
+  arcgisSublayerId?: number;
+  /**
+   * The name to give the layer an addable `arcgis-sublayer` row adds, when it
+   * differs from the row's label (a group's "All layers" row).
+   */
+  arcgisLayerName?: string;
+  /**
+   * The `layers=show:` id list a group's "All layers" row draws: the group's
+   * default-visible leaves, because ArcGIS draws every descendant of a group
+   * id, including the ones the service hides by default.
+   */
+  arcgisSublayers?: string;
   /** Leaf count under a `section`/`category`, for a count badge. */
   count?: number;
 }
@@ -101,12 +122,16 @@ export interface BrowserTreeInput {
   /** The recent-projects list from the store, most-recent first. */
   recentProjects: readonly RecentProjectEntry[];
   /**
-   * Saved database (PostGIS) connections to list under the Databases section.
-   * Omitted (undefined) hides the section entirely; an empty array still renders
-   * it (with its "New connection" action). The app always passes it — the
-   * PostgreSQL add flow itself reports when it needs GeoLibre Desktop.
+   * Saved PostgreSQL connections for the PostgreSQL engine group under
+   * Databases. Omitted (undefined) hides that group; an empty array keeps it
+   * visible with its own "New connection" action.
    */
   databaseConnections?: readonly { connectionString: string; label: string }[];
+  /**
+   * Saved SQL Server profiles for the SQL Server engine group under Databases.
+   * Omitted (undefined) hides that group; an empty array keeps it visible.
+   */
+  mssqlConnections?: readonly { id: string; label: string }[];
   /**
    * The user's pinned folders to list under the Files section. Omitted
    * (undefined) hides the section — the app passes it only on desktop
@@ -138,9 +163,11 @@ export interface BrowserTreeInput {
     services: string;
     recent: string;
     databases: string;
+    postgresql?: string;
     files?: string;
     favorites?: string;
     myData?: string;
+    sqlServer?: string;
   };
 }
 
@@ -193,16 +220,21 @@ function buildServiceKinds(services: readonly ServiceLibraryEntry[]): BrowserNod
       // The panel's "New connection" (＋) action opens this Add Data source.
       newConnectionKind: kind,
       count: entries.length,
-      children: entries.map((entry): BrowserNode => ({
-        id: `service:${entry.id}`,
-        kind: "service",
-        label: entry.name,
-        addable: true,
-        serviceId: entry.id,
-        serviceKind: entry.kind,
-        builtin: entry.builtin,
-        deployment: entry.deployment,
-      })),
+      children: entries.map(
+        (entry): BrowserNode => ({
+          id: `service:${entry.id}`,
+          kind: "service",
+          label: entry.name,
+          addable: true,
+          serviceId: entry.id,
+          serviceKind: entry.kind,
+          builtin: entry.builtin,
+          deployment: entry.deployment,
+          // A MapServer expands to its sublayers, filled lazily on first
+          // expand (GeoLibre#2780); see augmentArcGISServices.
+          ...(isArcGISMapServiceEntry(entry) ? { children: [] } : {}),
+        }),
+      ),
     };
   });
 }
@@ -214,7 +246,7 @@ function buildServiceKinds(services: readonly ServiceLibraryEntry[]): BrowserNod
  * @param input - The services, recent projects, saved layers, and database
  *   connections.
  * @returns The top-level section nodes (Services, Recent, and Databases when
- *   `databaseConnections` is provided).
+ *   either database engine input is provided).
  */
 export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
   const labels = input.sectionLabels ?? {
@@ -261,7 +293,10 @@ export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
       label: labels.favorites ?? "Favorites",
       addable: false,
       count: input.favorites.length,
-      children: buildFavoriteNodes(input.favorites),
+      children: buildFavoriteNodes(
+        input.favorites,
+        new Set(input.services.filter(isArcGISMapServiceEntry).map((entry) => entry.id)),
+      ),
     });
   }
 
@@ -292,27 +327,60 @@ export function buildBrowserTree(input: BrowserTreeInput): BrowserNode[] {
 
   sections.push(servicesSection, recentSection);
 
-  // The Databases section is included whenever `databaseConnections` is
-  // provided (the app always provides it). It always shows its "New connection"
-  // (＋) action, even with no connections yet.
-  if (input.databaseConnections) {
+  // The Databases section is included when either engine input is provided.
+  // Each engine has its own group and its own "New connection" (＋) action.
+  if (input.databaseConnections || input.mssqlConnections) {
+    const engineGroups: BrowserNode[] = [];
+    if (input.databaseConnections) {
+      engineGroups.push({
+        id: "database-engine:postgres",
+        kind: "category",
+        label: labels.postgresql ?? "PostgreSQL",
+        addable: false,
+        newConnectionKind: "postgres",
+        count: input.databaseConnections.length,
+        children: input.databaseConnections.map(
+          (connection): BrowserNode => ({
+            id: `connection:${connection.connectionString}`,
+            kind: "connection",
+            label: connection.label,
+            addable: false,
+            connectionString: connection.connectionString,
+            // An empty child list marks it as an expandable group; the panel
+            // lazily fills it with schema/table nodes on first expand.
+            children: [],
+          }),
+        ),
+      });
+    }
+    if (input.mssqlConnections) {
+      engineGroups.push({
+        id: "database-engine:mssql",
+        kind: "category",
+        label: labels.sqlServer ?? "SQL Server",
+        addable: false,
+        newConnectionKind: "mssql",
+        count: input.mssqlConnections.length,
+        children: input.mssqlConnections.map(
+          (connection): BrowserNode => ({
+            id: `mssql-connection:${connection.id}`,
+            kind: "connection",
+            label: connection.label,
+            addable: false,
+            mssqlConnectionId: connection.id,
+            // Lazily filled with schema/table nodes on first expand.
+            children: [],
+          }),
+        ),
+      });
+    }
     sections.push({
       id: "section:databases",
       kind: "section",
       label: labels.databases,
       addable: false,
-      newConnectionKind: "postgres",
-      count: input.databaseConnections.length,
-      children: input.databaseConnections.map((connection): BrowserNode => ({
-        id: `connection:${connection.connectionString}`,
-        kind: "connection",
-        label: connection.label,
-        addable: false,
-        connectionString: connection.connectionString,
-        // An empty child list marks it as an expandable group; the panel
-        // lazily fills it with schema/table nodes on first expand.
-        children: [],
-      })),
+      count: engineGroups.reduce((count, group) => count + (group.count ?? 0), 0),
+      children: engineGroups,
     });
   }
 
@@ -416,9 +484,14 @@ export interface FavoriteNodeInput {
  * Pure so it unit-tests without the store or filesystem.
  *
  * @param favorites - The user's favorited node descriptors.
+ * @param expandableServiceIds - Saved services that expand to their sublayers
+ *   (ArcGIS MapServers), so a favorited one expands like the original.
  * @returns One node per favorite (service/connection/folder/file).
  */
-export function buildFavoriteNodes(favorites: readonly FavoriteNodeInput[]): BrowserNode[] {
+export function buildFavoriteNodes(
+  favorites: readonly FavoriteNodeInput[],
+  expandableServiceIds: ReadonlySet<string> = new Set(),
+): BrowserNode[] {
   return favorites.map((fav): BrowserNode => {
     switch (fav.kind) {
       case "service":
@@ -432,6 +505,8 @@ export function buildFavoriteNodes(favorites: readonly FavoriteNodeInput[]): Bro
           // Keep the origin badge on a favorited managed service.
           builtin: fav.builtin,
           deployment: fav.deployment,
+          // Shares the original node's id, so it shares its sublayer listing.
+          ...(fav.serviceId && expandableServiceIds.has(fav.serviceId) ? { children: [] } : {}),
         };
       case "folder":
         return {
@@ -454,12 +529,6 @@ export function buildFavoriteNodes(favorites: readonly FavoriteNodeInput[]): Bro
   });
 }
 
-/** A spatial table discovered under a database connection. */
-export interface PostgisTableRef {
-  schema: string;
-  table: string;
-}
-
 /**
  * Groups a connection's spatial tables into `schema` → `table` nodes, sorted by
  * name, for the panel to inject as a lazily-expanded connection's children.
@@ -472,9 +541,9 @@ export interface PostgisTableRef {
  */
 export function buildPostgisTableNodes(
   connectionString: string,
-  tables: readonly PostgisTableRef[],
+  tables: readonly DatabaseTableIdentity[],
 ): BrowserNode[] {
-  const bySchema = new Map<string, PostgisTableRef[]>();
+  const bySchema = new Map<string, DatabaseTableIdentity[]>();
   for (const entry of tables) {
     const bucket = bySchema.get(entry.schema);
     if (bucket) bucket.push(entry);
@@ -505,8 +574,60 @@ export function buildPostgisTableNodes(
 /** Async load state for one connection's spatial-table introspection. */
 export type ConnectionLoad =
   | { status: "loading" }
-  | { status: "loaded"; tables: readonly PostgisTableRef[] }
+  | { status: "loaded"; tables: readonly DatabaseTableIdentity[] }
   | { status: "error"; message: string };
+
+export type ConnectionLoads = Record<string, ConnectionLoad>;
+export type SetConnectionLoads = (update: (previous: ConnectionLoads) => ConnectionLoads) => void;
+
+/**
+ * Groups a saved SQL Server connection's spatial tables into `schema` → `table`
+ * nodes, sorted by name, dropping repeated schema/table pairs.
+ *
+ * @param connectionId - The saved SQL Server profile id (embedded in node ids
+ *   and carried on table nodes for the add flow).
+ * @param tables - The spatial tables discovered for that connection.
+ * @returns One `schema` group per distinct schema, each with its `table` leaves.
+ */
+export function buildMssqlTableNodes(
+  connectionId: string,
+  tables: readonly DatabaseTableIdentity[],
+): BrowserNode[] {
+  const bySchema = new Map<string, Map<string, DatabaseTableIdentity>>();
+  for (const entry of tables) {
+    let bucket = bySchema.get(entry.schema);
+    if (!bucket) {
+      bucket = new Map();
+      bySchema.set(entry.schema, bucket);
+    }
+    if (!bucket.has(entry.table)) bucket.set(entry.table, entry);
+  }
+  return Array.from(bySchema.keys())
+    .sort(byLabel)
+    .map((schema) => {
+      const entries = [...(bySchema.get(schema)?.values() ?? [])];
+      return {
+        id: `mssql-schema:${connectionId}:${schema}`,
+        kind: "schema" as const,
+        label: schema,
+        addable: false,
+        count: entries.length,
+        children: entries
+          .sort((a, b) => byLabel(a.table, b.table))
+          .map(
+            (entry): BrowserNode => ({
+              id: `mssql-table:${connectionId}:${schema}.${entry.table}`,
+              kind: "table",
+              label: entry.table,
+              addable: true,
+              mssqlConnectionId: connectionId,
+              tableSchema: schema,
+              tableName: entry.table,
+            }),
+          ),
+      };
+    });
+}
 
 /**
  * Returns a copy of the tree with each `connection` node's children replaced by
@@ -517,7 +638,8 @@ export type ConnectionLoad =
  * Pure so the panel's tree augmentation unit-tests without React/the sidecar.
  *
  * @param nodes - The base tree from {@link buildBrowserTree}.
- * @param loads - Per-connection introspection state keyed by connection string.
+ * @param loads - Per-connection introspection state, keyed by connection string
+ *   (PostGIS) or `mssql:<profile id>` (SQL Server).
  * @param loadingLabel - Translated label for the "loading tables" status row.
  * @returns A new tree; connection nodes get their status/table children.
  */
@@ -527,8 +649,10 @@ export function augmentConnections(
   loadingLabel: string,
 ): BrowserNode[] {
   return nodes.map((node) => {
-    if (node.kind === "connection" && node.connectionString) {
-      const load = loads[node.connectionString];
+    if (node.kind === "connection" && (node.connectionString || node.mssqlConnectionId)) {
+      const isMssql = Boolean(node.mssqlConnectionId);
+      const connectionId = node.mssqlConnectionId ?? node.connectionString!;
+      const load = loads[isMssql ? `mssql:${connectionId}` : connectionId];
       let children: BrowserNode[] = [];
       if (load?.status === "loading") {
         children = [
@@ -549,7 +673,9 @@ export function augmentConnections(
           },
         ];
       } else if (load?.status === "loaded") {
-        children = buildPostgisTableNodes(node.connectionString, load.tables);
+        children = isMssql
+          ? buildMssqlTableNodes(connectionId, load.tables)
+          : buildPostgisTableNodes(connectionId, load.tables);
       }
       return { ...node, children };
     }
@@ -558,6 +684,185 @@ export function augmentConnections(
         ...node,
         children: augmentConnections(node.children, loads, loadingLabel),
       };
+    }
+    return node;
+  });
+}
+
+/**
+ * Whether a saved service is an ArcGIS MapServer the Browser can expand into
+ * its sublayers: a `map-service` entry addressed by URL (a portal item has no
+ * service URL to introspect until it is resolved).
+ *
+ * @param entry - The saved service.
+ * @returns True when the entry should render as an expandable group.
+ */
+export function isArcGISMapServiceEntry(entry: ServiceLibraryEntry): boolean {
+  return (
+    entry.kind === "arcgis" &&
+    serviceFieldString(entry.fields, "layerType") === "map-service" &&
+    serviceFieldString(entry.fields, "sourceType") !== "portal-item" &&
+    serviceFieldString(entry.fields, "url").trim() !== ""
+  );
+}
+
+/** One sublayer advertised by a MapServer (matches `ArcGISMapServiceSublayer`). */
+export interface ArcGISSublayerRef {
+  id: number;
+  name: string;
+  /** Child layer ids when this is a group layer; absent or empty for a leaf. */
+  subLayerIds?: readonly number[] | null;
+  /** Whether the service draws this layer by default (absent means yes). */
+  defaultVisibility?: boolean;
+}
+
+/** Async load state for one saved MapServer's sublayer listing. */
+export type ArcGISServiceLoad =
+  | { status: "loading" }
+  | { status: "loaded"; sublayers: readonly ArcGISSublayerRef[] }
+  | { status: "error"; message: string };
+
+/** Translated labels for {@link augmentArcGISServices}' rows. */
+export interface ArcGISServiceLabels {
+  /** The status row shown while the sublayers load. */
+  loading: string;
+  /** The row that adds the whole service as saved. */
+  allLayers: string;
+}
+
+/**
+ * Builds a saved MapServer's children, mirroring the service's layer tree: an
+ * "All layers" row that adds the service as saved, then one row per top-level
+ * layer. A leaf row adds that sublayer; a group layer is an expandable row
+ * holding its own "All layers" row (which adds the whole group) followed by
+ * its children, so a group and the leaf it wraps (services often name both
+ * "Storm Inlet") never sit side by side as look-alike rows. Pure so it
+ * unit-tests without the network.
+ *
+ * @param serviceNode - The expandable `service` node the rows belong to.
+ * @param sublayers - The layers the service advertises.
+ * @param allLayersLabel - Translated label for the "All layers" rows.
+ * @returns The child nodes.
+ */
+export function buildArcGISSublayerNodes(
+  serviceNode: BrowserNode,
+  sublayers: readonly ArcGISSublayerRef[],
+  allLayersLabel: string,
+): BrowserNode[] {
+  const base = {
+    kind: "arcgis-sublayer" as const,
+    serviceId: serviceNode.serviceId,
+    serviceKind: serviceNode.serviceKind,
+  };
+  const byId = new Map(sublayers.map((sublayer) => [sublayer.id, sublayer]));
+  const childIds = new Set(sublayers.flatMap((sublayer) => sublayer.subLayerIds ?? []));
+  // Guards against a malformed service whose group lists itself as a descendant.
+  const seen = new Set<number>();
+
+  /** Leaf ids under a layer, each with its effective default visibility. */
+  const leaves = (
+    sublayer: ArcGISSublayerRef,
+    visible: boolean,
+    visited: Set<number>,
+  ): Array<{ id: number; visible: boolean }> => {
+    if (visited.has(sublayer.id)) return [];
+    visited.add(sublayer.id);
+    const shown = visible && sublayer.defaultVisibility !== false;
+    const childIds = sublayer.subLayerIds ?? [];
+    if (childIds.length === 0) return [{ id: sublayer.id, visible: shown }];
+    return childIds.flatMap((childId) => {
+      const child = byId.get(childId);
+      return child ? leaves(child, shown, visited) : [];
+    });
+  };
+
+  const build = (sublayer: ArcGISSublayerRef): BrowserNode | null => {
+    if (seen.has(sublayer.id)) return null;
+    seen.add(sublayer.id);
+    const id = `${serviceNode.id}:sublayer:${sublayer.id}`;
+    const children = (sublayer.subLayerIds ?? [])
+      .map((childId) => byId.get(childId))
+      .filter((child): child is ArcGISSublayerRef => child !== undefined)
+      .map(build)
+      .filter((child): child is BrowserNode => child !== null);
+    if (children.length === 0) {
+      return { ...base, id, label: sublayer.name, addable: true, arcgisSublayerId: sublayer.id };
+    }
+    // The user picked this group, so its own default visibility does not
+    // matter; its descendants' does. With none visible by default, draw all.
+    // One visited set for the whole subtree, so a leaf two children share is
+    // listed once.
+    const groupVisited = new Set([sublayer.id]);
+    const groupLeaves = (sublayer.subLayerIds ?? []).flatMap((childId) => {
+      const child = byId.get(childId);
+      return child ? leaves(child, true, groupVisited) : [];
+    });
+    const shownLeaves = groupLeaves.filter((leaf) => leaf.visible);
+    return {
+      ...base,
+      id,
+      label: sublayer.name,
+      addable: false,
+      children: [
+        {
+          ...base,
+          id: `${id}:all`,
+          label: allLayersLabel,
+          addable: true,
+          arcgisSublayerId: sublayer.id,
+          arcgisLayerName: sublayer.name,
+          arcgisSublayers: (shownLeaves.length > 0 ? shownLeaves : groupLeaves)
+            .map((leaf) => leaf.id)
+            .join(","),
+        },
+        ...children,
+      ],
+    };
+  };
+
+  return [
+    { ...base, id: `${serviceNode.id}:all`, label: allLayersLabel, addable: true },
+    ...sublayers
+      .filter((sublayer) => !childIds.has(sublayer.id))
+      .map(build)
+      .filter((node): node is BrowserNode => node !== null),
+  ];
+}
+
+/**
+ * Returns a copy of the tree with each expandable ArcGIS MapServer `service`
+ * node's children replaced by its lazy-load state: a status row while loading
+ * or on error, or the sublayer rows once loaded. A service with no load entry
+ * keeps its empty child list (still expandable; expanding triggers the fetch).
+ * Pure, like {@link augmentConnections}.
+ *
+ * @param nodes - The tree to augment.
+ * @param loads - Per-service sublayer state keyed by saved-service id.
+ * @param labels - Translated row labels.
+ * @returns A new tree; MapServer nodes get their status/sublayer children.
+ */
+export function augmentArcGISServices(
+  nodes: readonly BrowserNode[],
+  loads: Record<string, ArcGISServiceLoad>,
+  labels: ArcGISServiceLabels,
+): BrowserNode[] {
+  return nodes.map((node) => {
+    if (node.kind === "service" && node.serviceId && node.children) {
+      const load = loads[node.serviceId];
+      let children: BrowserNode[] = [];
+      if (load?.status === "loading") {
+        children = [
+          { id: `${node.id}:loading`, kind: "info", label: labels.loading, addable: false },
+        ];
+      } else if (load?.status === "error") {
+        children = [{ id: `${node.id}:error`, kind: "info", label: load.message, addable: false }];
+      } else if (load?.status === "loaded") {
+        children = buildArcGISSublayerNodes(node, load.sublayers, labels.allLayers);
+      }
+      return { ...node, children };
+    }
+    if (node.children) {
+      return { ...node, children: augmentArcGISServices(node.children, loads, labels) };
     }
     return node;
   });
@@ -736,4 +1041,23 @@ export function filterBrowserTree(nodes: readonly BrowserNode[], query: string):
   };
 
   return nodes.map(prune).filter((node): node is BrowserNode => node !== null);
+}
+
+/** How soon after a row's activation a repeat click still belongs to it. */
+const REPEAT_CLICK_WINDOW_MS = 1000;
+
+/**
+ * Whether a click on a tree row is the second (or later) click of a
+ * multi-click on a row that its first click just activated, which must not
+ * activate the row again: a double-click on a leaf would otherwise add its
+ * layer twice. A counted click on a row that was not just activated (a quick
+ * click on a neighbouring row) still activates it.
+ *
+ * @param detail - The click event's `detail` (the click count; 0 for a
+ *   keyboard-generated click).
+ * @param sinceActivationMs - Time since this row was last activated by a click.
+ * @returns True for the repeat clicks of a double- or triple-click.
+ */
+export function isRepeatClick(detail: number, sinceActivationMs: number): boolean {
+  return detail > 1 && sinceActivationMs < REPEAT_CLICK_WINDOW_MS;
 }

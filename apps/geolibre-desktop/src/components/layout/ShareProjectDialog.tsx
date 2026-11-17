@@ -40,6 +40,7 @@ import {
 } from "../../lib/share-oauth";
 import {
   fetchProjectShares,
+  ShareLinksUnsupportedError,
   isShareableTitle,
   MAX_PROJECT_TITLE_LENGTH,
   resolveShareBaseUrl,
@@ -64,9 +65,11 @@ import {
   type ShareReadinessReport,
 } from "../../lib/share-readiness";
 import { openSettingsSection } from "./SettingsDialog";
+import { isSerializationTooLargeError } from "../../lib/project-serialization-limits";
 import {
   fetchMyOrganizations,
   fetchMyGroups,
+  canOwnOrganizationProjects,
   isPublicSharingBlocked,
   publicSharingRestriction,
   type ShareOrganization,
@@ -293,7 +296,9 @@ export function ShareProjectDialog({
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<ShareUploadErrorCode | null>(null);
   const [result, setResult] = useState<ShareUploadResult | null>(null);
-  const [copied, setCopied] = useState(false);
+  // Which copy button last succeeded: "result" for the post-create view, else a
+  // share id. One slot so only the clicked button shows the checkmark.
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [redactedCount, setRedactedCount] = useState(0);
   const [readiness, setReadiness] = useState<ShareReadinessReport | null>(null);
   const [readinessState, setReadinessState] = useState<"idle" | "checking" | "failed">("idle");
@@ -302,6 +307,9 @@ export function ShareProjectDialog({
   const [activeShares, setActiveShares] = useState<ActiveShare[]>([]);
   const [loadingShares, setLoadingShares] = useState(false);
   const [sharesError, setSharesError] = useState<string | null>(null);
+  // The host of a share server that has no share-link API, so the Manage tab
+  // explains that instead of reporting a failure.
+  const [sharesUnsupportedHost, setSharesUnsupportedHost] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
 
@@ -333,8 +341,11 @@ export function ShareProjectDialog({
   const remoteProblems = readiness?.problems.filter(isRemoteRow) ?? [];
   const remoteItemCount = readiness?.items.filter(isRemoteRow).length ?? 0;
 
+  // Viewers cannot own organization projects (the server answers 403), so the
+  // owner picker offers only memberships that can.
+  const ownerOrganizations = organizations.filter(canOwnOrganizationProjects);
   const selectedOrganization =
-    organizations.find((organization) => organization.id === selectedOrgId) ?? null;
+    ownerOrganizations.find((organization) => organization.id === selectedOrgId) ?? null;
   const publicRestriction = publicSharingRestriction(selectedOrganization);
   const publicBlocked = isPublicSharingBlocked(visibility, selectedOrganization);
   const organizationRequired = visibility === "organization" && !selectedOrganization;
@@ -365,6 +376,7 @@ export function ShareProjectDialog({
     sharesAbortRef.current = controller;
     setLoadingShares(true);
     setSharesError(null);
+    setSharesUnsupportedHost(null);
     try {
       const token = await resolveAuthToken();
       const shares = await fetchProjectShares({ token, signal: controller.signal });
@@ -373,10 +385,14 @@ export function ShareProjectDialog({
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       if (sharesAbortRef.current !== controller) return;
+      setActiveShares([]);
+      if (err instanceof ShareLinksUnsupportedError) {
+        setSharesUnsupportedHost(err.host);
+        return;
+      }
       // An empty list and a failed fetch are not the same thing: swallowing the
       // error would render an expired token or a dropped connection as the
       // reassuring "no active share links" empty state.
-      setActiveShares([]);
       setSharesError(
         err instanceof ShareOAuthError
           ? t(shareOAuthErrorKey(err.code))
@@ -409,12 +425,13 @@ export function ShareProjectDialog({
       setError(null);
       setErrorCode(null);
       setResult(null);
-      setCopied(false);
+      setCopiedKey(null);
       setRedactedCount(0);
       setOauthError(null);
       setTab("create");
       setRevokeError(null);
       setSharesError(null);
+      setSharesUnsupportedHost(null);
       setActiveShares([]);
       setLoadingShares(false);
       setSelectedOrgId(null);
@@ -601,9 +618,14 @@ export function ShareProjectDialog({
         setError(
           err instanceof ShareOAuthError
             ? t(shareOAuthErrorKey(err.code))
-            : err instanceof Error
-              ? err.message
-              : t("share.errorFallback"),
+            : // Embedding a large local vector layer can push the project past
+              // the engine's string cap; the raw "Invalid string length" told
+              // the user nothing (GeoLibre#3025).
+              isSerializationTooLargeError(err)
+              ? t("share.errorProjectTooLarge")
+              : err instanceof Error
+                ? err.message
+                : t("share.errorFallback"),
         );
       }
     } finally {
@@ -656,7 +678,7 @@ export function ShareProjectDialog({
     openSettingsSection("environment", { focus: "shareToken" });
   };
 
-  const handleCopy = (url?: string) => {
+  const handleCopy = (key: string, url?: string) => {
     const targetUrl = url || result?.projectUrl;
     if (!targetUrl) return;
     // Only show the "copied" checkmark if the write actually succeeds; the
@@ -668,8 +690,8 @@ export function ShareProjectDialog({
         if (copyTimeoutRef.current !== null) {
           window.clearTimeout(copyTimeoutRef.current);
         }
-        setCopied(true);
-        copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 2000);
+        setCopiedKey(key);
+        copyTimeoutRef.current = window.setTimeout(() => setCopiedKey(null), 2000);
       })
       .catch(() => {
         // Clipboard unavailable; leave the icon unchanged.
@@ -801,9 +823,13 @@ export function ShareProjectDialog({
                 type="button"
                 variant="secondary"
                 aria-label={t("share.copyLink")}
-                onClick={() => handleCopy()}
+                onClick={() => handleCopy("result")}
               >
-                {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedKey === "result" ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )}
               </Button>
             </div>
             <div className="flex justify-end gap-2">
@@ -833,7 +859,7 @@ export function ShareProjectDialog({
                 }`}
                 onClick={() => setTab("create")}
               >
-                {t("share.createShare", "New Share")}
+                {t("share.createShare", "New share")}
               </button>
               <button
                 type="button"
@@ -844,7 +870,7 @@ export function ShareProjectDialog({
                 }`}
                 onClick={() => setTab("manage")}
               >
-                {t("share.activeShares", "Active Shares")}
+                {t("share.activeShares", "Active shares")}
                 {activeShares.length > 0 && (
                   <span className="ms-1.5 rounded-full bg-secondary px-1.5 py-0.5 text-xs">
                     {activeShares.length}
@@ -885,7 +911,7 @@ export function ShareProjectDialog({
                         {t("share.visibilityPublic")}
                       </option>
                       <option value="private">{t("share.visibilityPrivate")}</option>
-                      <option value="organization" disabled={organizations.length === 0}>
+                      <option value="organization" disabled={ownerOrganizations.length === 0}>
                         {t("share.visibilityOrganization")}
                       </option>
                     </Select>
@@ -898,10 +924,15 @@ export function ShareProjectDialog({
                         )}
                       </p>
                     )}
+                    {!orgLoading && organizations.length > 0 && ownerOrganizations.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        {t("share.organizationViewerOnly")}
+                      </p>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label htmlFor="share-role">{t("share.role", "Access Role")}</Label>
+                    <Label htmlFor="share-role">{t("share.role", "Access role")}</Label>
                     <Select
                       id="share-role"
                       value={role}
@@ -919,7 +950,7 @@ export function ShareProjectDialog({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label htmlFor="share-expiry">{t("share.expiry", "Link Expiry")}</Label>
+                    <Label htmlFor="share-expiry">{t("share.expiry", "Link expiry")}</Label>
                     <Select
                       id="share-expiry"
                       value={expiresIn}
@@ -946,7 +977,7 @@ export function ShareProjectDialog({
                   </div>
                 </div>
 
-                {organizations.length > 0 || orgLoading ? (
+                {ownerOrganizations.length > 0 || orgLoading ? (
                   <div className="space-y-1.5">
                     <Label htmlFor="share-organization">{t("share.owner")}</Label>
                     <Select
@@ -954,7 +985,7 @@ export function ShareProjectDialog({
                       value={selectedOrgId || ""}
                       onChange={(event) => {
                         const organization =
-                          organizations.find((item) => item.id === event.target.value) ?? null;
+                          ownerOrganizations.find((item) => item.id === event.target.value) ?? null;
                         setSelectedOrgId(organization?.id ?? null);
                         setVisibility(
                           organization
@@ -967,7 +998,7 @@ export function ShareProjectDialog({
                       disabled={status === "uploading" || orgLoading}
                     >
                       <option value="">{t("share.personalAccount")}</option>
-                      {organizations.map((org) => (
+                      {ownerOrganizations.map((org) => (
                         <option key={org.id} value={org.id}>
                           {org.name} ({org.slug})
                         </option>
@@ -1175,6 +1206,10 @@ export function ShareProjectDialog({
                   <div className="flex items-center justify-center py-6">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
+                ) : sharesUnsupportedHost ? (
+                  <p className="py-6 text-center text-sm text-muted-foreground">
+                    {t("share.sharesUnsupported", { shareHost: sharesUnsupportedHost })}
+                  </p>
                 ) : activeShares.length === 0 ? (
                   // Suppress the reassuring empty state when the list failed to
                   // load; the error above already explains why it is empty.
@@ -1224,9 +1259,23 @@ export function ShareProjectDialog({
                             size="sm"
                             aria-label={t("share.copyLink")}
                             title={t("share.copyLink")}
-                            onClick={() => handleCopy(s.projectUrl)}
+                            onClick={() => handleCopy(s.id, s.projectUrl)}
                           >
-                            <Copy className="h-3.5 w-3.5" />
+                            {copiedKey === s.id ? (
+                              <Check className="h-3.5 w-3.5" />
+                            ) : (
+                              <Copy className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            aria-label={t("share.open")}
+                            title={t("share.open")}
+                            onClick={() => void openExternalLink(s.projectUrl)}
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
                           </Button>
                           <Button
                             type="button"

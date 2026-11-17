@@ -1,4 +1,6 @@
 import type { FeatureCollection } from "geojson";
+import type { GeoArrowBatch } from "./geoarrow";
+export type { GeoArrowBatch };
 import type { PrintLayoutConfig } from "./print-layout-config";
 
 export const OPENFREEMAP_BASEMAPS = [
@@ -224,6 +226,22 @@ export type GeometryGeneratorType = "none" | "centroid" | "bounding-box" | "conv
 export type StrokeWidthUnit = "pixels" | "meters";
 
 /**
+ * The named dash patterns the Style panel offers for {@link LayerStyle.strokeDash},
+ * in MapLibre `line-dasharray` units (multiples of the line width). `solid` is
+ * the empty pattern. QGIS pen styles map onto the same names.
+ */
+export const STROKE_DASH_PRESETS = {
+  solid: [],
+  dashed: [4, 2],
+  dotted: [1, 2],
+  "dash-dot": [4, 2, 1, 2],
+  "long-dash": [8, 3],
+} as const satisfies Record<string, readonly number[]>;
+
+/** A named entry of {@link STROKE_DASH_PRESETS}. */
+export type StrokeDashPreset = keyof typeof STROKE_DASH_PRESETS;
+
+/**
  * The chart drawn on top of each feature by the diagram renderer (QGIS-style
  * diagram symbology), or `"none"` when diagrams are off. Diagrams visualize
  * several numeric attributes per feature at once — e.g. election results by
@@ -440,6 +458,21 @@ export interface LayerStyle {
    *   point/circle outlines remain pixel-based.
    */
   strokeWidthUnit: StrokeWidthUnit;
+  /**
+   * Opacity (0..1) of lines, polygon outlines and point outlines, applied on
+   * top of the layer opacity, so a translucent outline can sit over an opaque
+   * fill. A per-feature simplestyle `stroke-opacity` replaces it for features
+   * that carry one, as `fill-opacity` replaces {@link fillOpacity}.
+   */
+  strokeOpacity: number;
+  /**
+   * Dash pattern of lines and polygon outlines: alternating dash and gap
+   * lengths in multiples of the stroke width, as MapLibre's `line-dasharray`
+   * takes them. Empty draws a solid line. See {@link STROKE_DASH_PRESETS}.
+   */
+  strokeDash: number[];
+  /** Blur in pixels applied to lines and polygon outlines; 0 keeps them sharp. */
+  strokeBlur: number;
   fillOpacity: number;
   circleRadius: number;
   textColor: string;
@@ -453,9 +486,29 @@ export interface LayerStyle {
   extrusionHeightProperty: string;
   extrusionHeightScale: number;
   extrusionBase: number;
+  /**
+   * Attribute whose value, times {@link extrusionBaseScale}, is added to
+   * {@link extrusionBase} per feature, so one layer can stack floors from a
+   * `level` field. Empty keeps the flat base. Like the height, the base is an
+   * altitude in metres, not a thickness: the roof still comes from the height.
+   */
+  extrusionBaseProperty: string;
+  /** Multiplier for {@link extrusionBaseProperty} (e.g. metres per floor). */
+  extrusionBaseScale: number;
+  /**
+   * When above 0, every feature is this many metres tall on top of its base
+   * (roof = base + floor height), and the height property and expression are
+   * ignored. 0 keeps the height as the roof's altitude.
+   */
+  extrusionFloorHeight: number;
   extrusionAdvancedStyleEnabled: boolean;
   extrusionColorExpression: string;
   extrusionHeightExpression: string;
+  /**
+   * Advanced-mode MapLibre expression for the extrusion base, as JSON. When it
+   * parses it wins over {@link extrusionBase} and {@link extrusionBaseProperty}.
+   */
+  extrusionBaseExpression: string;
   /**
    * When true, a vector layer whose coordinates carry Z values (e.g. a GPX
    * track with elevations) renders in true 3D through the shared deck.gl
@@ -512,7 +565,11 @@ export interface LayerStyle {
   markerShape: MarkerShape;
   markerColor: string;
   markerSize: number;
-  /** Raw SVG markup (or a data URL) used when {@link markerShape} is `"custom"`. */
+  /**
+   * The custom marker image used when {@link markerShape} is `"custom"`: raw
+   * SVG markup, a `data:` URL (SVG or a raster PNG/JPEG/GIF), or an `http(s)`
+   * URL. Only SVG sources take {@link markerColor}; raster images draw as-is.
+   */
   markerSvg: string;
   /**
    * When true, per-feature [simplestyle-spec](https://github.com/mapbox/simplestyle-spec)
@@ -648,6 +705,9 @@ export const DEFAULT_LAYER_STYLE: LayerStyle = {
   strokeColor: "#1e40af",
   strokeWidth: 2,
   strokeWidthUnit: "pixels",
+  strokeOpacity: 1,
+  strokeDash: [],
+  strokeBlur: 0,
   fillOpacity: 0.6,
   circleRadius: 6,
   textColor: "#111827",
@@ -688,9 +748,13 @@ export const DEFAULT_LAYER_STYLE: LayerStyle = {
   extrusionHeightProperty: "height",
   extrusionHeightScale: 1,
   extrusionBase: 0,
+  extrusionBaseProperty: "",
+  extrusionBaseScale: 1,
+  extrusionFloorHeight: 0,
   extrusionAdvancedStyleEnabled: false,
   extrusionColorExpression: "",
   extrusionHeightExpression: "",
+  extrusionBaseExpression: "",
   elevation3dEnabled: false,
   elevation3dVerticalScale: 1,
   elevation3dOffset: 0,
@@ -779,15 +843,24 @@ export function styleValue<K extends keyof LayerStyle>(style: LayerStyle, key: K
 export const LARGE_VECTOR_FEATURE_THRESHOLD = 50_000;
 
 /**
- * Decide whether a GeoJSON layer should use the tiled rendering path.
+ * Decide whether a vector layer should use the tiled rendering path.
  *
- * @param geojson - The layer's feature collection (may be undefined for
+ * @param data - The layer's feature collection or GeoArrow batch (may be undefined for
  *   non-vector layers).
- * @returns `true` when the collection exceeds
- *   {@link LARGE_VECTOR_FEATURE_THRESHOLD} features.
+ * @returns `true` when the feature count exceeds
+ *   {@link LARGE_VECTOR_FEATURE_THRESHOLD}.
  */
-export function shouldUseTiledRendering(geojson: GeoJSON.FeatureCollection | undefined): boolean {
-  return (geojson?.features.length ?? 0) > LARGE_VECTOR_FEATURE_THRESHOLD;
+export function shouldUseTiledRendering(
+  data: GeoJSON.FeatureCollection | GeoArrowBatch | undefined,
+): boolean {
+  if (!data) return false;
+  if ("featureCount" in data && typeof data.featureCount === "number") {
+    return data.featureCount > LARGE_VECTOR_FEATURE_THRESHOLD;
+  }
+  if ("features" in data && Array.isArray(data.features)) {
+    return data.features.length > LARGE_VECTOR_FEATURE_THRESHOLD;
+  }
+  return false;
 }
 
 /**
@@ -845,7 +918,43 @@ export interface LayerJoin {
 }
 
 /** Edit-widget kinds the Attribute Form designer can assign to a field. */
-export type AttributeFormWidget = "text" | "number" | "range" | "checkbox" | "date" | "valueMap";
+export type AttributeFormWidget =
+  | "text"
+  | "number"
+  | "range"
+  | "checkbox"
+  | "date"
+  | "valueMap"
+  | "attachment";
+
+/**
+ * Where a dropdown reads its entries from when they are another layer's rows
+ * (a QGIS Value Relation or Relation Reference). Resolved against that
+ * layer's current features each time a form is shown, so a record added to
+ * the referenced layer is selectable at once.
+ */
+export interface AttributeFormValueRelation {
+  /** Id of the referenced layer in the same project. */
+  layerId: string;
+  /** Property of the referenced features that is stored on this field. */
+  keyField: string;
+  /** Property shown as the entry's label. */
+  labelField?: string;
+  /**
+   * QGIS expression evaluated per referenced feature for the label, used when
+   * there is no {@link labelField} (a Relation Reference shows the referenced
+   * layer's display expression).
+   */
+  labelExpression?: string;
+}
+
+/** A run of fields in a form: a tab or group box in QGIS, or the fields between two. */
+export interface AttributeFormSection {
+  /** Heading shown above the run; empty for none. */
+  title: string;
+  /** Field names, in the order they are shown. */
+  fields: string[];
+}
 
 /** One selectable entry of a `valueMap` widget (stored value + display label). */
 export interface AttributeFormValueMapEntry {
@@ -874,8 +983,23 @@ export interface AttributeFormFieldConfig {
    * exempt: unchecked is a valid state, not a missing value.
    */
   required?: boolean;
-  /** Dropdown entries for the `valueMap` widget. */
+  /**
+   * Dropdown entries for the `valueMap` widget. With a {@link valueRelation}
+   * these are only the fallback used while the referenced layer is missing or
+   * has not loaded.
+   */
   valueMap?: AttributeFormValueMapEntry[];
+  /** Read the dropdown's entries from another layer's features. */
+  valueRelation?: AttributeFormValueRelation;
+  /**
+   * Declared storage type of the field. When set, coercion follows it instead
+   * of guessing from the value map (a text field whose codes are "1" and "2"
+   * still stores strings), and validation rejects values of another type or,
+   * for `integer`, fractional numbers. Service-derived configs (ArcGIS domains)
+   * set it from the field's declared type; designer-authored configs leave it
+   * unset.
+   */
+  valueType?: "string" | "number" | "integer";
   /** Lower bound for `number`/`range` widgets (inclusive). */
   min?: number;
   /** Upper bound for `number`/`range` widgets (inclusive). */
@@ -897,11 +1021,75 @@ export interface AttributeFormFieldConfig {
    * Empty/invalid expressions fail open so a typo cannot hide data entry.
    */
   visibilityExpression?: string;
+  /**
+   * Expression that pre-fills the field when a new feature is captured, in
+   * the QGIS expression subset `qgis-expression.ts` evaluates: `now()`,
+   * `uuid()`, `"site" || '-' || format_date(now(), 'yyyyMMdd')`, or a GPS
+   * variable such as `@position_horizontal_accuracy`. An expression that
+   * cannot be evaluated leaves the field empty.
+   */
+  defaultValue?: string;
 }
 
 /** The Attribute Form designer's whole per-layer configuration. */
 export interface AttributeFormConfig {
   fields: AttributeFormFieldConfig[];
+  /**
+   * Runs of fields the capture form shows in order, each under its title. A
+   * run with an empty title has no heading (fields that sit between two
+   * groups). A field no section lists is shown after them. Absent means one
+   * flat list.
+   */
+  sections?: AttributeFormSection[];
+}
+
+/** Point of contact recorded in a layer's {@link LayerDescriptiveMetadata}. */
+export interface LayerMetadataContact {
+  name?: string;
+  email?: string;
+  organization?: string;
+}
+
+/** A related resource recorded in a layer's {@link LayerDescriptiveMetadata}. */
+export interface LayerMetadataLink {
+  /** Absolute URL of the resource. */
+  href: string;
+  /** Relation type (STAC/IANA link relation such as `"license"` or `"related"`). */
+  rel?: string;
+  /** Human-readable label. */
+  title?: string;
+}
+
+/**
+ * Time span the layer's data covers. Each bound is an ISO 8601 date
+ * (`YYYY-MM-DD`) or date-time; either may be omitted for an open interval.
+ */
+export interface LayerMetadataTemporalExtent {
+  start?: string;
+  end?: string;
+}
+
+/**
+ * User-authored, catalog-style description of a layer (issue #2858), edited in
+ * the layer's Metadata dialog and exported as a STAC Item. Distinct from the
+ * internal {@link GeoLibreLayer.metadata} record the renderers and plugins key
+ * off: every field here is free-form documentation that changes nothing about
+ * how the layer renders. Helpers live in `layer-descriptive-metadata.ts`.
+ */
+export interface LayerDescriptiveMetadata {
+  title?: string;
+  /** Free-text summary of the data (STAC `description`, ISO abstract). */
+  abstract?: string;
+  keywords?: string[];
+  /** SPDX license identifier (e.g. `"CC-BY-4.0"`) or free text. */
+  license?: string;
+  /** Credit line for the data's producers. */
+  attribution?: string;
+  contact?: LayerMetadataContact;
+  /** How the data was produced: sources and processing steps. */
+  lineage?: string;
+  temporalExtent?: LayerMetadataTemporalExtent;
+  links?: LayerMetadataLink[];
 }
 
 /**
@@ -1100,6 +1288,39 @@ export interface LayerQuickFilter {
   text?: string;
 }
 
+/**
+ * Floor picker (issue #3341): which floors of a multi-level layer are drawn.
+ *
+ * `all` (the default) draws every floor; `only` draws the chosen one; `below`
+ * draws it and every floor under it, the cutaway view of a building with the
+ * upper storeys lifted off.
+ */
+export type LevelFilterMode = "all" | "only" | "below";
+
+/**
+ * A layer linked to the on-map floor picker. The picker lists the levels found
+ * in {@link field} across every linked layer and writes the choice back here.
+ *
+ * {@link values} holds the raw attribute values that match the choice, so the
+ * compiled filter is a plain `in` test every renderer evaluates the same way,
+ * even for OpenStreetMap's multi-level values such as `"0;1"` or `"0-2"`.
+ */
+export interface LayerLevelFilter {
+  /** The feature property that holds the floor, e.g. `level` or `ordinal`. */
+  field: string;
+  /** Which floors are drawn. Defaults to `all`. */
+  mode?: LevelFilterMode;
+  /** The chosen level, as the picker labels it (`"-1"`, `"0"`, `"G"`). */
+  level?: string | null;
+  /**
+   * The raw `field` values that match {@link level} under {@link mode},
+   * resolved from the layer's features when the choice is made. Ignored in
+   * `all` mode. Absent while unresolved, which draws every floor until the
+   * picker resolves it.
+   */
+  values?: (string | number)[];
+}
+
 /** Persisted refresh policy and most recent synchronization result for a layer. */
 export interface LayerConnection {
   /** Owning layer id. Repeated here so records remain self-describing when exported. */
@@ -1220,6 +1441,13 @@ export interface GeoLibreLayer {
   beforeId?: string;
   geojson?: FeatureCollection;
   /**
+   * Optional binary GeoArrow representation for high-performance vector rendering,
+   * zero-copy Web Worker vector tiling, and compact in-memory storage.
+   */
+  geoarrow?: GeoArrowBatch;
+  /** A SQL Server write needs a successful table reread before it may be submitted again. */
+  mssqlWritebackPending?: boolean;
+  /**
    * Explicit capability set for the layer (query, create, update, delete, export).
    * Unset capabilities default to the inferred behavior for the layer's source kind.
    */
@@ -1245,6 +1473,13 @@ export interface GeoLibreLayer {
    * panel's Popup section. Absent means the default full-property dump.
    */
   popup?: LayerPopupConfig;
+  /**
+   * User-authored catalog metadata (title, abstract, keywords, license,
+   * contact, lineage, temporal extent, links), edited in the layer's Metadata
+   * dialog. Absent when nothing has been entered; an empty record is never
+   * written to a project file.
+   */
+  descriptiveMetadata?: LayerDescriptiveMetadata;
   /**
    * Persistent attribute joins applied to this layer's features, in order.
    * The joined columns are materialized into `geojson` feature properties (so
@@ -1289,6 +1524,13 @@ export interface GeoLibreLayer {
    * a host page's filter and a user's filter narrow the layer together.
    */
   quickFilters?: LayerQuickFilter[];
+  /**
+   * Floor picker link (issue #3341). Persisted control state: the picker
+   * compiles it into the layer's filter alongside {@link filterExpression} and
+   * {@link quickFilters}, so it narrows the layer together with the Time Slider
+   * window and every other filter.
+   */
+  levelFilter?: LayerLevelFilter;
   sourcePath?: string;
   /**
    * Id of the {@link LayerGroup} this layer belongs to, or `undefined` when the
@@ -1336,7 +1578,11 @@ export interface AddTileLayerOptions {
   minzoom?: number;
   /** Maximum zoom at which tiles are requested. */
   maxzoom?: number;
-  /** Tile y-axis scheme; `"tms"` flips the y origin. Defaults to `"xyz"`. */
+  /**
+   * Tile y-axis scheme. `"tms"` flips the row. A `{-y}` token is a separate
+   * flip and does not set this field; the two flips cancel when a tile is
+   * requested. Defaults to `"xyz"`.
+   */
   scheme?: "xyz" | "tms";
   /** Initial visibility (default true). */
   visible?: boolean;
@@ -1392,6 +1638,39 @@ export const SQL_QUERY_SOURCE_KIND = "sql-query";
  * readout, and the spectral profile) share one value.
  */
 export const NETCDF_IMAGE_SOURCE_KIND = "netcdf-image";
+
+/**
+ * Metadata `sourceKind` marking an ArcGIS ImageServer drawn as a `raster` layer.
+ *
+ * Defined here so the plugin that adds these layers and `@geolibre/map` (whose
+ * Identify reads their pixel values through the service's `/identify`) share
+ * one value.
+ */
+export const ARCGIS_IMAGE_SERVICE_SOURCE_KIND = "arcgis-image-service";
+
+/**
+ * Metadata `sourceKind` marking a Microsoft Planetary Computer raster layer
+ * (one STAC item, or a mosaic of many) drawn by the Planetary Computer panel.
+ *
+ * Defined here so the plugin that adds these layers, the Layer Library's
+ * restore dispatch, and `@geolibre/map` (whose Identify reads their pixel
+ * values through the application's raster bridge) share one value.
+ */
+export const PLANETARY_COMPUTER_SOURCE_KIND = "planetary-computer-raster";
+
+/**
+ * Whether a layer is a Planetary Computer raster the panel's control draws.
+ *
+ * @param layer - The layer to test.
+ * @returns True for a control-drawn Planetary Computer item or mosaic layer.
+ */
+export function isPlanetaryComputerLayer(layer: GeoLibreLayer): boolean {
+  return (
+    layer.type === "raster" &&
+    layer.metadata.sourceKind === PLANETARY_COMPUTER_SOURCE_KIND &&
+    layer.metadata.externalNativeLayer === true
+  );
+}
 
 /**
  * Detect a DuckDB query layer rendered through the plugin's external deck.gl
@@ -1630,6 +1909,29 @@ export interface MapPreferences {
   showPointerElevation: boolean;
   /** Whether the built-in 3D terrain control and terrain surface are enabled. */
   terrainEnabled: boolean;
+  /**
+   * Optional Cesium Ion terrain asset used by the globe when terrain is enabled.
+   * Ignored by 2D renderers; absent means the renderer's normal global source.
+   */
+  terrainIonAssetId?: number;
+  /**
+   * Vertical exaggeration of the 3D terrain, as set in Terrain settings.
+   * Absent means the renderer default (1).
+   */
+  terrainExaggeration?: number;
+  /**
+   * HTTP(S) URL of the Cloud Optimized GeoTIFF DEM the 3D terrain is drawn
+   * from. Absent means the renderer's built-in global terrain. A DEM opened
+   * from a local file has no URL to save, so it is not kept.
+   */
+  terrainSource?: string;
+  /**
+   * Whether a custom terrain DEM is surrounded by the global terrain, so it
+   * does not stand as a raised block with vertical walls (#3470). Absent means
+   * the default for the source: on for a DEM read from a URL, off for a local
+   * file, which should not send requests off the device unasked.
+   */
+  terrainFillOutside?: boolean;
   /** Mapbox-only style. New projects use Streets; absent follows the shared basemap. */
   mapboxStyleUrl?: string;
   /**
@@ -1640,23 +1942,63 @@ export interface MapPreferences {
    * basemap styles service requires one.
    */
   arcgisBasemap?: string;
+  /**
+   * ArcGIS-only projection of the flat map, as a WKID the ArcGIS Maps SDK
+   * resolves (`54099` Spilhaus, `54030` Robinson, ...). Absent means Web
+   * Mercator. Vector layers are reprojected on the client; tiled layers and
+   * basemaps cannot be, so they do not draw in another projection. The globe
+   * (a `SceneView`) ignores it. See `arcgis-projection.ts`.
+   */
+  arcgisWkid?: number;
+  /**
+   * Coordinate reference system of the flat MapLibre map (issue #1128): a
+   * preset id from `MAP_CRS_PRESETS` (polar and simple-cylindrical grids of
+   * Earth, the Moon, Mars and other bodies) or `"EPSG:<code>"`. Absent means
+   * the default Web Mercator map or globe. Tiles are not reprojected, so only
+   * GeoJSON, image/video overlays and WMS or ArcGIS export layers (asked for
+   * each tile's box in this CRS) draw; XYZ, vector tile and plugin layers are
+   * set aside, and the globe and terrain are off. See `map-crs.ts`.
+   */
+  mapCrs?: string;
   /** Cesium imagery override; absent follows the shared project basemap. */
   cesiumBasemap?: import("./cesium-imagery").CesiumBasemapId;
   /**
    * Notation the status bar reports the pointer coordinate in: `"dd"` decimal
    * degrees (default), `"dms"` degrees/minutes/seconds, `"ddm"` degrees and
-   * decimal minutes, or `"utm"` zone easting/northing. Stored as a string
-   * rather than a union so `@geolibre/core` does not have to depend on the
-   * formatter, which lives with the app's DMS helpers and the Gridlines
-   * plugin's UTM projection; the app normalises unknown values to `"dd"`.
+   * decimal minutes, `"utm"` zone easting/northing, `"mgrs"`/`"usng"` grid
+   * references, or `"epsg"` x/y in the CRS named by `coordinateEpsgCode`.
+   * Stored as a string rather than a union so `@geolibre/core` does not have to
+   * depend on the formatter, which lives with the app's DMS helpers and the
+   * Gridlines plugin's UTM projection; the app normalises unknown values to
+   * `"dd"`.
    */
   coordinateFormat: string;
+  /**
+   * EPSG code the `"epsg"` coordinate format projects the pointer into, e.g.
+   * `3857` or `32618`. Kept beside `coordinateFormat` rather than inside it so
+   * the code survives cycling through the other notations. Absent means the
+   * app default (EPSG:3857).
+   */
+  coordinateEpsgCode?: number;
+  /**
+   * Whether the map fits to a layer's extent after data is added (Add Data
+   * menus, drag-and-drop, file import, tool outputs). Defaults to `true`; turn
+   * it off to keep the current view. Explicit "Zoom to layer" actions always
+   * fit regardless of this setting.
+   */
+  zoomToNewLayers: boolean;
 }
 
 export interface RuntimeEnvironmentVariable {
   key: string;
   value: string;
   enabled: boolean;
+  /**
+   * Absent or `true`: the value is a secret (desktop keeps it in the OS
+   * keychain; every egress removes it). `false`: an ordinary value saved in the
+   * project and kept on share/export.
+   */
+  secret?: boolean;
 }
 
 declare global {
@@ -1683,6 +2025,44 @@ export interface GeocodingPreferences {
   reverseEndpoint?: string;
   /** Contact email sent to identify the client (used by Nominatim). */
   email?: string;
+  /** Named organization-hosted ArcGIS GeocodeServer locators. */
+  locators?: GeocodingLocator[];
+  /** The {@link GeocodingLocator.id} used by the `arcgis-locator` provider. */
+  locatorId?: string;
+}
+
+/**
+ * An organization-hosted ArcGIS GeocodeServer locator. Everything here is
+ * nonsecret: the URL is stored without its query string, so a pasted token never
+ * reaches the project file, and a secured locator borrows the token of the
+ * portal named by `portalUrl` at request time.
+ *
+ * The capability fields are read from the service's `?f=json` metadata when the
+ * locator is checked in Settings; they are absent until then.
+ */
+export interface GeocodingLocator {
+  /** Stable id, unique within the project. */
+  id: string;
+  /** Display name, e.g. "County Parcel Locator". */
+  name: string;
+  /** The GeocodeServer base URL, ending in `/GeocodeServer`. */
+  url: string;
+  /** Portal whose sign-in authorizes this locator, when it is secured. */
+  portalUrl?: string;
+  /** The single-line input field the locator publishes (usually `SingleLine`). */
+  singleLineField?: string;
+  /** The structured input fields the locator publishes, in service order. */
+  addressFields?: string[];
+  /** Whether the service advertises `reverseGeocode`. */
+  reverse?: boolean;
+  /** Whether the service advertises `suggest`. */
+  suggest?: boolean;
+  /**
+   * The published input field a search string goes to, chosen by the user for
+   * a locator whose inputs are structured (an asset or parcel ID field, say).
+   * Unset means the single-line field, or the only published field.
+   */
+  searchField?: string;
 }
 
 export interface ProjectPreferences {
@@ -1720,6 +2100,7 @@ export const DEFAULT_PROJECT_PREFERENCES: ProjectPreferences = {
     showPointerElevation: false,
     terrainEnabled: false,
     coordinateFormat: "dd",
+    zoomToNewLayers: true,
     mapboxStyleUrl: "mapbox://styles/mapbox/standard",
     arcgisBasemap: "arcgis/streets",
     // With an Ion token this is the globe's photographic default. The
@@ -1834,12 +2215,19 @@ export const DEFAULT_LEGEND_CONFIG: LegendConfig = Object.freeze({
   >,
 });
 
-/** Camera target captured for a story chapter. */
+/**
+ * Camera target captured for a story chapter. `pitch` and `bearing` are
+ * optional in memory: a location built in code may omit them, and every engine
+ * then keeps that part of the current camera (see `storyLocationView`). A
+ * chapter read from a project file or a CSV never omits them: loading fills an
+ * absent value with 0 (`normalizeStoryChapter`, `parseStoryMapCsv`), so a file
+ * without them still plays north-up and flat, as it always has.
+ */
 export interface StoryChapterLocation {
   center: [number, number];
   zoom: number;
-  pitch: number;
-  bearing: number;
+  pitch?: number;
+  bearing?: number;
 }
 
 /** Where a chapter's text panel sits over the map. */
@@ -1859,7 +2247,7 @@ export interface StoryLayerOpacityChange {
   duration?: number;
 }
 
-/** A single scene in a scroll-driven story map. */
+/** A single scene in a story map. */
 export interface StoryChapter {
   id: string;
   title: string;
@@ -1873,6 +2261,8 @@ export interface StoryChapter {
   mapAnimation: StoryChapterAnimation;
   /** Slowly rotate the camera once the transition settles. */
   rotateAnimation: boolean;
+  /** Autoplay dwell time after the camera arrives, in seconds (1–3600; default 15). */
+  durationSeconds?: number;
   onChapterEnter: StoryLayerOpacityChange[];
   onChapterExit: StoryLayerOpacityChange[];
 }
@@ -1894,7 +2284,7 @@ export type StorySlideMode = "none" | "blank" | "black" | "global" | "adjacent";
 /** A start/closing slide that is actually shown (every mode except `"none"`). */
 export type StoryActiveSlideMode = Exclude<StorySlideMode, "none">;
 
-/** Scroll-driven story map authored on top of a GeoLibre project. */
+/** Story map authored on top of a GeoLibre project. */
 export interface StoryMap {
   title: string;
   subtitle: string;
@@ -1960,7 +2350,7 @@ export interface ProcessingModelStep {
  * raster nodes exchange GeoTIFF bytes. A port declaring `"any"` accepts either
  * and is resolved to a concrete kind at run time by whatever is wired into it.
  */
-export type ModelPortKind = "vector" | "raster" | "any";
+export type ModelPortKind = "vector" | "raster" | "raster-collection" | "boolean" | "any";
 
 /** One connection point on a {@link ModelGraphNode}. */
 export interface ModelGraphPort {
@@ -1978,9 +2368,19 @@ export interface ModelGraphPort {
 
 /**
  * What a node does. `input` sources an existing project layer, `tool` runs a
- * processing algorithm, and `output` names a result to add back to the map.
+ * processing algorithm, `output` names a result to add back to the map,
+ * `iterate-features` and `iterate-rasters` execute loops, `collect-results` gathers
+ * iteration outputs, and `conditional-switch` / `conditional-merge` route execution.
  */
-export type ModelGraphNodeKind = "input" | "tool" | "output";
+export type ModelGraphNodeKind =
+  | "input"
+  | "tool"
+  | "output"
+  | "iterate-features"
+  | "iterate-rasters"
+  | "collect-results"
+  | "conditional-switch"
+  | "conditional-merge";
 
 /** One node on the Model Builder canvas. */
 export interface ModelGraphNode {
@@ -1999,10 +2399,12 @@ export interface ModelGraphNode {
   toolId?: string;
   /** `tool` nodes: which registry resolves {@link toolId}. */
   provider?: ModelToolProvider;
-  /** `tool` nodes: parameter values for everything not supplied by an edge. */
+  /** `tool` / control nodes: parameter values for configuration. */
   parameters?: Record<string, unknown>;
   /** `output` nodes: the layer name given to the result added to the map. */
   name?: string;
+  /** Optional nested body graph for iterator nodes. */
+  body?: ProcessingModelGraph;
 }
 
 /**
@@ -2146,6 +2548,42 @@ export type DashboardWidgetAggregation = "count" | "sum" | "mean";
  * keys are simply ignored, so the record stays flat and easy to hand-edit.
  * Saved in the project file so a dashboard reopens with its widgets intact.
  */
+/**
+ * A saved map view in the Bookmarks panel. Mirrors `MapBookmark` from
+ * maplibre-gl-components so the panel can load it unchanged.
+ */
+export interface ProjectBookmark {
+  /** Unique within the project. */
+  id: string;
+  name: string;
+  /** Camera center longitude, -180..180. */
+  lng: number;
+  /** Camera center latitude, -90..90. */
+  lat: number;
+  zoom: number;
+  /** Camera tilt in degrees, 0..85. */
+  pitch: number;
+  /** Camera rotation in degrees. */
+  bearing: number;
+  /** Creation time, milliseconds since the epoch. */
+  createdAt: number;
+  /** The {@link ProjectBookmarkGroup} it belongs to; absent when ungrouped. */
+  groupId?: string;
+  /**
+   * Host state captured with the view. GeoLibre stores `visibleLayerIds`
+   * (the layers to show when the bookmark is opened).
+   */
+  extra?: Record<string, unknown>;
+}
+
+/** A folder in the Bookmarks panel. Folders do not nest. */
+export interface ProjectBookmarkGroup {
+  id: string;
+  name: string;
+  /** Whether the folder is collapsed in the panel. */
+  collapsed: boolean;
+}
+
 export interface DashboardWidget {
   /** Stable id, unique within the project (React key and store key). */
   id: string;
@@ -2271,6 +2709,8 @@ export interface LayerLibraryEntry {
   attributeForm?: AttributeFormConfig;
   /** Popup/tooltip design to reapply. */
   popup?: LayerPopupConfig;
+  /** User-authored catalog metadata to reapply. */
+  descriptiveMetadata?: LayerDescriptiveMetadata;
   /**
    * Embedded features, present only for a layer whose source cannot be
    * re-read (in-memory features) or whose local file may be unavailable.
@@ -2328,8 +2768,23 @@ export interface GeoLibreProject {
   models?: ProcessingModel[];
   /** Recorded processing tool runs (Processing History; issue #1292). */
   processingHistory?: ProcessingRun[];
+  /**
+   * Object-Based Analysis workbench state and run provenance (issue #3053):
+   * settings, classes, and the tool calls, parameters, seeds and engine
+   * versions behind the last segmentation, measurement and classification.
+   * A versioned JSON object owned by the desktop app; omitted until the
+   * workbench is used.
+   */
+  obia?: Record<string, unknown>;
   /** Saved Dashboard panel chart widgets (issue #401). */
   widgets?: DashboardWidget[];
+  /**
+   * Saved map views (the Bookmarks panel), in panel order. Omitted when there
+   * are none. Before #2869 these lived only in the browser's localStorage.
+   */
+  bookmarks?: ProjectBookmark[];
+  /** Folders the {@link bookmarks} are organized into. Omitted when none. */
+  bookmarkGroups?: ProjectBookmarkGroup[];
   /** Number of columns in the Dashboard widget grid; omitted when default. */
   dashboardColumns?: number;
   /**
@@ -2364,7 +2819,46 @@ export interface GeoLibreProject {
   styleLibrary?: StyleLibraryEntry[];
   /** Anchored review comments on map points or features (issue #1518). */
   comments?: ProjectComment[];
+  /**
+   * Interaction state applied when the project opens: the Identify target and
+   * which map controls and toolbar panels start shown (issue #2688). Written by
+   * the Python `geolibre` package from `set_identify` / `show_control`, so a
+   * saved or HTML-exported notebook map opens the way it was set up. Omitted
+   * by default; the app keeps what it loaded and writes it back unchanged.
+   */
+  interaction?: ProjectInteraction;
   metadata: Record<string, unknown>;
+}
+
+/**
+ * Startup interaction state carried by a project (see
+ * {@link GeoLibreProject.interaction}).
+ */
+export interface ProjectInteraction {
+  /**
+   * Identify target on open: a layer id, `"all"` for every visible queryable
+   * layer, a list of layer ids to identify only those, or `null` for off.
+   */
+  identify?: string | string[] | null;
+  /**
+   * Map control or toolbar panel name (`"search"`, `"bookmark"`, `"globe"`,
+   * ...) to whether it starts shown, or to a {@link ProjectControlSetting}
+   * that also carries the control's options. Unknown names are ignored on open.
+   */
+  controls?: Record<string, boolean | ProjectControlSetting>;
+}
+
+/**
+ * A control's startup state with options, for example
+ * `{ "visible": true, "collapsed": true, "distanceUnit": "feet" }` for the
+ * Measure panel (issue #3241). Measure takes `collapsed`, `distanceUnit` and
+ * `areaUnit`; Minimap takes `collapsed`, `zoomOffset`, `width` and `height`.
+ */
+export interface ProjectControlSetting {
+  /** Whether the control starts shown. */
+  visible: boolean;
+  /** Control-specific options; the app validates them when it applies them. */
+  [option: string]: string | number | boolean;
 }
 
 export type CommentAnchor =

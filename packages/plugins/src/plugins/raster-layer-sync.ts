@@ -2,7 +2,9 @@ import {
   applyGroupEffects,
   DEFAULT_LAYER_STYLE,
   type GeoLibreLayer,
+  isPlaceholderBandName,
   styleValue,
+  unsignedSourceUrl,
   useAppStore,
 } from "@geolibre/core";
 import type { RasterLayerInfo, RasterLayerState, RenderEngine } from "maplibre-gl-raster";
@@ -51,6 +53,7 @@ export type RasterSyncableControl = {
   getState?: () => { collapsed: boolean };
   getRasters: () => RasterLayerInfo[];
   removeRaster: (id: string) => void;
+  reorderRaster: (id: string, toIndex: number) => void;
   setRasterState: (id: string, patch: Partial<RasterLayerState>) => void;
   setVisible: (id: string, visible: boolean) => void;
 };
@@ -139,6 +142,25 @@ export function isRasterControlStoreLayer(layer: GeoLibreLayer): boolean {
 }
 
 /**
+ * Detects a raster read from a local file that a saved project cannot reload:
+ * its bytes live only behind a session blob URL (stripped on save) and it has
+ * no remote URL, nor a recorded file path the host can reopen. The browser
+ * build can never reopen a path, so every local raster qualifies there; on
+ * desktop only one added without a path (a tool output, a conversion) does.
+ * Such a layer is dropped when the project is reopened (GeoLibre#3120).
+ *
+ * @param layer - A store layer.
+ * @param canReloadPaths - Whether the host can reopen a recorded local path.
+ * @returns True when the layer's data will not survive a save and reopen.
+ */
+export function isUnsavableLocalRaster(layer: GeoLibreLayer, canReloadPaths: boolean): boolean {
+  if (!isRasterControlStoreLayer(layer) || layer.metadata.rasterSource !== "file") return false;
+  if (typeof layer.source.url === "string" && layer.source.url) return false;
+  const path = layer.metadata.localFilePath;
+  return !(canReloadPaths && typeof path === "string" && path.length > 0);
+}
+
+/**
  * Builds the store layer mirroring a control raster snapshot.
  *
  * The deck.gl COGLayer renders through the control's shared overlay, so the
@@ -168,7 +190,10 @@ export function createRasterStoreLayer(
         /^https?:\/\/asset\.localhost(?:\/|$)/i.test(info.source.url)))
       ? candidateLocalPath
       : undefined;
-  const url = info.source.kind === "url" && !localFilePath ? info.source.url : undefined;
+  // A presigned S3 read maps back to the `s3://` (or plain object) URL it was
+  // minted from, so the store and saved projects never hold a signature.
+  const url =
+    info.source.kind === "url" && !localFilePath ? unsignedSourceUrl(info.source.url) : undefined;
   // The control retains a File-backed raster's original bytes behind a blob
   // URL (source.objectUrl). Surface it as metadata.localBytesUrl so in-browser
   // tools (the WASM Whitebox runner, the symbology stats reader, raster export)
@@ -264,9 +289,10 @@ export function syncRasterLayersToStore(control: RasterSyncableControl): void {
  * #1307), and `localBytesUrl` (a blob URL retaining a File-loaded raster's
  * bytes for in-browser tools). The store sync rebuilds a raster layer's
  * metadata wholesale from the control's `RasterLayerInfo` on every control
- * event, so any key not listed here is silently wiped by the next opacity
- * drag or visibility toggle — add new GeoLibre-owned raster metadata keys to
- * this list.
+ * event. Keys outside {@link CONTROL_METADATA_KEYS} survive that rebuild
+ * anyway; this list matters for a key the control can also write (kept when the
+ * control no longer reports it) or one, like STAC access, that needs its own
+ * carry-forward rule.
  */
 export const GEOLIBRE_OWNED_METADATA_KEYS = [
   "rasterSymbology",
@@ -274,6 +300,32 @@ export const GEOLIBRE_OWNED_METADATA_KEYS = [
   "localBytesUrl",
   STAC_ASSET_ACCESS_METADATA_KEY,
 ] as const;
+
+/**
+ * Every metadata key {@link createRasterStoreLayer} can write. The sync owns
+ * these and rebuilds them from the control on every event; any other key on an
+ * existing layer was put there by someone else (a plugin tagging the layer it
+ * added, e.g. the Sentinel-2 Explorer's scene id) and is carried forward.
+ */
+const CONTROL_METADATA_KEYS: ReadonlySet<string> = new Set([
+  "customLayerType",
+  "externalDeckLayer",
+  "externalNativeLayer",
+  "identifiable",
+  "nativeLayerIds",
+  "panelCollapsed",
+  "rasterOverlayMode",
+  "rasterSource",
+  "rasterState",
+  "bandCount",
+  "bandNames",
+  "sourceIds",
+  "sourceKind",
+  "localBytesUrl",
+  "localFilePath",
+  "bounds",
+  "error",
+]);
 
 export function syncRasterLayersToStoreWithOptions(
   control: RasterSyncableControl,
@@ -319,6 +371,10 @@ export function syncRasterLayersToStoreWithOptions(
       // wholesale metadata rebuild instead of letting every control event
       // wipe them.
       const preserved: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(existing.metadata)) {
+        if (CONTROL_METADATA_KEYS.has(key) || key === STAC_ASSET_ACCESS_METADATA_KEY) continue;
+        if (value !== undefined) preserved[key] = value;
+      }
       for (const key of GEOLIBRE_OWNED_METADATA_KEYS) {
         if (key === STAC_ASSET_ACCESS_METADATA_KEY) {
           const sourceUrl = typeof layer.source.url === "string" ? layer.source.url : undefined;
@@ -380,9 +436,57 @@ export function syncRasterLayersToStoreWithOptions(
         });
       }
     }
+    applyControlRasterOrder(control, infos);
   } finally {
     syncingLayersToStore = false;
   }
+}
+
+/**
+ * Moves the store's rasters into the control's order, after a move made with
+ * the raster panel's own up/down buttons. Only the slots rasters already occupy
+ * are rewritten, so other layers keep their place in the stack. A move that
+ * would split a layer group is not mirrored: the store order stands, and the
+ * control is moved back to match it so the panel and the map agree.
+ *
+ * @param control - The raster control the panel move was made in.
+ * @param infos - The control's rasters, bottom to top.
+ */
+function applyControlRasterOrder(control: RasterSyncableControl, infos: RasterLayerInfo[]): void {
+  const { layers } = useAppStore.getState();
+  const byId = new Map(layers.map((layer) => [layer.id, layer]));
+  const ordered = infos.flatMap((info) => {
+    const layer = byId.get(info.id);
+    return layer && isRasterControlStoreLayer(layer) ? [layer] : [];
+  });
+  const orderedIds = new Set(ordered.map(({ id }) => id));
+  let next = 0;
+  const reordered = layers.map((layer) => (orderedIds.has(layer.id) ? ordered[next++] : layer));
+  if (reordered.every((layer, index) => layer === layers[index])) return;
+  if (splitsLayerGroup(reordered)) {
+    runWithRasterStoreSyncSuspended(() => applyStoreRasterOrder(control, layers));
+    return;
+  }
+  useAppStore.setState({ layers: reordered, isDirty: true });
+}
+
+/**
+ * Whether any layer group's members are no longer contiguous in the stack. The
+ * raster control knows nothing about groups, so its order can ask for this.
+ *
+ * @param layers - The candidate store layers, bottom to top.
+ * @returns True when a group's members would be separated by another layer.
+ */
+function splitsLayerGroup(layers: GeoLibreLayer[]): boolean {
+  const closed = new Set<string>();
+  let current: string | undefined;
+  for (const { groupId } of layers) {
+    if (groupId === current) continue;
+    if (current) closed.add(current);
+    if (groupId && closed.has(groupId)) return true;
+    current = groupId;
+  }
+  return false;
 }
 
 /**
@@ -446,7 +550,39 @@ export function wireRasterStoreSync(control: RasterSyncableControl): void {
         const zoomPatch = zoomRangePatch(layer, current);
         if (zoomPatch) activeControl.setRasterState(layer.id, zoomPatch);
       }
+      applyStoreRasterOrder(activeControl, state.layers);
     });
+  });
+}
+
+/**
+ * Moves the control's rasters into the store's bottom-to-top order.
+ *
+ * Rasters on the deck.gl engine usually share one `deck-layer-group-*`: no
+ * style layer exists for layer-sync to anchor one raster to another, so they
+ * all get the same beforeId and draw in the control's own list order. That list
+ * is therefore the only channel for a Layers panel move between them
+ * (GeoLibre#3287). The native engines also redraw in this order on every rebuild.
+ *
+ * A raster the store does not know about keeps its slot in the list.
+ *
+ * @param control - The raster control to reorder.
+ * @param layers - The store layers, bottom to top.
+ */
+function applyStoreRasterOrder(control: RasterSyncableControl, layers: GeoLibreLayer[]): void {
+  const order = control.getRasters().map(({ id }) => id);
+  const known = new Set(order);
+  const stored = layers
+    .filter((layer) => isRasterControlStoreLayer(layer) && known.has(layer.id))
+    .map(({ id }) => id);
+  const storedIds = new Set(stored);
+  let next = 0;
+  const target = order.map((id) => (storedIds.has(id) ? stored[next++] : id));
+  target.forEach((id, index) => {
+    // Re-read the control's list each step instead of simulating its move, so
+    // the next index is always taken from the control's actual order.
+    if (control.getRasters()[index]?.id === id) return;
+    control.reorderRaster(id, index);
   });
 }
 
@@ -524,8 +660,19 @@ function rasterStateRecord(layer: GeoLibreLayer): Record<string, unknown> {
     : {};
 }
 
-function serializeBandNames(bandNames: Map<number, string> | null): [number, string][] | null {
-  return bandNames ? [...bandNames.entries()] : null;
+/**
+ * Serialize the control's band names for the store, dropping placeholder
+ * descriptions (`*`) so the band picker falls back to "Band N" for them.
+ *
+ * @param bandNames - 1-indexed band number to name map from the control.
+ * @returns Pairs for the store, or null when no band has a real name.
+ */
+export function serializeBandNames(
+  bandNames: Map<number, string> | null,
+): [number, string][] | null {
+  if (!bandNames) return null;
+  const named = [...bandNames.entries()].filter(([, name]) => !isPlaceholderBandName(name));
+  return named.length > 0 ? named : null;
 }
 
 /**

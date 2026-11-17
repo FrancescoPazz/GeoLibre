@@ -10,7 +10,7 @@ import {
   Label,
 } from "@geolibre/ui";
 import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
@@ -19,7 +19,6 @@ import {
   type ProjectFileActions,
 } from "../../../hooks/useProjectFileActions";
 import type { ArcgisProjectImportWarning } from "../../../lib/arcgis-project-import";
-import type { QgisProjectImportWarning } from "../../../lib/qgis-project-import";
 import {
   fetchSharedProjectVersions,
   shareHostLabel,
@@ -32,14 +31,16 @@ import {
   shareOAuthErrorKey,
   supportsShareOAuth,
 } from "../../../lib/share-oauth";
+import { RemoteSignInDialog } from "./RemoteSignInDialog";
 import { SaveTemplateDialog } from "../SaveTemplateDialog";
 import { ImportWarningList } from "./ImportWarningList";
+import { QgisImportReportDialog } from "./QgisImportReportDialog";
 
 interface ProjectFileDialogsProps {
   projectFiles: ProjectFileActions;
 }
 
-/** The project-file dialogs: Open-from-URL, the error dialog, the save-name prompt, and the env-var strip prompt. */
+/** The project-file dialogs: the save-before-close prompt, Open-from-URL, the error dialog, the save-name prompt, and the env-var strip prompt. */
 export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
   const { t } = useTranslation();
 
@@ -61,14 +62,6 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
       }),
     [t],
   );
-  const describeQgisWarning = useCallback(
-    (warning: QgisProjectImportWarning) =>
-      t(`toolbar.item.qgisImportReason.${warning.reason}`, {
-        provider: warning.provider || t("toolbar.item.qgisUnknownProvider"),
-      }),
-    [t],
-  );
-
   return (
     <>
       <Dialog
@@ -100,6 +93,41 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
             <Button
               disabled={projectFiles.droppedProjectSaving}
               onClick={() => void projectFiles.resolveDroppedProjectPrompt("save")}
+            >
+              {t("common.save")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={projectFiles.windowClosePromptOpen}
+        onOpenChange={(open: boolean) => {
+          if (!open) void projectFiles.resolveWindowClosePrompt("cancel");
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("toolbar.windowClose.savePromptTitle")}</DialogTitle>
+            <DialogDescription>{t("toolbar.windowClose.savePromptDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              disabled={projectFiles.windowCloseSaving}
+              onClick={() => void projectFiles.resolveWindowClosePrompt("cancel")}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={projectFiles.windowCloseSaving}
+              onClick={() => void projectFiles.resolveWindowClosePrompt("discard")}
+            >
+              {t("newProject.doNotSave")}
+            </Button>
+            <Button
+              disabled={projectFiles.windowCloseSaving}
+              onClick={() => void projectFiles.resolveWindowClosePrompt("save")}
             >
               {t("common.save")}
             </Button>
@@ -199,27 +227,46 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
           projectFiles.openProjectFromShareUrl(rawUrl, { authToken: token, asCopy: true })
         }
       />
+      <QgisImportReportDialog projectFiles={projectFiles} />
       <Dialog
-        open={projectFiles.qgisImportWarnings !== null}
+        open={projectFiles.layerStyleImportResult !== null}
         onOpenChange={(open: boolean) => {
-          if (!open) projectFiles.setQgisImportWarnings(null);
+          if (!open) projectFiles.setLayerStyleImportResult(null);
         }}
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{t("toolbar.item.qgisImportComplete")}</DialogTitle>
+            <DialogTitle>{t("toolbar.item.layerStylesImported")}</DialogTitle>
             <DialogDescription>
-              {t("toolbar.item.qgisImportWarnings", {
-                count: projectFiles.qgisImportWarnings?.length ?? 0,
+              {t("toolbar.item.layerStylesImportedSummary", {
+                count: projectFiles.layerStyleImportResult?.restyled.length ?? 0,
+                file: projectFiles.layerStyleImportResult?.fileName ?? "",
               })}
             </DialogDescription>
           </DialogHeader>
-          <ImportWarningList
-            warnings={projectFiles.qgisImportWarnings ?? []}
-            describe={describeQgisWarning}
-          />
+          {(projectFiles.layerStyleImportResult?.restyled.length ?? 0) > 0 && (
+            <ul className="max-h-40 list-disc space-y-1 overflow-y-auto ps-5 text-sm">
+              {projectFiles.layerStyleImportResult?.restyled.map((name, index) => (
+                <li key={`${index}-${name}`}>{name}</li>
+              ))}
+            </ul>
+          )}
+          {(projectFiles.layerStyleImportResult?.unused.length ?? 0) > 0 && (
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                {t("toolbar.item.layerStylesUnused", {
+                  count: projectFiles.layerStyleImportResult?.unused.length ?? 0,
+                })}
+              </p>
+              <ul className="max-h-32 list-disc space-y-1 overflow-y-auto ps-5 text-sm text-muted-foreground">
+                {projectFiles.layerStyleImportResult?.unused.map((name) => (
+                  <li key={name}>{name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="flex justify-end">
-            <Button onClick={() => projectFiles.setQgisImportWarnings(null)}>
+            <Button onClick={() => projectFiles.setLayerStyleImportResult(null)}>
               {t("common.ok")}
             </Button>
           </div>
@@ -262,6 +309,10 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
           </form>
         </DialogContent>
       </Dialog>
+      <RemoteSignInDialog
+        prompt={projectFiles.remoteSignInPrompt}
+        onSettle={projectFiles.settleRemoteSignInPrompt}
+      />
       <Dialog
         open={projectFiles.credentialStripPrompt !== null}
         onOpenChange={(open: boolean) => {
@@ -304,11 +355,17 @@ export function ProjectFileDialogs({ projectFiles }: ProjectFileDialogsProps) {
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{t("toolbar.item.embedVectorTitle")}</DialogTitle>
+            <DialogTitle>
+              {t(
+                projectFiles.embedVectorDataPrompt?.hasGeometryEdits
+                  ? "toolbar.item.embedEditedVectorTitle"
+                  : "toolbar.item.embedVectorTitle",
+              )}
+            </DialogTitle>
             <DialogDescription>
               {t(
                 projectFiles.embedVectorDataPrompt?.hasGeometryEdits
-                  ? "toolbar.item.embedEditedGeometryDesc"
+                  ? "toolbar.item.embedEditedFeaturesDesc"
                   : projectFiles.embedVectorDataPrompt?.allowFileReferences
                     ? "toolbar.item.embedVectorDescDesktop"
                     : projectFiles.embedVectorDataPrompt?.desktop

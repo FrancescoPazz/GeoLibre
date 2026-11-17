@@ -1,4 +1,9 @@
-import { useAppStore, useLayersWhen, type GeoLibreLayer } from "@geolibre/core";
+import {
+  shouldZoomToNewLayers,
+  useAppStore,
+  useLayersWhen,
+  type GeoLibreLayer,
+} from "@geolibre/core";
 import { getLayerBounds, type MapEngine } from "@geolibre/map";
 import {
   clearRemoteWhiteboxCatalogSnapshotCache,
@@ -14,7 +19,8 @@ import {
   runWhiteboxToolWasm,
   outputBaseName,
   fileOutputTargetExtension,
-  outputTextFormatHint,
+  isLas,
+  lidarBytesExtension,
   type WhiteboxJob,
   type WhiteboxLayerInput,
   type WhiteboxTool,
@@ -45,7 +51,6 @@ import {
 import { type ChangeEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import type { TFunction } from "i18next";
 import {
   isTauri,
   openLocalDataFileWithFallback,
@@ -53,9 +58,9 @@ import {
   pickLocalPathWithFallback,
   pickLocalPathsWithFallback,
   pickSavePathWithFallback,
-  type FileDialogFilter,
 } from "../../lib/tauri-io";
 import { clamp } from "../../lib/clamp";
+import { uniqueLayerName } from "../../lib/unique-layer-name";
 import {
   layersForSubsetUrl,
   subsetUrlFieldValues,
@@ -64,18 +69,20 @@ import {
 import { buildWhiteboxToolShareUrl, whiteboxToolShareBase } from "../../lib/whitebox-tool-url";
 import { searchWhiteboxTools } from "../../lib/whitebox-tool-search";
 import { useWhiteboxSemanticSearch } from "../../hooks/useWhiteboxSemanticSearch";
-import { fieldSourceInputName, isFieldParameterName } from "../../lib/whitebox-field-params";
+import { fieldSourceInputName } from "../../lib/whitebox-field-params";
 import {
   DISTANCE_UNITS,
   degreesToUnit,
   formatDistanceValue,
-  isDistanceParameterName,
   parseDistanceInput,
   unitToDegrees,
-  wgs84VectorLayerIds,
   type DistanceUnit,
 } from "../../lib/whitebox-distance-params";
-import { isMultipleDatasetParameter, parameterKind } from "../../lib/whitebox-param-kind";
+import {
+  isDirectoryParameter,
+  isMultipleDatasetParameter,
+  parameterKind,
+} from "../../lib/whitebox-param-kind";
 import { isTiff } from "../../lib/scripting/binary-output";
 import {
   canUseLayerForParameter,
@@ -108,13 +115,36 @@ import { SidecarHelpBanner } from "./SidecarHelpBanner";
 import {
   whiteboxParameterLabel,
   translateToolDescription,
-  translateToolName,
   translateWhiteboxParameterLabel,
-  humanizeIdentifier,
   humanizeParameterName,
   translateWhiteboxParameterDescription,
   translateWhiteboxCategory,
 } from "../../lib/processing-tool-i18n";
+import {
+  LAYER_TOKEN_PREFIX,
+  acceptForParameter,
+  createDefaultValues,
+  defaultOutputName,
+  fileOutputExtension,
+  humanize,
+  isCrsParameter,
+  isDataInputParameter,
+  isDistanceParameter,
+  isFeatureCollection,
+  isFieldParameter,
+  isJsonOutputPath,
+  isOutputParameter,
+  isPathParameter,
+  isSubsetUrlParameter,
+  jobStatusTone,
+  mergeCatalogParameterFallbacks,
+  outputEntries,
+  outputPath,
+  pathFiltersForParameter,
+  toolLabel,
+  wgs84ToolLayerIds,
+  type ParameterValues,
+} from "../../lib/processing-params";
 
 interface ProcessingDialogProps {
   mapControllerRef: React.RefObject<MapEngine | null>;
@@ -122,11 +152,11 @@ interface ProcessingDialogProps {
   // runner) as a new map layer. Wired by the desktop shell, which owns the
   // raster control / app API.
   onAddRaster?: (bytes: Uint8Array, name: string, fileName?: string) => Promise<void> | void;
+  // Renders a LiDAR tool output (LAS/LAZ/COPC bytes from the WASM runner) as a
+  // new point cloud layer. Resolves false when the LiDAR control could not be
+  // mounted, so the dialog falls back to downloading the file.
+  onAddLidar?: (bytes: Uint8Array, name: string, fileName: string) => Promise<boolean>;
 }
-
-type ParameterValues = Record<string, unknown>;
-
-const LAYER_TOKEN_PREFIX = "layer:";
 
 /** A layer's `[west, south, east, north]` extent, or null when it has none. */
 type LayerBounds = [number, number, number, number] | null;
@@ -136,40 +166,6 @@ const RUNNING_JOB_STATUSES = new Set(["pending", "running"]);
 // stays usable (left list + a readable parameter form).
 const PANEL_MIN_W = 560;
 const PANEL_MIN_H = 400;
-
-function toolLabel(t: TFunction, tool: WhiteboxTool): string {
-  return translateToolName(t, "whitebox", {
-    id: tool.id,
-    name: tool.display_name || humanize(tool.id),
-  });
-}
-
-function humanize(value: string): string {
-  return humanizeIdentifier(value, "Tool");
-}
-
-function isOutputParameter(param: WhiteboxToolParameter): boolean {
-  return parameterKind(param).endsWith("_out");
-}
-
-/**
- * Best-effort extension for a binary tool output, sniffed from its magic bytes.
- * Covers the formats GeoLibre `file_out` and (CRS-preserving) `vector_out` tools
- * emit today (GeoTIFF, GeoParquet, FlatGeobuf, zipped Shapefile, PNG, PMTiles); a
- * genuinely opaque output falls back to `.bin`. Extend the sniff here if a
- * future tool writes a recognizable format.
- */
-function fileOutputExtension(bytes: Uint8Array): string {
-  const matches = (sig: number[]) => sig.every((b, i) => bytes[i] === b);
-  if (isTiff(bytes)) return "tif";
-  if (matches([0x50, 0x41, 0x52, 0x31])) return "parquet"; // "PAR1"
-  if (matches([0x66, 0x67, 0x62, 0x03])) return "fgb"; // FlatGeobuf "fgb\x03"
-  if (matches([0x50, 0x4b, 0x03, 0x04])) return "zip"; // Shapefile bundle "PK\x03\x04"
-  if (matches([0x89, 0x50, 0x4e, 0x47])) return "png";
-  // "PMTiles"
-  if (matches([0x50, 0x4d, 0x54, 0x69, 0x6c, 0x65, 0x73])) return "pmtiles";
-  return "bin";
-}
 
 /** Save bytes to the user's downloads via a transient object URL. */
 function downloadBytes(bytes: Uint8Array, filename: string): void {
@@ -187,236 +183,11 @@ function downloadBytes(bytes: Uint8Array, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-function isDataInputParameter(param: WhiteboxToolParameter): boolean {
-  return ["raster_in", "vector_in", "lidar_in", "file_in"].includes(parameterKind(param));
-}
-
-// The `url` string param of a COG/WMS/XYZ subset extractor, whose value can be
-// filled from a compatible layer already loaded in the map (GeoLibre#1271). The
-// tool-kind lookup keeps this to the subset extractors without hard-coding each
-// id here; layer eligibility and the derived field values live in
-// `subset-tool-url.ts`.
-function isSubsetUrlParameter(tool: WhiteboxTool, param: WhiteboxToolParameter): boolean {
-  return (
-    param.name === "url" && parameterKind(param) === "string" && subsetUrlToolKind(tool.id) !== null
-  );
-}
-
-// A `*_field` / `*_attribute` string param names a column of one of the tool's
-// vector inputs (points_to_line's `line_field`/`sort_field`, and ~170 other
-// tools), so the dialog can offer the selected layer's attribute names instead
-// of asking the user to recall a column name (GeoLibre#1459). The kind check is
-// what keeps a same-named *dataset* param out (the catalog types
-// classify_objects_svm's `class_field` as a LiDAR input): only a scalar string
-// names a column.
-function isFieldParameter(param: WhiteboxToolParameter): boolean {
-  return parameterKind(param) === "string" && isFieldParameterName(param.name);
-}
-
-// A numeric `epsg` parameter names a coordinate reference system, so the field
-// can offer a searchable CRS list instead of asking for a code from memory
-// (GeoLibre#1538). Matching the name suffix covers `epsg`
-// (assign_projection_vector), `dst_epsg` (reproject_vector/raster/lidar),
-// `epsg_code`, `output_epsg` and the rest without hard-coding tool ids. The kind
-// check keeps a *string* CRS override out (`sidewalks_epsg` takes an authority
-// string, not a bare code), since the picker fills in a plain numeric code.
-function isCrsParameter(param: WhiteboxToolParameter): boolean {
-  const kind = parameterKind(param);
-  return (kind === "int" || kind === "double") && /(^|_)epsg(_code)?$/i.test(param.name);
-}
-
-// A `*_dist` / `*_radius` / `spacing` / `tolerance` (and friends) parameter is a
-// ground distance in the input's coordinate units, so the field can offer
-// metres/km/feet/miles alongside the degrees a WGS84 map layer forces on it
-// (GeoLibre#1540). The name rule lives in `whitebox-distance-params.ts`. Only
-// `double` qualifies: a metric distance almost always converts to a fractional
-// number of degrees, which an integer parameter cannot carry, and the kind check
-// also keeps a same-named enum or dataset parameter out.
-function isDistanceParameter(param: WhiteboxToolParameter): boolean {
-  return parameterKind(param) === "double" && isDistanceParameterName(param.name);
-}
-
-/**
- * The map layers supplying a tool's coordinates when those coordinates are known
- * to be WGS84, or `null` when they are not.
- *
- * The distance unit picker is only safe when every dataset input is a map
- * layer's in-memory GeoJSON, which `runSelectedTool` hands over verbatim and RFC
- * 7946 fixes to WGS84. A raster or LiDAR input keeps its own CRS (GeoLibre never
- * reprojects those), so a tool with one is left alone entirely; the per-input
- * rule (a path leaves the units unknowable) lives in `wgs84VectorLayerIds`,
- * where it is unit-tested.
- *
- * Returns ids rather than latitudes so the caller can measure only the one or
- * two layers actually wired to the tool, instead of every layer in the project.
- *
- * @param tool - The selected tool.
- * @param values - The current form values.
- * @returns The chosen layers' ids, or `null` when the units are unknown.
- */
-function wgs84ToolLayerIds(tool: WhiteboxTool | null, values: ParameterValues): string[] | null {
-  const params = tool?.params ?? [];
-  if (!params.length) return null;
-  const kinds = params.map((param) => parameterKind(param));
-  if (kinds.some((kind) => kind === "raster_in" || kind === "lidar_in" || kind === "file_in")) {
-    return null;
-  }
-  const vectorInputs = params.filter((_, index) => kinds[index] === "vector_in");
-  if (!vectorInputs.length) return null;
-  return wgs84VectorLayerIds(
-    vectorInputs.map((param) => ({
-      required: param.required,
-      value: values[param.name],
-    })),
-    LAYER_TOKEN_PREFIX,
-  );
-}
-
-function isPathParameter(param: WhiteboxToolParameter): boolean {
-  const kind = parameterKind(param);
-  if (isDataInputParameter(param) || isOutputParameter(param)) return true;
-  const text = `${param.name} ${param.description ?? ""} ${param.type ?? ""}`.toLowerCase();
-  return /\b(path|file|folder|directory)\b/.test(text);
-}
-
-function isDirectoryParameter(param: WhiteboxToolParameter): boolean {
-  const text = `${param.name} ${param.description ?? ""} ${param.type ?? ""}`.toLowerCase();
-  return /\b(folder|directory|dir)\b/.test(text);
-}
-
-function pathFiltersForParameter(param: WhiteboxToolParameter): FileDialogFilter[] {
-  const kind = parameterKind(param);
-  if (kind.startsWith("raster")) {
-    return [
-      {
-        name: "Raster",
-        extensions: ["tif", "tiff", "img", "bil", "flt", "sdat", "rdc", "asc"],
-      },
-    ];
-  }
-  if (kind.startsWith("vector")) {
-    return [
-      {
-        name: "Vector",
-        extensions: ["geojson", "json", "shp", "gpkg", "fgb", "sqlite", "gml", "kml"],
-      },
-    ];
-  }
-  if (kind.startsWith("lidar")) {
-    return [
-      {
-        name: "LiDAR",
-        extensions: ["las", "laz", "zlidar", "copc", "e57", "ply"],
-      },
-    ];
-  }
-  if (/\b(csv|json|html|txt|xml)\b/i.test(`${param.name} ${param.type ?? ""}`)) {
-    return [
-      {
-        name: "Files",
-        extensions: ["csv", "json", "geojson", "html", "txt", "xml"],
-      },
-    ];
-  }
-  return [];
-}
-
-function acceptForParameter(param: WhiteboxToolParameter): string {
-  return pathFiltersForParameter(param)
-    .flatMap((filter) => filter.extensions)
-    .map((extension) => `.${extension}`)
-    .join(",");
-}
-
-function outputExtensionForParameter(param: WhiteboxToolParameter): string {
-  const kind = parameterKind(param);
-  if (kind === "raster_out") return ".tif";
-  if (kind === "vector_out") return ".shp";
-  if (kind === "lidar_out") return ".laz";
-  // Sniff the intended text format from the parameter's name/description/type
-  // via the same shared helper the WASM runner uses (e.g.
-  // vector_summary_statistics' output is an "Output CSV path"). Only the
-  // fallback differs: a friendly `.txt` here for a default filename suggestion,
-  // vs the opaque `.dat` the runner writes.
-  const hint = outputTextFormatHint(param);
-  return hint ? `.${hint}` : ".txt";
-}
-
-function defaultOutputName(toolId: string, param: WhiteboxToolParameter): string {
-  const stem = `${toolId || "whitebox"}_${param.name || "output"}`
-    .replace(/[^A-Za-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return `${stem || "whitebox_output"}${outputExtensionForParameter(param)}`;
-}
-
-function isFeatureCollection(value: unknown): value is FeatureCollection {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    (value as { type?: unknown }).type === "FeatureCollection" &&
-    Array.isArray((value as { features?: unknown }).features)
-  );
-}
-
-function defaultParameterValue(param: WhiteboxToolParameter): unknown {
-  if (isOutputParameter(param)) return "";
-  if (param.default !== undefined && param.default !== null) return param.default;
-  if (parameterKind(param) === "bool") return false;
-  return "";
-}
-
-function createDefaultValues(tool: WhiteboxTool | null): ParameterValues {
-  const values: ParameterValues = {};
-  for (const param of tool?.params ?? []) {
-    values[param.name] = defaultParameterValue(param);
-  }
-  return values;
-}
-
-function mergeCatalogParameterFallbacks(
-  liveTools: WhiteboxTool[],
-  snapshotTools: WhiteboxTool[],
-): WhiteboxTool[] {
-  const snapshotById = new Map(snapshotTools.map((tool) => [tool.id, tool] as const));
-  return liveTools.map((tool) => {
-    if (tool.params?.length) return tool;
-    const snapshot = snapshotById.get(tool.id);
-    if (!snapshot?.params?.length) return tool;
-    return {
-      ...tool,
-      params: snapshot.params,
-      return_type: tool.return_type ?? snapshot.return_type,
-    };
-  });
-}
-
-function outputPath(value: unknown): string | null {
-  if (typeof value === "string" && value.trim()) return value.trim();
-  if (value && typeof value === "object") {
-    const path = (value as { path?: unknown }).path;
-    if (typeof path === "string" && path.trim()) return path.trim();
-  }
-  return null;
-}
-
-function outputEntries(outputs: Record<string, unknown>): [string, string][] {
-  return Object.entries(outputs)
-    .map(([name, value]) => [name, outputPath(value)] as const)
-    .filter((entry): entry is [string, string] => Boolean(entry[1]));
-}
-
-function isJsonOutputPath(path: string): boolean {
-  return /\.(geojson|json)$/i.test(path);
-}
-
-function jobStatusTone(job: WhiteboxJob | null): string {
-  if (!job) return "text-muted-foreground";
-  if (job.status === "succeeded") return "text-emerald-700";
-  if (job.status === "failed") return "text-destructive";
-  return "text-primary";
-}
-
-export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDialogProps) {
+export function ProcessingDialog({
+  mapControllerRef,
+  onAddRaster,
+  onAddLidar,
+}: ProcessingDialogProps) {
   const { t, i18n } = useTranslation();
   const open = useAppStore((s) => s.ui.processingOpen);
   const setProcessingOpen = useAppStore((s) => s.setProcessingOpen);
@@ -1566,11 +1337,14 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
         const path = isFeatureCollection(value) ? "" : (outputPath(value) ?? "");
         const data = isFeatureCollection(value) ? value : await fetchWhiteboxJsonOutput(path);
         if (!isFeatureCollection(data)) continue;
-        const layerName = `${jobToolLabel} ${humanize(name)}`;
+        const layerName = uniqueLayerName(
+          `${jobToolLabel} ${humanize(name)}`,
+          useAppStore.getState().layers,
+        );
         const layerId = addGeoJsonLayer(layerName, data, path || undefined);
         historyTrackersRef.current.get(nextJob.id)?.addOutputLayer(layerName);
         const layer = useAppStore.getState().layers.find((item) => item.id === layerId);
-        if (layer) mapControllerRef.current?.fitLayer(layer);
+        if (layer && shouldZoomToNewLayers()) mapControllerRef.current?.fitLayer(layer);
       }
 
       // Binary outputs come back from the WASM runner inline. Raster (COG) bytes
@@ -1583,11 +1357,25 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
         if (!(value instanceof Uint8Array)) continue;
         const param = jobTool?.params?.find((item) => item.name === name);
         const outKind = param ? parameterKind(param) : "";
+        // A `lidar_out` (a classified/filtered/thinned cloud) goes on the map
+        // as a point cloud layer, named for its own encoding so a COPC output
+        // streams; the download below is only the fallback.
+        if (outKind === "lidar_out" && isLas(value) && onAddLidar) {
+          const lidarName = `${jobToolLabel} ${humanize(name)}`;
+          const fileName = `${outputBaseName(nextJob.tool_id, name)}.${lidarBytesExtension(value)}`;
+          if (await onAddLidar(value, lidarName, fileName)) {
+            historyTrackersRef.current.get(nextJob.id)?.addOutputLayer(lidarName);
+            continue;
+          }
+        }
         // A generic `file_out` can still hold a GeoTIFF — `slope` declares its
         // output only as "Optional output path" — so sniff the bytes rather
         // than trust the declared kind, the way the scripting/assistant path
         // does, and put a raster on the map instead of downloading it.
-        const declaredFile = outKind === "file_out" || outKind === "vector_out";
+        // A `lidar_out` the map could not take is downloaded too; it never
+        // belongs on the raster path.
+        const declaredFile =
+          outKind === "file_out" || outKind === "vector_out" || outKind === "lidar_out";
         if (declaredFile && (!isTiff(value) || !onAddRaster)) {
           const label = `${jobToolLabel} ${humanize(name)}`.replace(/\s+/g, "_");
           // Prefer the content signature: a `vector_out` and most binary
@@ -1613,7 +1401,7 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
         }
       }
     },
-    [addGeoJsonLayer, mapControllerRef, onAddRaster, t, tools],
+    [addGeoJsonLayer, mapControllerRef, onAddLidar, onAddRaster, t, tools],
   );
 
   useEffect(() => {
@@ -2133,6 +1921,7 @@ export function ProcessingDialog({ mapControllerRef, onAddRaster }: ProcessingDi
               className="min-w-0 flex-1"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
+              aria-label={t("processing.whitebox.filterByCategory")}
             >
               {categories.map((item) => (
                 <option key={item.value} value={item.value}>
@@ -2815,6 +2604,7 @@ function ParameterField({
       ) : isDataInputParameter(param) && availableLayers.length > 0 ? (
         <LayerOrPathInput
           id={`whitebox-${param.name}`}
+          label={label}
           layers={availableLayers}
           param={param}
           value={valueText}
@@ -3135,6 +2925,8 @@ function DistanceInput({ id, latitude, onChange, value }: DistanceInputProps) {
 
 interface LayerOrPathInputProps {
   id: string;
+  /** The parameter's visible label, which also names the layer picker. */
+  label: string;
   layers: GeoLibreLayer[];
   onChange: (value: unknown) => void;
   onPickFile?: (fileName: string, bytes: Uint8Array) => void;
@@ -3221,6 +3013,7 @@ function MultiLayerOrPathInput({
 
 function LayerOrPathInput({
   id,
+  label,
   layers,
   onChange,
   onPickFile,
@@ -3239,6 +3032,7 @@ function LayerOrPathInput({
           child count is fine; this is the one that needs saying. */}
       <Select
         className="col-span-2 @sm/params:col-span-1"
+        aria-label={t("processing.whitebox.layerFor", { name: label })}
         value={usingLayer ? value : ""}
         onChange={(event) => onChange(event.target.value)}
       >

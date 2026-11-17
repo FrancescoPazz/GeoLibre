@@ -24,25 +24,52 @@ file contents do not change.
 
 ## Schema
 
-| Field              | Type    | Description                                                                                                                                                                                     |
-| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`          | string  | Format version (`0.1.0`)                                                                                                                                                                        |
-| `name`             | string  | Project display name                                                                                                                                                                            |
-| `mapView`          | object  | `center`, `zoom`, `bearing`, `pitch`, optional `bbox`                                                                                                                                           |
-| `basemapStyleUrl`  | string  | MapLibre style JSON URL, or an empty string for a blank background                                                                                                                              |
-| `basemapVisible`   | boolean | Whether the Background layer is visible                                                                                                                                                         |
-| `basemapOpacity`   | number  | Background layer opacity from `0` to `1`                                                                                                                                                        |
-| `layers`           | array   | Layer definitions (see below)                                                                                                                                                                   |
-| `styles`           | object  | Map of layer id → `LayerStyle`                                                                                                                                                                  |
-| `plugins`          | object  | Optional external plugin manifest URLs, active plugin IDs, plugin map-control positions, and plugin settings                                                                                    |
-| `legend`           | object  | Optional Print Layout legend customizations (title, grouping, ordering, per-item rename/hide)                                                                                                   |
-| `printLayout`      | object  | Optional Print Layout composer settings (title, page size, orientation, blocks, atlas); omitted when default                                                                                    |
-| `storymap`         | object  | Optional scroll-driven story map (chapters and presentation settings); omitted when there are no chapters                                                                                       |
-| `widgets`          | array   | Optional Dashboard panel chart widgets (see below); omitted when there are none                                                                                                                 |
-| `dashboardColumns` | number  | Optional Dashboard widget-grid column count (1-6, default 2); omitted when default                                                                                                              |
-| `styleLibrary`     | array   | Optional project-scoped Style Manager entries (name, tags, kind, `LayerStyle` subset); omitted when empty                                                                                       |
-| `primaryRenderer`  | string  | Optional engine for the primary map area: `"maplibre"` (2D, the default), `"mapbox"` (Mapbox GL JS), `"arcgis"` (ArcGIS Maps SDK for JavaScript) or `"cesium"` (3D globe); omitted when default |
-| `metadata`         | object  | Free-form project metadata                                                                                                                                                                      |
+| Field             | Type    | Description                                                                                                  |
+| ----------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `version`         | string  | Format version: the app writes `0.2.0`; older files and the Python package write `0.1.0`                    |
+| `name`            | string  | Project display name                                                                                         |
+| `mapView`         | object  | `center`, `zoom`, `bearing`, `pitch`, optional `bbox`                                                        |
+| `basemapStyleUrl` | string  | MapLibre style JSON URL, or an empty string for a blank background                                           |
+| `basemapVisible`  | boolean | Whether the Background layer is visible                                                                      |
+| `basemapOpacity`  | number  | Background layer opacity from `0` to `1`                                                                     |
+| `blankBackgroundColor` | string \| null | Optional custom colour for the Blank background; `null` uses the theme default                       |
+| `layers`          | array   | Layer definitions (see below)                                                                                |
+| `selectedLayerId` | string \| null | Optional layer selected in the Layers panel when the project was saved; `null` restores no active layer    |
+| `layerGroups`     | array   | Optional Layers-panel folders (`id`, `name`, `parentId`, `collapsed`, `visible`, `opacity`); omitted when empty |
+| `styles`          | object  | Map of layer id → `LayerStyle`                                                                               |
+| `preferences`     | object  | Project map preferences, environment variables, and geocoding settings (see [Credential redaction](#credential-redaction)) |
+| `plugins`         | object  | Optional external plugin manifest URLs, active plugin IDs, plugin map-control positions, and plugin settings |
+| `legend`          | object  | Optional Print Layout legend customizations (title, grouping, ordering, per-item rename/hide)                |
+| `printLayout`     | object  | Optional Print Layout composer settings (title, page size, orientation, blocks, atlas); omitted when default  |
+| `storymap`        | object  | Optional scroll-driven story map (chapters and presentation settings); omitted when there are no chapters    |
+| `models`          | array   | Optional saved processing models (Model Builder pipelines)                                                   |
+| `processingHistory` | array | Optional record of processing tool runs (Processing History)                                                 |
+| `obia`            | object  | Optional Object-Based Analysis workbench state: settings, classes, and run provenance (see [Object-Based Analysis](user-guide/obia.md#saving-and-provenance)); omitted until the workbench is used |
+| `widgets`         | array   | Optional Dashboard panel chart widgets (see below); omitted when there are none                              |
+| `dashboardColumns`| number  | Optional Dashboard widget-grid column count (1-6, default 2); omitted when default                          |
+| `mapLayout`       | object  | Optional multi-map grid (`rows`, `cols`, `syncView`); omitted for a single map                               |
+| `secondaryMapViews` | array | Optional panes past the primary one, each with its own camera and layer visibility; omitted for a single map |
+| `primaryMapLabel` | string  | Optional label for the primary pane of a multi-map grid                                                      |
+| `bookmarks`       | array   | Optional saved map views from the Bookmarks panel (see below); omitted when there are none                   |
+| `bookmarkGroups`  | array   | Optional folders the bookmarks are organized into; omitted when there are none                               |
+| `styleLibrary`    | array   | Optional project-scoped Style Manager entries (name, tags, kind, `LayerStyle` subset); omitted when empty    |
+| `primaryRenderer` | string  | Optional engine for the primary map area: `"maplibre"` (2D, the default), `"mapbox"` (Mapbox GL JS), `"arcgis"` (ArcGIS Maps SDK for JavaScript) or `"cesium"` (3D globe); omitted when default |
+| `comments`        | array   | Optional review comments anchored to map points or features, with replies                                    |
+| `interaction`     | object  | Optional startup Identify target and control visibility (see below); omitted by default                      |
+| `metadata`        | object  | Free-form project metadata                                                                                   |
+
+The map's 3D look is part of the project. `mapView.pitch` and `mapView.bearing`
+hold the camera tilt and rotation, and `preferences.map` holds the terrain:
+`terrainEnabled` (3D terrain on or off), `terrainExaggeration` (vertical
+exaggeration; omitted for the default of 1) and `terrainSource` (the HTTP(S) URL
+of a Cloud Optimized GeoTIFF DEM; omitted for the built-in global terrain). A DEM
+opened from a local file has no URL, so it is not saved. Like other URLs in a project,
+`terrainSource` passes through [credential redaction](#credential-redaction), so
+a presigned or keyed DEM URL loses its signature and needs re-signing to load
+again. `terrainFillOutside` says whether that DEM is surrounded by the global
+terrain instead of a flat 0 m plain; omitted, it is on for a URL DEM and off for
+a local file. `terrainIonAssetId`
+picks a Cesium Ion terrain asset for the globe.
 
 ## Plugin state
 
@@ -128,7 +155,8 @@ carries no `printLayout` key.
   `title` follows the project name rather than freezing a copy of it.
 - Page: `paperSize` (`a4`, `a3`, `letter`, `legal`, `tabloid`, `fullhd`, `hd`,
   `uhd4k`, `square`, `custom`), `orientation`, `customWidth` / `customHeight` /
-  `customUnit` for `custom`, `pageMargin`, and the page/map frame colours.
+  `customUnit` for `custom`, `pageMargin`, `pageBackground`, `panelTheme`
+  (`light` or `dark`), and the page/map frame colours.
 - Elements: the `show*` toggles for legend, scale bar, north arrow, footer,
   date, attribution, colorbar, custom legend and info block, with their
   per-element settings.
@@ -144,7 +172,7 @@ widths) is deliberately not stored.
 
 ## Story map
 
-A story map turns the project into a scroll-driven narrative. Each chapter
+A story map turns the project into a chapter-based narrative. Each chapter
 captures a camera view plus text, and can fade project layers in or out on
 enter/exit. The section is omitted entirely when the project has no chapters.
 
@@ -170,6 +198,7 @@ enter/exit. The section is omitted entirely when the project has no chapters.
       "location": { "center": [-122.4194, 37.7749], "zoom": 11, "pitch": 45, "bearing": 0 },
       "mapAnimation": "flyTo",
       "rotateAnimation": false,
+      "durationSeconds": 15,
       "onChapterEnter": [{ "layerId": "layer-a", "opacity": 1, "duration": 2000 }],
       "onChapterExit": [{ "layerId": "layer-a", "opacity": 0 }]
     }
@@ -179,8 +208,16 @@ enter/exit. The section is omitted entirely when the project has no chapters.
 
 `alignment` is one of `left`, `center`, `right`, `full`; `mapAnimation` is
 `flyTo`, `easeTo`, or `jumpTo`. Layer opacity changes reference project layer
-ids. Build and present story maps from **Project → Story Map**, or export a
-self-contained HTML page for static hosting.
+ids, and their `opacity` replaces the layer's own `opacity` while the chapter
+is active; the layer's style (such as `fillOpacity`) still applies. Build and
+present story maps from **Project → Story Map**, or export a self-contained
+HTML page for static hosting.
+
+`durationSeconds` is an optional chapter dwell time for in-app autoplay. The
+countdown starts after the camera reaches the chapter view. Omitted or invalid
+values use 15 seconds; finite values are clamped to 1–3600 seconds. Existing
+projects and story JSON/CSV files without this field remain valid. This field
+does not change the standalone HTML export's scroll-driven playback.
 
 ## Dashboard widgets
 
@@ -202,9 +239,13 @@ self-contained HTML page for static hosting.
 ```
 
 Each widget binds a chart to a layer's attributes. `type` is one of `histogram`,
-`scatter`, `bar`, `line`, `box`, or `pie`. Which other keys apply depends on the
-type: `field` (histogram/line/box), `xField`/`yField` (scatter), `category` +
-`aggregation` + `valueField` (bar/pie), `bins` (histogram). Bar `aggregation` is
+`scatter`, `bar`, `line`, `box`, `pie`, `indicator`, `selector`, or `list`.
+Which other keys apply depends on the type: `field` (histogram/line/box, and
+indicator unless it counts), `xField`/`yField` (scatter), `category` +
+`aggregation` + `valueField` (bar/pie), `bins` (histogram),
+`indicatorAggregation` (`count`/`sum`/`mean`/`min`/`max`/`median`) + `prefix` +
+`suffix` (indicator), `category` + `multiple` (selector), and `listFields` +
+`sortBy` + `sortDir` + `limit` (list). Bar `aggregation` is
 `count`/`sum`/`mean`; pie is `count`/`sum` only. `title` is an optional label and
 `color` an optional hex (`#rgb`/`#rrggbb`) for the chart's marks (the series
 color for single-series charts; the base of a monochromatic ramp for bar/pie).
@@ -213,6 +254,78 @@ Unused keys are ignored. The Dashboard panel (Tools → Dashboard, or the
 widget-grid column count (1-6, default 2), at the top level of the project.
 Charts read from GeoJSON-backed vector layers and DuckDB query layers; widgets
 bound to a missing or non-attribute layer are shown as empty.
+
+## Bookmarks
+
+```json
+{
+  "bookmarkGroups": [{ "id": "hoods", "name": "Neighborhoods", "collapsed": false }],
+  "bookmarks": [
+    {
+      "id": "downtown",
+      "name": "Downtown",
+      "lng": -83.92,
+      "lat": 35.96,
+      "zoom": 14,
+      "pitch": 30,
+      "bearing": 340,
+      "createdAt": 1700000000000,
+      "groupId": "hoods",
+      "extra": { "visibleLayerIds": ["cities"] }
+    }
+  ]
+}
+```
+
+Saved views from the Bookmarks panel (Controls → Bookmark), in panel order.
+`lng`/`lat` (-180..180 / -90..90), `zoom` (0-24), `pitch` (0-85) and `bearing`
+(wrapped into 0-360) are the camera; `createdAt` is milliseconds since the
+epoch. `groupId` files a bookmark in one of `bookmarkGroups` (folders do not
+nest); a `groupId` that names no folder is dropped on load. `extra` is state
+captured with the view: `visibleLayerIds` lists the layers to show when the
+bookmark is opened, and the others are hidden. Bookmarks with a missing or
+out-of-range camera, or a duplicate `id`, are dropped on load. Before these
+fields existed, bookmarks lived only in the browser's local storage.
+
+## Interaction
+
+```json
+{
+  "interaction": {
+    "identify": ["layer-a", "layer-b"],
+    "controls": { "search": true, "globe": false }
+  }
+}
+```
+
+Applied when the project opens, so a map shared from a notebook starts the way
+it was set up there. The Python package writes it from `Map.set_identify` and
+`Map.show_control` / `Map.hide_control` in `save_project`, `to_project` and
+`to_html`. `identify` is a layer id, `"all"` for every visible queryable layer,
+a list of layer ids to identify only those, or `null` for off; ids that name no
+layer are skipped. `controls` maps a toolbar panel (`bookmark`, `search`,
+`measure`, `minimap`, `print`) or built-in map control (`navigation`,
+`fullscreen`, `compass`, `geolocate`, `globe`, `scale`, `attribution`, `logo`)
+to whether it starts shown; other names are ignored. `measure` and `minimap`
+also accept an object with a boolean `visible` and the control's options:
+
+```json
+{
+  "controls": {
+    "measure": { "visible": true, "collapsed": true, "distanceUnit": "feet", "areaUnit": "acres" },
+    "minimap": { "visible": true, "collapsed": true }
+  }
+}
+```
+
+`collapsed: true` opens only the control's on-map button, so a shared map does
+not start with the Measure panel over it and its tool armed. Measure's
+`distanceUnit` and `areaUnit` take the values listed in
+[Built-in control panels](plugin-api.md#built-in-control-panels); Minimap also
+takes `zoomOffset`, `width` and `height`. A plain `true` opens the control
+expanded, as the Controls menu does. The app writes the block
+back unchanged when it saves the project; turning Identify or a control on or
+off in the app does not edit it.
 
 ## Layer object
 
@@ -231,6 +344,9 @@ bound to a missing or non-attribute layer are shown as empty.
     "strokeColor": "#1e40af",
     "strokeWidth": 2,
     "strokeWidthUnit": "pixels",
+    "strokeOpacity": 1,
+    "strokeDash": [],
+    "strokeBlur": 0,
     "fillOpacity": 0.6,
     "circleRadius": 6,
     "rasterBrightnessMin": 0,
@@ -320,6 +436,14 @@ manual synchronization only. `lastSyncedAt` records the most recent successful
 synchronization and `lastError` the most recent failure (cleared on the next
 success). `onFailure` decides whether a failed synchronization retains the last
 good data (`"keep-last"`, the default) or discards it (`"clear"`).
+
+SQL Server layers may also carry top-level `mssqlWritebackPending: true` when
+a write committed but its reread failed, or the write outcome could not be
+confirmed. This flag survives project save/load and blocks another Save Edits
+until a successful manual Refresh restores generated keys and the read baseline.
+Recovery failure preserves the layer's features even with `onFailure: "clear"`.
+Successful recovery removes the flag; the prior baseline metadata remains
+unchanged until that read succeeds.
 
 For local-file vector layers on the desktop app, `metadata.watch` can persist a
 "watch this file for changes" toggle. When enabled, the desktop app registers a
@@ -424,6 +548,29 @@ The expression is saved with the project and remains active until it is cleared
 from the Select by Expression panel or from the layer's **Clear filters** action.
 It combines with Quick Filters and the transient filters described below.
 
+A layer linked to the on-map floor picker carries a `levelFilter`: the field
+holding each feature's floor, the picker's `mode` (`all`, `only`, or `below`
+for a floor and the ones under it), the chosen `level` as the picker labels it,
+and the raw `values` of that field that match the choice:
+
+```json
+{
+  "levelFilter": {
+    "field": "level",
+    "mode": "only",
+    "level": "0",
+    "values": ["0", "0;1", "-1-0"]
+  }
+}
+```
+
+The `values` are resolved from the layer's features when a floor is chosen
+(they include OpenStreetMap's multi-floor values such as `0;1`), and the layer is
+filtered with `["in", ["get", field], ["literal", values]]`, combined with the
+layer's other filters under one `all`. A link without `values` draws every floor
+until the app resolves them from the layer's features. Every linked layer shares
+one choice.
+
 What is stored is a plain MapLibre expression, so the Expression Builder's `@`
 variables (`@project_name`, `@layer_name`, `@feature_count`, `@map_zoom`,
 `@map_scale`) are resolved to literal values at the moment the filter is
@@ -516,26 +663,105 @@ hid. That holds for the expressions too: `titleExpression` and `bodyExpression`
 are evaluated against the visible properties only, so a `["get", …]` cannot
 pull back a hidden column or one of GeoLibre's internal ones. Raster pixel identify goes through a different path and ignores `popup`.
 
+### Descriptive metadata
+
+A layer may carry a `descriptiveMetadata` block: the catalog description edited
+in the layer's **Metadata** dialog (layer menu → Metadata). It documents the
+data and changes nothing about how the layer renders. It is separate from the
+layer's `metadata` record, which holds internal state the renderers and plugins
+key off.
+
+```json
+{
+  "descriptiveMetadata": {
+    "title": "Rivers of Tennessee",
+    "abstract": "Major rivers digitized from 1:24k topographic maps.",
+    "keywords": ["hydrology", "rivers"],
+    "license": "CC-BY-4.0",
+    "attribution": "© Tennessee GIS",
+    "contact": { "name": "Ada Lovelace", "email": "ada@example.org", "organization": "TN GIS" },
+    "lineage": "Digitized in 2019; generalized with Douglas-Peucker (10 m).",
+    "temporalExtent": { "start": "2019-01-01", "end": "2019-12-31" },
+    "links": [{ "href": "https://example.org/rivers", "rel": "about", "title": "Project page" }]
+  }
+}
+```
+
+Every member is optional and every value is a string (or a list of them).
+`license` is an [SPDX identifier](https://spdx.org/licenses/) or free text.
+`temporalExtent` bounds are ISO 8601 dates (`YYYY-MM-DD`) or date-times;
+either may be left out for an open interval. A link needs an absolute `href`;
+`rel` is a link relation (`related` when omitted) and `title` a label. On load,
+blank members, blank or duplicate (case-insensitive) keywords, and links with no
+`href` are dropped, and a block left with nothing in it is removed — an empty
+`descriptiveMetadata` is never written. Malformed values (an email without a
+domain, an impossible date) are kept so the dialog can show and fix them; the
+dialog refuses to save them.
+
+The dialog's **Export as STAC Item** writes the block as a
+[STAC 1.0](https://github.com/radiantearth/stac-spec/tree/v1.0.0) Item: the
+layer id as `id`, the layer's WGS84 extent as `geometry`/`bbox`, `title` (the
+layer name when unset), `abstract` as `description`, `keywords`, `license`, the
+contact as a `producer` provider, `lineage` as `processing:lineage` (with the
+processing extension declared), the temporal extent as `datetime` or
+`start_datetime`/`end_datetime`, the links, and a `data` asset for a remote
+source URL (a `tiles` asset when it is a `{z}/{x}/{y}` tile template). A
+license that is not an SPDX-style identifier is exported as `proprietary` with
+the text in `geolibre:license`; the attribution goes to `geolibre:attribution`. A layer with no temporal extent is stamped with the
+export time, since STAC requires a `datetime`. Exporting a vector layer to
+GeoParquet writes the block as JSON into the file's Parquet key-value metadata
+under `geolibre:metadata`, beside the `geo` key.
+
+### Planetary Computer layers
+
+A layer drawn by the Planetary Computer panel is a `raster` layer with no tile
+URL. Its `metadata` describes what to draw, and the panel rebuilds the layer
+from it when the project opens (MapLibre renderer only):
+
+| Key | Meaning |
+| --- | --- |
+| `sourceKind` | `"planetary-computer-raster"`. With `externalNativeLayer: true`, marks the layer as the panel's. |
+| `planetaryComputerLayerType` | `"item"` for one STAC item, `"mosaic"` for many composited. (`"collection"`, written by older versions, is read as a mosaic with no search filter.) |
+| `stacCollectionId` | The STAC collection id, e.g. `sentinel-2-l2a`. Required. |
+| `stacItemId` | The STAC item id. Required for an `item` layer. |
+| `stacSearchParams` | Mosaic only. The STAC search selecting its items: `datetime` (RFC 3339 range), `query` (e.g. `{"eo:cloud_cover": {"lte": 10}}`), `sortby`, `filter`. The search is registered again on every open, because a registered search id expires and is never saved. |
+| `presetName` | A render preset of the collection (`true-color`, `ndvi`, ...). |
+| `renderParams` | Data API render parameters: `assets`, `expression`, `asset_as_band`, `rescale` (`"min,max"`), `colormap_name`, and so on. Parameters that select bands (`assets` or `expression` here, or a nonempty top-level `assets`) are a complete render and are used as saved: a `presetName` beside them is only a label, and its own expression or colormap is not applied. Without a band selection, the parameters are applied over the named preset's, or over the collection's default preset when none is named, so a lone `rescale` overrides just the stretch. With no parameters at all, the named or default preset is used. |
+| `assets` | The asset names rendered (empty for an expression). |
+| `bounds` | `[west, south, east, north]`, used by zoom-to-layer and to bound a mosaic's tile requests. |
+| `stacDatetime` | Item layers written by the app: the item's acquisition datetime. Informational. |
+| `identifiable` | `true`: Identify reads the layer's pixel values through the Data API. |
+| `tileType` | `"raster"`. |
+| `sourceId`, `sourceIds`, `nativeLayerIds` | The MapLibre source and layer ids the panel creates: `nativeLayerIds` is `[<layer id>]` and `sourceId` is `<layer id>-source`. |
+
+The Python API (`Map.add_planetary_computer`) and the MCP server
+(`add_planetary_computer_layer`) write this shape without contacting the
+service.
+
 ## Layer types
 
-| Type             | Status                                                                                                                                                                                            |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `geojson`        | Supported for imported files and GeoJSON URLs                                                                                                                                                     |
-| `xyz`            | Supported for raster tile templates                                                                                                                                                               |
-| `wms`            | Supported as tiled WMS GetMap layers                                                                                                                                                              |
-| `raster`         | Supported for raster tile templates; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion imagery asset the 3D globe loads with the app's Ion token (3D only)           |
-| `vector-tiles`   | Supported for MapLibre vector tile sources                                                                                                                                                        |
-| `mbtiles`        | Supported in the desktop app through a local MapLibre protocol                                                                                                                                    |
-| `arcgis`         | Supported for ArcGIS VectorTileServer layers (FeatureServer layers are saved as `geojson`, and MapServer/ImageServer layers as `raster`)                                                          |
-| `pmtiles`        | Supported through the Components plugin                                                                                                                                                           |
-| `cog`            | Supported for COG and GeoTIFF raster layers                                                                                                                                                       |
-| `flatgeobuf`     | Supported through the Components plugin and imported as GeoJSON when loaded as a local vector file                                                                                                |
-| `zarr`           | Supported through the Components plugin                                                                                                                                                           |
-| `lidar`          | Supported through the Components plugin                                                                                                                                                           |
-| `gaussian-splat` | Supported through the Components plugin                                                                                                                                                           |
-| `geoparquet`     | Imported as GeoJSON via DuckDB-WASM                                                                                                                                                               |
-| `duckdb-query`   | Supported for SQL query-result layers                                                                                                                                                             |
-| `3d-tiles`       | Supported through the `maplibre-gl-3d-tiles` plugin; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion tileset the 3D globe loads with the app's Ion token (3D only) |
+| Type             | Status                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| `geojson`        | Supported for imported files and GeoJSON URLs                                                      |
+| `xyz`            | Supported for raster tile templates                                                                |
+| `wms`            | Supported as tiled WMS GetMap layers                                                               |
+| `wmts`           | Supported for WMTS raster tile templates                                                           |
+| `raster`         | Supported for raster tile templates; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion imagery asset the 3D globe loads with the app's Ion token (3D only) |
+| `vector-tiles`   | Supported for MapLibre vector tile sources                                                         |
+| `mbtiles`        | Desktop: local MapLibre protocol over Tauri. Browser: in-memory sql.js, not restored on reopen    |
+| `arcgis`         | Supported for ArcGIS VectorTileServer layers (FeatureServer layers are saved as `geojson`, and MapServer/ImageServer layers as `raster`) |
+| `pmtiles`        | Supported through the Components plugin                                                            |
+| `cog`            | Supported for COG and GeoTIFF raster layers                                                        |
+| `flatgeobuf`     | Supported through the Components plugin and imported as GeoJSON when loaded as a local vector file |
+| `zarr`           | Supported through the Components plugin                                                            |
+| `lidar`          | Supported through the Components plugin                                                            |
+| `gaussian-splat` | Supported through the Components plugin                                                            |
+| `geoparquet`     | Imported as GeoJSON via DuckDB-WASM                                                                |
+| `duckdb-query`   | Supported for SQL query-result layers                                              |
+| `deckgl-viz`     | Supported through the Deck.gl Layer plugin                                                         |
+| `video`          | Supported for georeferenced video overlays                                                         |
+| `image`          | Supported for georeferenced image overlays (KML ground overlays, the Georeferencer, NetCDF grids)  |
+| `3d-tiles`       | Supported through the `maplibre-gl-3d-tiles` package; with `source.ionAssetId` and `metadata.sourceKind: "cesium-ion"`, a Cesium Ion tileset the 3D globe loads with the app's Ion token (3D only) |
 
 ## API
 
@@ -554,9 +780,26 @@ A local project may contain credentials needed to restore authenticated data,
 including layer request headers, geocoding API keys, environment variables, and
 plugin settings. Any project leaving the local workspace must pass through
 `redactCredentials(project)` first. GeoLibre applies this invariant to Share,
-standalone HTML export, embed snapshots, and collaboration snapshots. Local
-Save and Save As ask whether credentials should be stripped or deliberately
-kept.
+standalone HTML export, embed snapshots, and collaboration snapshots. On the
+desktop app, geocoding API keys and uniquely named secret environment
+variables move to the OS keychain rather than the file; see
+[Credential storage](architecture.md#credential-storage). Duplicate or
+nameless secret environment rows cannot be stored under a unique account, so
+Local Save and Save As offer the same keep/strip prompt used when the keychain
+is unavailable or the web build contains project credentials.
+
+A layer `source.requestHeaders` value may reference an environment variable as
+`${NAME}`, e.g. `"Authorization": "Bearer ${TILES_TOKEN}"`. The reference is
+saved as written and resolved from the enabled `environmentVariables` rows when
+the request is made; a header whose variable is unset or empty is not sent. A
+value that is only an optional scheme word followed by one reference survives
+redaction; any other header value is removed.
+
+Each `preferences.environmentVariables` row may carry `"secret": false`. Rows
+without it are secrets: redaction removes them, and the desktop app stores
+their values in the keychain when they have a unique, nonempty name. Rows
+marked `"secret": false` are ordinary values: they stay in the file and survive
+Share and export.
 
 Saved model and processing-history parameter bags do not currently accept
 credentials and are treated as structural project content. If a future

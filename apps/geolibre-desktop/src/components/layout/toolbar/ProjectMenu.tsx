@@ -17,6 +17,7 @@ import {
   Copy,
   FileCode2,
   FileInput,
+  FileOutput,
   FilePen,
   FilePlus2,
   FileText,
@@ -25,8 +26,10 @@ import {
   HardDriveDownload,
   History,
   Import,
+  Layers,
   LayoutGrid,
   Link2,
+  Palette,
   Printer,
   Save,
   Share2,
@@ -38,7 +41,7 @@ import { useDesktopSettingsStore } from "../../../hooks/useDesktopSettings";
 import { projectMenuItemCapability } from "../../../lib/deployment-gates";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import type { ShareHostStatus } from "../../../lib/share-geolibre";
-import { CapabilityNotice, capabilityNoticeId } from "./CapabilityNotice";
+import { CapabilityNotice, capabilityNoticeId, useCapabilityReason } from "./CapabilityNotice";
 import { formatRecentProjectTime, type ToolbarChrome } from "./constants";
 import { useMapCapabilities } from "../../../hooks/useMapCapabilities";
 
@@ -69,6 +72,7 @@ interface ProjectMenuProps {
   onOpenGallery: () => void;
   onImportQgisProject: () => void;
   onImportArcgisProject: () => void;
+  onImportLayerStyles: () => void;
   onOpenRecent: (path: string) => void;
   onOpenHistory: () => void;
   onSave: () => void;
@@ -77,6 +81,8 @@ interface ProjectMenuProps {
   onSaveAsTemplate?: () => void;
   onShare: () => void;
   onExportHtml: () => void;
+  onExportLayerStyles: () => void;
+  onExportLayers: () => void;
   onCollaborate: () => void;
   onPrintLayout: () => void;
   onOpenOfflineBasemap: () => void;
@@ -93,6 +99,7 @@ export function ProjectMenu({
   onOpenGallery,
   onImportQgisProject,
   onImportArcgisProject,
+  onImportLayerStyles,
   onOpenRecent,
   onOpenHistory,
   onSave,
@@ -101,6 +108,8 @@ export function ProjectMenu({
   onSaveAsTemplate,
   onShare,
   onExportHtml,
+  onExportLayerStyles,
+  onExportLayers,
   onCollaborate,
   onPrintLayout,
   onOpenOfflineBasemap,
@@ -135,6 +144,10 @@ export function ProjectMenu({
   const shareDeniedBy = capabilityNoticeId(SHARE_DENIED_ID, shareCapability);
   const exportDataDeniedBy = capabilityNoticeId(EXPORT_DATA_DENIED_ID, exportDataCapability);
   const exportImageDeniedBy = capabilityNoticeId(EXPORT_IMAGE_DENIED_ID, exportImageCapability);
+  // Everything in the Export submenu takes `export:data`, so a denial disables
+  // the trigger itself and explains it with a tooltip, as ProcessingMenu does:
+  // the foot-of-menu note is out of sight from inside the submenu.
+  const exportDataDeniedTitle = useCapabilityReason(exportDataCapability);
   // Two independent gates, and the deployment's comes first: the interface
   // profile is a decluttering preference the user can undo, while a capability
   // the deployment withheld is not on offer at all (issue #1673).
@@ -158,31 +171,56 @@ export function ProjectMenu({
         {t("toolbar.item.shareHostUnavailable")}
       </DropdownMenuLabel>
     ) : null;
+  // The Export submenu's entries, all gated on `export:data`. Each `name` is
+  // both the `project.<name>` menu id and the `toolbar.item.<name>Ellipsis` label.
+  const exportItems = [
+    { name: "exportHtml", onSelect: onExportHtml, Icon: FileCode2 },
+    { name: "exportLayerStyles", onSelect: onExportLayerStyles, Icon: Palette },
+    { name: "exportLayers", onSelect: onExportLayers, Icon: Layers },
+  ] as const;
+  // The two save-group items that also need an optional callback to render.
+  const showDuplicate = show("project.duplicate") && Boolean(onDuplicate);
+  const showSaveAsTemplate = show("project.saveAsTemplate") && Boolean(onSaveAsTemplate);
   // Group-visibility flags so the separators between groups aren't left orphaned
   // when a whole group is hidden by the active profile.
   const showSaveGroup =
     show("project.save") ||
     show("project.saveAs") ||
-    show("project.duplicate") ||
-    show("project.saveAsTemplate") ||
+    showDuplicate ||
+    showSaveAsTemplate ||
     (!shareHidden && show("project.share")) ||
-    show("project.exportHtml") ||
+    exportItems.some((item) => show(`project.${item.name}`)) ||
     (collaborationEnabled && show("project.collaborate"));
   // Narrower than showSaveGroup, which also covers share/export/collaborate: the
   // `project:save` note must not render when only those siblings are on screen.
   const showSaveActions =
-    show("project.save") ||
-    show("project.saveAs") ||
-    (show("project.duplicate") && Boolean(onDuplicate)) ||
-    (show("project.saveAsTemplate") && Boolean(onSaveAsTemplate));
+    show("project.save") || show("project.saveAs") || showDuplicate || showSaveAsTemplate;
   // The two `export:data` entries sit in different groups, so their shared note
   // renders at the menu's foot and needs to know whether either is on screen.
-  const showExportDataActions = show("project.exportHtml") || show("project.offlineRegion");
+  const showExportMenu = exportItems.some((item) => show(`project.${item.name}`));
+  const showExportDataActions = showExportMenu || show("project.offlineRegion");
   // Same for the two `project:share` entries, which straddle Export HTML.
   const showShareActions =
     (!shareHidden && show("project.share")) ||
     (collaborationEnabled && show("project.collaborate"));
   const showPrintGroup = show("project.printLayout") || show("project.offlineRegion");
+  // A deployment that withholds both `project:edit` and `export:data` (e.g.
+  // `capabilities: []`) leaves nothing to list, and a button that opens an
+  // empty menu reads as broken, so drop the button (issue #3474).
+  // Keep the ids below in step with the top-level `show(...)` gates in the JSX
+  // that are not already covered by the group flags.
+  const hasVisibleItem =
+    showSaveGroup ||
+    showPrintGroup ||
+    [
+      "project.new",
+      "project.openFrom",
+      "project.openRecent",
+      "project.history",
+      "project.import",
+      "project.storymap",
+    ].some(show);
+  if (!hasVisibleItem) return null;
 
   return (
     <DropdownMenu>
@@ -320,6 +358,10 @@ export function ProjectMenu({
                 <FileInput className="me-2 h-3.5 w-3.5" />
                 {t("toolbar.item.importArcgisProjectEllipsis")}
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onImportLayerStyles}>
+                <Palette className="me-2 h-3.5 w-3.5" />
+                {t("toolbar.item.importLayerStylesEllipsis")}
+              </DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
@@ -344,7 +386,7 @@ export function ProjectMenu({
             {t("toolbar.item.saveAsEllipsis")}
           </DropdownMenuItem>
         )}
-        {show("project.duplicate") && onDuplicate && (
+        {showDuplicate && onDuplicate && (
           <DropdownMenuItem
             onSelect={onDuplicate}
             disabled={!saveCapability.granted}
@@ -354,7 +396,7 @@ export function ProjectMenu({
             {t("toolbar.item.duplicate")}
           </DropdownMenuItem>
         )}
-        {show("project.saveAsTemplate") && onSaveAsTemplate && (
+        {showSaveAsTemplate && onSaveAsTemplate && (
           <DropdownMenuItem
             onSelect={onSaveAsTemplate}
             disabled={!saveCapability.granted}
@@ -384,15 +426,31 @@ export function ProjectMenu({
             {shareBrokenNote(SHARE_UNAVAILABLE_ID)}
           </>
         )}
-        {show("project.exportHtml") && (
-          <DropdownMenuItem
-            onSelect={onExportHtml}
-            disabled={!exportDataCapability.granted}
-            aria-describedby={exportDataDeniedBy}
-          >
-            <FileCode2 className="me-2 h-3.5 w-3.5" />
-            {t("toolbar.item.exportHtmlEllipsis")}
-          </DropdownMenuItem>
+        {showExportMenu && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger
+              disabled={!exportDataCapability.granted}
+              title={exportDataDeniedTitle}
+            >
+              <FileOutput className="h-3.5 w-3.5" />
+              {t("toolbar.menu.export")}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              {exportItems.map(({ name, onSelect, Icon }) =>
+                show(`project.${name}`) ? (
+                  <DropdownMenuItem
+                    key={name}
+                    onSelect={onSelect}
+                    disabled={!exportDataCapability.granted}
+                    aria-describedby={exportDataDeniedBy}
+                  >
+                    <Icon className="me-2 h-3.5 w-3.5" />
+                    {t(`toolbar.item.${name}Ellipsis`)}
+                  </DropdownMenuItem>
+                ) : null,
+              )}
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
         )}
         {collaborationEnabled && show("project.collaborate") && (
           <DropdownMenuItem

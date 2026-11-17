@@ -79,6 +79,41 @@ def test_add_wms_and_add_wmts_forward_bounds(m):
     assert _last_layer(m)["source"]["bounds"] == [-10.0, 35.0, 5.0, 45.0]
 
 
+def test_add_planetary_computer_item_and_mosaic(m):
+    item_id = m.add_planetary_computer(
+        "sentinel-2-l2a",
+        "S2A_MSIL2A_20240906T190921_R056_T10TET_20240907T023150",
+        "Seattle NDVI",
+        preset="ndvi",
+        opacity=0.8,
+    )
+    layer = _last_layer(m)
+    assert layer["id"] == item_id
+    assert layer["name"] == "Seattle NDVI"
+    assert layer["type"] == "raster"
+    assert layer["opacity"] == 0.8
+    assert layer["metadata"]["sourceKind"] == "planetary-computer-raster"
+    assert layer["metadata"]["planetaryComputerLayerType"] == "item"
+    assert layer["metadata"]["presetName"] == "ndvi"
+
+    m.add_planetary_computer(
+        "sentinel-2-l2a",
+        datetime=("2024-06-01", "2024-08-31"),
+        max_cloud_cover=10,
+        visible=False,
+    )
+    mosaic = _last_layer(m)
+    assert mosaic["visible"] is False
+    assert mosaic["metadata"]["planetaryComputerLayerType"] == "mosaic"
+    assert (
+        mosaic["metadata"]["stacSearchParams"]["datetime"]
+        == "2024-06-01T00:00:00Z/2024-08-31T23:59:59Z"
+    )
+
+    with pytest.raises(ValueError, match="opacity"):
+        m.add_planetary_computer("naip", opacity=2)
+
+
 def test_add_ee_layer_from_map_id(m):
     class TileFetcher:
         url_format = "https://earthengine.googleapis.com/maps/test/tiles/{z}/{x}/{y}"
@@ -363,6 +398,29 @@ def test_add_pmtiles(m):
     layer = _last_layer(m)
     assert layer["type"] == "pmtiles"
     assert layer["metadata"]["sourceLayers"] == ["roads"]
+
+
+def test_add_lidar(m):
+    layer_id = m.add_lidar("https://example.com/data/autzen.copc.laz?token=1")
+    layer = next(item for item in m.project["layers"] if item["id"] == layer_id)
+    assert layer["type"] == "lidar"
+    # The default name is the file name, without the query string.
+    assert layer["name"] == "autzen.copc.laz"
+    assert layer["sourcePath"] == "https://example.com/data/autzen.copc.laz?token=1"
+    assert m.add_lidar("https://example.com/cloud/", name="Mine") != layer_id
+    assert m.project["layers"][-1]["name"] == "Mine"
+    trailing = m.add_lidar("https://example.com/ept/")
+    assert next(i for i in m.project["layers"] if i["id"] == trailing)["name"] == "ept"
+
+
+def test_point_cloud_annotations_empty_by_default(m):
+    assert m.point_cloud_annotations() == {
+        "labels": {},
+        "instances": {},
+        "boxes": [],
+        "vectors": [],
+        "classes": [],
+    }
 
 
 def test_add_3d_tiles(m):
@@ -1151,6 +1209,15 @@ def test_add_legend_from_dict(m):
         {"label": "Water", "color": "#0000ff", "shape": "square"},
         {"label": "Land", "color": "#00ff00", "shape": "square"},
     ]
+
+
+def test_set_map_legend(m):
+    m.set_map_legend("Cases per 100k", position="bottom-right", collapsed=True)
+    legend = m.project["legend"]
+    assert legend["title"] == "Cases per 100k"
+    assert legend["panelPosition"] == "bottom-right"
+    assert legend["panelVisible"] is True
+    assert legend["panelCollapsed"] is True
 
 
 def test_add_legend_from_labels_and_colors(m):

@@ -22,6 +22,14 @@ export type ViewTarget =
       duration?: number;
     };
 
+/** A GeoJSON feature as returned by `getLayerFeatures` and `getDrawnFeatures`; `id` is exactly as stored. */
+export interface EmbedFeature {
+  type: "Feature";
+  id?: string | number;
+  geometry: { type: string; coordinates?: unknown; geometries?: unknown[] } | null;
+  properties: Record<string, unknown> | null;
+}
+
 export interface LayerSummary {
   id: string;
   name: string;
@@ -45,6 +53,11 @@ export interface AddLayerSpec {
 
 export interface AddDataOptions {
   styleUrl?: string;
+  /**
+   * Names the format of a `url` whose path cannot say, like the `dataType` URL
+   * parameter: `"lidar"`, or a name an installed plugin's file handler declares.
+   */
+  dataType?: string | null;
   /** Fit the map to the newly added data. Defaults to true. */
   fit?: boolean;
 }
@@ -63,6 +76,15 @@ export type EmbedEventMap = {
   viewChanged: Viewport;
   toolCompleted: Record<string, unknown>;
   serverFileWritten: { path: string; toolId: string };
+  /**
+   * A layer's in-memory feature collection was replaced: drawings, edits,
+   * attribute edits, refreshes, late-loaded data. It may fire without a content
+   * change. Debounced per layer (about 250 ms). A layer appearing with features
+   * counts; a layer's removal is sent at once with `removed: true`. Not sent for
+   * whole project loads (use `projectLoaded`), and only when the deployment
+   * grants `export:data`. Read the features with `getLayerFeatures(layerId)`.
+   */
+  featuresChanged: { layerId: string; featureCount: number; removed?: boolean };
 };
 
 type EventName = keyof EmbedEventMap;
@@ -97,6 +119,21 @@ export interface GeoLibreEmbedClient {
   addLayer(spec: AddLayerSpec): Promise<string>;
   addData(url: string, options?: AddDataOptions): Promise<string[]>;
   exportImage(): Promise<string>;
+  /**
+   * Read a layer's features (WGS84, ids exactly as stored), the same as the
+   * plugin API's `getLayerFeatures`. Rejects for an unknown layer. A layer
+   * that holds no in-memory features (raster, tiles, remote vector sources)
+   * resolves to an empty array. An empty array therefore means "no in-memory
+   * features" (an empty layer, or a raster, tile or remote source); the layer
+   * `type` from `listLayers` cannot tell these apart. Removed layers reject.
+   */
+  getLayerFeatures(layerId: string): Promise<EmbedFeature[]>;
+  /**
+   * Read the user's free drawings (all Sketches layers, combined), the same as
+   * the plugin API's `getDrawnFeatures`. Resolves to an empty array when
+   * nothing is drawn yet.
+   */
+  getDrawnFeatures(): Promise<EmbedFeature[]>;
   on<K extends EventName>(type: K, listener: Listener<K>): () => void;
   disconnect(): void;
 }
@@ -180,6 +217,8 @@ export function connect(
     addLayer: (spec) => send<string>("addLayer", { spec }),
     addData: (url, options = {}) => send<string[]>("addData", { url, ...options }),
     exportImage: () => send<string>("exportImage"),
+    getLayerFeatures: (layerId) => send<EmbedFeature[]>("getLayerFeatures", { layerId }),
+    getDrawnFeatures: () => send<EmbedFeature[]>("getDrawnFeatures", {}),
     on: (type, listener) => {
       const set = listeners.get(type) ?? new Set();
       set.add(listener as (payload: never) => void);

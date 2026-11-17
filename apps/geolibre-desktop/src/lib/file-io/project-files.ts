@@ -20,10 +20,11 @@ import {
 } from "../startup-project-snapshot";
 import {
   openLocalDataFileWithFallback,
+  saveTextFileBrowser,
   type BrowserFilePickerType,
   type BrowserFilePickerWindow,
 } from "./file-dialogs";
-import { browserSafeFileName, isHttpUrl } from "./paths";
+import { ensureGeoLibreProjectExtension, isHttpUrl } from "./paths";
 import { isAbortError } from "./shared";
 
 const GEOLIBRE_PROJECT_FILE_TYPES: BrowserFilePickerType[] = [
@@ -35,11 +36,13 @@ const GEOLIBRE_PROJECT_FILE_TYPES: BrowserFilePickerType[] = [
   },
 ];
 
-async function openProjectFileBrowser(): Promise<{
+export interface OpenedProjectFile {
   project: GeoLibreProject;
   path: string;
   text: string;
-} | null> {
+}
+
+async function openProjectFileBrowser(): Promise<OpenedProjectFile | null> {
   const pickerWindow = window as BrowserFilePickerWindow;
   if (pickerWindow.showOpenFilePicker) {
     try {
@@ -75,43 +78,6 @@ async function openProjectFileBrowser(): Promise<{
   };
 }
 
-async function saveProjectFileBrowser(
-  content: string,
-  defaultName?: string,
-): Promise<string | null> {
-  const fileName = browserSafeFileName(defaultName ?? "project.geolibre");
-  const pickerWindow = window as BrowserFilePickerWindow;
-
-  if (pickerWindow.showSaveFilePicker) {
-    try {
-      const handle = await pickerWindow.showSaveFilePicker({
-        suggestedName: fileName,
-        types: GEOLIBRE_PROJECT_FILE_TYPES,
-        excludeAcceptAllOption: false,
-      });
-      const writable = await handle.createWritable();
-      await writable.write(content);
-      await writable.close();
-      return handle.name || fileName;
-    } catch (error) {
-      if (isAbortError(error)) return null;
-      console.warn("Browser project save picker failed", error);
-    }
-  }
-
-  const blob = new Blob([content], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.style.display = "none";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-  return fileName;
-}
-
 /**
  * Pick a GeoLibre project and parse it.
  *
@@ -119,11 +85,7 @@ async function saveProjectFileBrowser(
  *   {@link saveStartupProjectSnapshot} copies verbatim rather than re-serializing
  *   the parsed form. Null if the picker was cancelled.
  */
-export async function openProjectFile(): Promise<{
-  project: GeoLibreProject;
-  path: string;
-  text: string;
-} | null> {
+export async function openProjectFile(): Promise<OpenedProjectFile | null> {
   if (!isTauri()) {
     return openProjectFileBrowser();
   }
@@ -288,6 +250,12 @@ export async function openRecentProjectFile(
   project: GeoLibreProject;
   path: string;
   text: string;
+  /**
+   * The original could not be read and this is the copy kept for it
+   * (GeoLibre#1948), which predates any change made to the file since.
+   * Callers tell the user so (GeoLibre#3216).
+   */
+  fromStoredCopy?: true;
 }> {
   if (isHttpUrl(path)) {
     const response = await fetch(path, {
@@ -354,7 +322,7 @@ export async function openRecentProjectFile(
         `Reopening the stored copy of "${path}"; the original could not be read.`,
         error,
       );
-      return { project: parseProject(snapshot), path, text: snapshot };
+      return { project: parseProject(snapshot), path, text: snapshot, fromStoredCopy: true };
     }
     if (isFileMissingError(error)) {
       throw new RecentProjectGoneError(`Project file no longer exists: ${path}`);
@@ -370,7 +338,12 @@ export async function saveProjectFile(
   defaultName?: string,
 ): Promise<string | null> {
   if (!isTauri()) {
-    return saveProjectFileBrowser(content, defaultName);
+    return saveTextFileBrowser(content, {
+      defaultName: defaultName ?? "project.geolibre",
+      browserTypes: GEOLIBRE_PROJECT_FILE_TYPES,
+      mimeType: "application/json",
+      pickerFailureWarning: "Browser project save picker failed",
+    });
   }
 
   const path = await save({
@@ -378,8 +351,9 @@ export async function saveProjectFile(
     defaultPath: defaultName ?? "project.geolibre",
   });
   if (!path) return null;
-  await writeTextFile(path, content);
-  return path;
+  const projectPath = ensureGeoLibreProjectExtension(path);
+  await writeTextFile(projectPath, content);
+  return projectPath;
 }
 
 /**

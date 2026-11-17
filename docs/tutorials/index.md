@@ -5,7 +5,7 @@ These tutorials walk through common GeoLibre workflows end to end. Each one is s
 ## Before you start
 
 - You can follow most tutorials in the **live viewer** at [web.geolibre.app](https://web.geolibre.app/), which is the browser build of GeoLibre. No installation required.
-- A few steps need the **desktop app**: opening and saving project files, reading local MBTiles and rasters, and the Python sidecar tools (raster processing and sidecar conversions). These are called out where they appear. See [Downloads](../downloads.md) to install. The Whitebox geoprocessing toolbox is not among them — its 1,000+ tools run in the browser on WebAssembly.
+- A few steps need the **desktop app**: reading local MBTiles and rasters, and the Python sidecar tools (raster tools without a browser engine, such as Contour). These are called out where they appear. See [Downloads](../downloads.md) to install. The Whitebox geoprocessing toolbox is not among them — its 1,000+ tools run in the browser on WebAssembly.
 - The sample dataset used in several tutorials is a public GeoParquet file of world countries: `https://data.source.coop/giswqs/opengeos/countries.parquet`.
 
 ## The tutorials
@@ -32,5 +32,10 @@ Work through them in order for a guided tour, or jump to the one that matches yo
 - [Mapping the 2026 Nepal Floods with Free High-Resolution Satellite Imagery](https://youtu.be/UDO1BCwOAAc)
 - [Building Cloud-Native GIS Workflows with GeoLibre](https://youtu.be/RgNoKsvZ5Hk)
 - [Image Georeferencing Using GeoLibre in the Browser](https://youtu.be/lbioujkDSG0)
+- [100 Interactive Maps from Open Data: Explore, Fork, and Build Your Own with GeoLibre](https://youtu.be/2r5OhvEa3AA)
 
 All of them, with chapters and summaries, are on [Video Tutorials](videos.md).
+
+## Workshops
+
+For a full day of lectures and hands-on exercises with real Nevada data, follow the [NGIS 2026 workshop](../workshops/ngis-2026/index.md): eight one-hour sections from a first map through cloud-hosted data, styling, spatial SQL and editing, analysis, 3D and time, sharing, and AI and automation.

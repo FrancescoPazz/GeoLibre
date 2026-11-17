@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./test";
 import { waitForMap } from "./helpers";
 
 // The 3D tools live under the Controls menu and stay reachable while the 2D

@@ -31,10 +31,11 @@ older versions.
 Release builds are produced for:
 
 - Linux x64: Debian package, RPM package, and AppImage
-- Windows x64: unsigned desktop binary
+- Windows x64: unsigned `.msi` and `-setup.exe` installers, a portable `.zip`, and the bare `.exe`
 - macOS Apple Silicon: Developer ID signed and notarized DMG and app bundle (v1.4.1+)
 - macOS Intel: Developer ID signed and notarized DMG and app bundle (v1.4.1+)
 - Android: signed APKs, one per ABI (`geolibre-android-arm64.apk` and friends)
+- Chrome extension: a packaged ZIP (`geolibre-chrome-<version>.zip`)
 
 The Windows GitHub Release build is unsigned and may require a platform-specific
 trust prompt; the [Microsoft Store](#windows-installation) build is signed and
@@ -72,9 +73,12 @@ anyway** to proceed.
 
 Prefer not to install? Download the `*-x64-portable.zip` asset from the latest
 [release](https://github.com/opengeos/GeoLibre/releases), unzip it anywhere
-(including a USB drive), and run `geolibre-desktop.exe`. No installer, admin
-rights, or registry changes are involved, and the build does not auto-update, so
-download a newer zip to upgrade.
+(including a USB drive), and run `geolibre-desktop.exe`. No installer or admin
+rights are involved. Each launch registers the app for the current user as the
+handler for `org.geolibre.desktop:` sign-in links (under
+`HKCU\Software\Classes`), its only registry change, so share-server sign-in can
+return to it from the browser. The build does not auto-update, so download a
+newer zip to upgrade.
 
 The portable build relies on the Microsoft Edge WebView2 Runtime, which is
 preinstalled on Windows 11 and current Windows 10. If the app does not start,
@@ -150,17 +154,18 @@ optional Python sidecar, Jupyter server, and martin tile server are all runtime
 downloads of executable code, so the Store build compiles them out rather than
 shipping them broken. Here is how the two macOS builds compare:
 
-| Feature                                                                                                                                                | Homebrew / DMG | Mac App Store                     |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- | --------------------------------- |
-| Whitebox toolbox (1,000+ WebAssembly tools)                                                                                                            | Yes            | Yes                               |
-| Processing → GeoLibre Toolbox → Vector, browser-engine Conversion, client raster tools                                                                 | Yes            | Yes                               |
-| SQL Workspace (DuckDB-WASM, PGlite/PostGIS, in-browser Apache Sedona on CereusDB)                                                                      | Yes            | Yes                               |
-| Python sidecar engines (GeoPandas vector, rasterio raster, GDAL conversion, SamGeo segmentation, the SedonaDB sidecar behind the Apache Sedona engine) | Yes            | No                                |
-| Add Data → PostgreSQL / PostGIS (martin tile server)                                                                                                   | Yes            | No                                |
-| Notebook panel on a local JupyterLab server                                                                                                            | Yes            | JupyterLite only                  |
-| Installing external plugins from a zip or the registry                                                                                                 | Yes            | Built-in and bundled plugins only |
-| Earth Engine sign-in                                                                                                                                   | Yes            | No                                |
-| In-app update checks                                                                                                                                   | Yes            | Updates come from the Store       |
+| Feature | Homebrew / DMG | Mac App Store |
+| --- | --- | --- |
+| Whitebox toolbox (1,000+ WebAssembly tools) | Yes | Yes |
+| Processing → GeoLibre Toolbox → Vector, browser-engine Conversion, client raster tools | Yes | Yes |
+| SQL Workspace (DuckDB-WASM, PGlite/PostGIS, in-browser Apache Sedona on CereusDB) | Yes | Yes |
+| Python sidecar engines (GeoPandas vector, rasterio raster, GDAL conversion, SamGeo segmentation, the SedonaDB sidecar behind the Apache Sedona engine) | Yes | No |
+| Add Data → PostgreSQL / PostGIS (martin tile server) | Yes | No |
+| Add Data → SQL Server, File Geodatabase (sidecar-backed) | Yes | No |
+| Notebook panel on a local JupyterLab server | Yes | JupyterLite only |
+| Installing external plugins from a zip or the registry | Yes | Built-in and bundled plugins only |
+| Earth Engine sign-in | Yes | No |
+| In-app update checks | Yes | Updates come from the Store |
 
 Everything client-side is unchanged: MapLibre and deck.gl rendering, Add Data for
 local and remote files, DuckDB-WASM vector reading, the Whitebox WASM toolbox,
@@ -303,7 +308,9 @@ Sideloaded builds do not update themselves, so download a newer APK to upgrade.
     (`adb uninstall org.geolibre.app`) before switching between them.
 
 Tools that need a local desktop process — the Raster, Conversion, and AI
-Segmentation toolboxes, and the PostgreSQL data source — are hidden on Android.
+Segmentation toolboxes, and the SQL Server data source — are hidden on Android.
+PostgreSQL/PostGIS layers load as read-only vector tiles rendered by the
+database, without the Martin tile server.
 The Whitebox geoprocessing toolbox runs on WebAssembly and stays available. See
 [Android](android.md) for the full list and for build instructions.
 

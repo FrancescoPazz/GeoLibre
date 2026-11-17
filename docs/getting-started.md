@@ -42,6 +42,32 @@ The desktop app adds local filesystem dialogs, local MBTiles, local raster file 
 
 On macOS, prefer the Homebrew or DMG build: the [Mac App Store](https://apps.apple.com/app/geolibre-desktop/id6796848769) build is sandboxed, so it drops the Python sidecar engines, Add Data → PostgreSQL/PostGIS via martin, the local Jupyter server, Earth Engine sign-in, and external plugin installs. See [what the Store build leaves out](downloads.md#what-the-store-build-leaves-out).
 
+#### Linux desktop troubleshooting
+
+The Linux app runs in WebKitGTK. At startup it picks the WebKitGTK renderer settings known to work for your WebKitGTK version and GPU, so most systems need no configuration:
+
+| Your system | What the app sets |
+| --- | --- |
+| WebKitGTK older than 2.48 | `WEBKIT_DISABLE_DMABUF_RENDERER=1` (the DMA-BUF renderer can leave the window blank on older graphics stacks) |
+| NVIDIA GPU, WebKitGTK 2.48 to 2.51 | `WEBKIT_DISABLE_DMABUF_RENDERER=1` (NVIDIA's buffer allocation fails, and there is no faster fallback yet) |
+| NVIDIA GPU, WebKitGTK 2.52 or newer | `WEBKIT_DISABLE_DMABUF_RENDERER=0` and `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` (a shared-memory fallback that avoids the blank window without the slow legacy renderer) |
+| Anything else | Nothing; WebKitGTK's default DMA-BUF renderer is used |
+| x86-64 CPU without AVX | `JSC_useWasmOSR=false` and `JSC_useBBQTierUpChecks=false` (WebAssembly tier-up crashes the renderer on these CPUs; WebAssembly-heavy work runs slower; see [CPUs without AVX](#linux-desktop-a-blank-window-on-a-cpu-without-avx)) |
+
+The app treats the GPU as NVIDIA when the boot display is driven by the `nvidia` driver, when `__NV_PRIME_RENDER_OFFLOAD` is set to anything but `0`, or when `__GLX_VENDOR_LIBRARY_NAME=nvidia`. It also sets `GTK_USE_PORTAL=1` so file dialogs go through the desktop portal.
+
+A value you set yourself always wins: the app only fills in variables that are not already in the environment. If the window is blank, the map flickers, or panning is slow, try these from a terminal:
+
+```bash
+# Blank window or flicker: use the legacy renderer (slower, most compatible)
+WEBKIT_DISABLE_DMABUF_RENDERER=1 geolibre-desktop
+
+# Slow pan/zoom on a system the app put on the legacy renderer: try the default renderer
+WEBKIT_DISABLE_DMABUF_RENDERER=0 geolibre-desktop
+```
+
+`geolibre-desktop` is the command the `.deb`, `.rpm`, and AUR packages install; for the AppImage, run its file path instead, and for Flatpak use `flatpak run --env=WEBKIT_DISABLE_DMABUF_RENDERER=1 app.geolibre.GeoLibre`. If one of these settings fixes your system but the default does not, please [open an issue](https://github.com/opengeos/GeoLibre/issues) with your distribution, GPU, driver, and WebKitGTK version. See also [the map is blank or renders incorrectly](user-guide/troubleshooting.md#the-map-is-blank-or-renders-incorrectly).
+
 ### In Jupyter
 
 The [`geolibre`](python.md) Python package embeds the full GeoLibre app in a Jupyter notebook and drives the map through an expanded leafmap-style API that syncs both ways, so UI edits read back from Python.
@@ -97,6 +123,7 @@ See [iOS](ios.md) for what runs on mobile and for build details.
 - [Mapping the 2026 Nepal Floods with Free High-Resolution Satellite Imagery](https://youtu.be/UDO1BCwOAAc)
 - [Building Cloud-Native GIS Workflows with GeoLibre](https://youtu.be/RgNoKsvZ5Hk)
 - [Image Georeferencing Using GeoLibre in the Browser](https://youtu.be/lbioujkDSG0)
+- [100 Interactive Maps from Open Data: Explore, Fork, and Build Your Own with GeoLibre](https://youtu.be/2r5OhvEa3AA)
 
 All of them, with chapters and summaries, are on [Video Tutorials](tutorials/videos.md).
 
@@ -118,7 +145,7 @@ cd GeoLibre
 npm install
 ```
 
-Bun users can run `bun install`. The root `trustedDependencies` list allows the known install scripts for `core-js`, `@google/genai`, and `protobufjs`.
+Bun users can run `bun install`. The root `trustedDependencies` list allows the known install scripts for `@google/genai`, `core-js`, `esbuild`, `protobufjs`, `sharp`, and `workerd`.
 
 ### Update
 
@@ -170,10 +197,13 @@ docker run --rm -p 8080:80 ghcr.io/opengeos/geolibre:latest
 
 #### Bundled conversion sidecar
 
-The image also bundles the Python sidecar (uvicorn) and reverse-proxies it at
-`/sidecar`, so the browser reaches it same-origin with no CORS or separate
-process to manage. `/conversion/status` is reachable at
-`http://localhost:8080/sidecar/conversion/status`.
+The image bundles the Python sidecar (uvicorn) and reverse-proxies it at
+`/sidecar` when the final deployment policy grants `processing:run` or
+`data:add` and `GEOLIBRE_DISABLE_SIDECAR` is not `1`. Otherwise uvicorn does
+not start and sidecar routes are denied. When available, the browser reaches it
+same-origin with no CORS:
+`http://localhost:8080/sidecar/conversion/status`. See the exact route grants
+in [Self-Hosting](self-hosting.md#container-policy-enforcement).
 
 The browser build does **not** need the sidecar for the **Conversion** tools or
 the **Whitebox** toolbox — both run client-side on DuckDB-WASM and
@@ -199,6 +229,26 @@ a caller reaching the image cannot aim them at hosts only the container can
 reach. Pass `-e GEOLIBRE_POSTGIS_HOSTS='db.internal:5432'` (or `*` to accept any
 connection string) to enable them. The desktop app is not affected: its sidecar
 is loopback-bound and started for a single user, so it defaults to unrestricted.
+
+The image does **not** ship with pyodbc or Microsoft ODBC Driver 18. To enable
+SQL Server / Azure SQL, build a derived image that installs the driver and the
+sidecar's `mssql` extra:
+
+```dockerfile
+FROM ghcr.io/opengeos/geolibre:latest
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends curl gpg \
+ && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+ && echo "deb [arch=amd64,arm64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/microsoft-prod.list \
+ && apt-get update \
+ && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc \
+ && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir "/opt/geolibre_server[mssql]"
+```
+
+Then allow only the database host at runtime, for example
+`-e GEOLIBRE_MSSQL_HOSTS='sql.internal:1433'`. Do not expose the SQL Server
+endpoints without an explicit allowlist.
 
 `freestiler` and `whitebox-workflows` publish no linux/arm64 wheels, so they are
 installed on **amd64 only**; on arm64 the sidecar reports those tools
@@ -439,21 +489,40 @@ Individual links can also opt out at runtime with `?welcome=0`. See
 
 #### Limiting what the deployment can do
 
-For a kiosk, an exhibit terminal, or a classroom instance, name the
-capabilities the interface may offer. Unset (the default) grants everything, so
-existing deployments are unchanged:
+For a kiosk, exhibit terminal, or classroom, configure the runtime policy
+capabilities rather than rebuilding the client:
 
 ```bash
-docker build \
-  --build-arg VITE_GEOLIBRE_CAPABILITIES="project:edit,data:add,processing:run,export:data" \
-  -t geolibre-classroom .
+docker run --rm -p 8080:80 \
+  -e GEOLIBRE_CAPABILITIES=project:edit,data:add,processing:run,export:data \
+  ghcr.io/opengeos/geolibre:latest
 ```
 
-That example drops plugin installs and Settings. `none` grants nothing at all.
-This removes the affordances — menus, command palette entries, shortcuts,
-drag-and-drop, embed commands — but does **not** restrict the server, so keep
-the protections above in place too. See
+Runtime policy enforcement needs image v3.3.0 or later; see
+[Deployment Policy](deployment-policy.md#docker). The legacy
+`VITE_GEOLIBRE_CAPABILITIES` build input is still honoured as a client fallback.
+`none` grants no capabilities. Client gates remove menus, command palette
+entries, shortcuts, drag-and-drop, and embed commands; Docker nginx enforces
+selected sidecar and AI routes only. It does not restrict desktop processing,
+browser WASM, separately exposed services, or plugin execution. Keep the
+server-side protections above in place. See
 [Deployment Capabilities](deployment-capabilities.md).
+
+#### Custom app name
+
+Replace "GeoLibre" at the start of the toolbar and in the browser tab title with
+your own name:
+
+```bash
+docker run --rm -p 8080:80 \
+  -e GEOLIBRE_APP_NAME="Acme Maps" \
+  ghcr.io/opengeos/geolibre:latest
+```
+
+The name is read at container startup, so a prebuilt image can be rebranded
+without a rebuild. Runs of whitespace collapse to one space and the name is
+capped at 60 characters. For a non-Docker web build, set
+`VITE_GEOLIBRE_APP_NAME` when running `npm run build` instead.
 
 #### Driving an embedded map from a host page
 
@@ -554,8 +623,9 @@ Production web callbacks require HTTPS and must end in
 `geolibre-desktop` registration to the same JSON array when desktop sign-in is
 required. The web app signs in through a popup to the server's consent page
 using this registration, so the `geolibre-web` callback URL must match the web
-app's own origin (including any base path). Desktop sign-in (the system
-browser flow) is still pending; desktop users paste a personal API token. See
+app's own origin (including any base path). The desktop app opens the consent
+page in the system browser and receives the callback through the OS protocol
+handler; a personal API token still works as a fallback. See
 the [server API OAuth contract](server-api.md#oauth-20-sign-in-authorization-code-s256-pkce)
 for the flow and lifetime settings.
 
@@ -779,17 +849,17 @@ Where to find the output:
 
 ### Build-time flags
 
-| Variable                          | Default       | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GEOLIBRE_PGLITE_CDN`             | `1` (CDN)     | Set `0` to bundle PGlite/PostGIS into the build (~22 MB) instead of loading from jsDelivr.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GEOLIBRE_CEREUS_CDN`             | `1` (CDN)     | Set `0` to bundle CereusDB WASM (~40 MB) instead of loading from jsDelivr.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GEOLIBRE_GDAL_CDN`               | `1` (CDN)     | Set `0` to disable GDAL export (the ~40 MB WASM/data are not bundled, just unavailable).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `GEOLIBRE_DUCKDB_WASM_CDN`        | `0` (bundled) | Set `1` to move DuckDB-WASM to jsDelivr (required for Cloudflare Pages' 25 MiB per-file limit).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `GEOLIBRE_NO_EXTERNAL_CDN`        | unset         | Set `1` to strip **all GeoLibre-controlled** external CDN references from the build. Forces all `*_CDN=0` flags (so PGlite, CereusDB and DuckDB-WASM are bundled rather than fetched) and disables features that embed CDN URLs (storymap HTML export, built-in detection models, ONNX WASM, 3D Tiles decoders, GDAL export). Pyodide is not hard-disabled: the flag drops only its default index URL, so point `VITE_PYODIDE_INDEX_URL` at an approved mirror to keep it working. Some third-party packages keep their own internal CDN URLs, which this flag cannot remove — see [architecture.md](architecture.md). Mutually exclusive with `npm run lite:build` (and so with Cloudflare Pages/Workers hosting), which needs `GEOLIBRE_DUCKDB_WASM_CDN=1` to stay under the 25 MiB per-file cap; the build rejects that combination outright. Intended for enterprise deployments that cannot reference untrusted CDNs. |
-| `GEOLIBRE_STORE_BUILD`            | unset         | Set `1` for Microsoft Store MSIX builds (removes in-app updater).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `GEOLIBRE_MAS_BUILD`              | unset         | Set `1` for Mac App Store builds (removes sidecar/server features).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `GEOLIBRE_EMBED`                  | unset         | Set `1` for the Jupyter embed wheel build.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `VITE_GEOLIBRE_GA_MEASUREMENT_ID` | unset         | Set a GA4 measurement ID (`G-…`) to load Google Analytics in the **web** build. Unset ships no analytics code at all, which is the default for every build; the desktop and Jupyter embed builds ignore it entirely. Used only by the hosted geolibre.app and web.geolibre.app deploys; see [Privacy Policy](privacy.md#website-analytics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `GEOLIBRE_PGLITE_CDN` | `1` (CDN) | Set `0` to bundle PGlite/PostGIS into the build (~22 MB) instead of loading from jsDelivr. |
+| `GEOLIBRE_CEREUS_CDN` | `1` (CDN) | Set `0` to bundle CereusDB WASM (~40 MB) instead of loading from jsDelivr. |
+| `GEOLIBRE_GDAL_CDN` | `1` (CDN) | Set `0` to disable GDAL export (the ~40 MB WASM/data are not bundled, just unavailable). |
+| `GEOLIBRE_DUCKDB_WASM_CDN` | `0` (bundled) | Set `1` to move DuckDB-WASM to jsDelivr (required for Cloudflare Pages' 25 MiB per-file limit). |
+| `GEOLIBRE_NO_EXTERNAL_CDN` | unset | Set `1` to strip **all GeoLibre-controlled** external CDN references from the build. Forces all `*_CDN=0` flags (so PGlite, CereusDB and DuckDB-WASM are bundled rather than fetched) and disables features that embed CDN URLs (storymap HTML export, built-in detection models, ONNX WASM, 3D Tiles decoders, GDAL export, the Mapbox renderer). Pyodide is not hard-disabled: the flag drops only its default index URL, so point `VITE_PYODIDE_INDEX_URL` at an approved mirror to keep it working. Some third-party packages keep their own internal CDN URLs, which this flag cannot remove — see [architecture.md](architecture.md). Mutually exclusive with `npm run lite:build` (and so with Cloudflare Pages/Workers hosting), which needs `GEOLIBRE_DUCKDB_WASM_CDN=1` to stay under the 25 MiB per-file cap; the build rejects that combination outright. Intended for enterprise deployments that cannot reference untrusted CDNs. |
+| `GEOLIBRE_STORE_BUILD` | unset | Set `1` for Microsoft Store MSIX builds (removes in-app updater). |
+| `GEOLIBRE_MAS_BUILD` | unset | Set `1` for Mac App Store builds (removes sidecar/server features). |
+| `GEOLIBRE_EMBED` | unset | Set `1` for the Jupyter embed wheel build. |
+| `VITE_GEOLIBRE_GA_MEASUREMENT_ID` | unset | Set a GA4 measurement ID (`G-…`) to load Google Analytics in the **web** build. Unset ships no analytics code at all, which is the default for every build; the desktop and Jupyter embed builds ignore it entirely. Used only by the hosted geolibre.app and web.geolibre.app deploys; see [Privacy Policy](privacy.md#website-analytics). |
 
 Example — build with no external CDN dependencies:
 
@@ -808,11 +878,13 @@ VITE_MAPILLARY_ACCESS_TOKEN=your_mapillary_access_token
 
 For Google Street View, enable the Maps Embed API for the key in Google Cloud. For Google Photorealistic 3D Tiles, enable the Map Tiles API. For local shell testing, `GOOGLE_MAPS_API_KEY` is also accepted by the desktop Vite build. For Mapillary, create an app in the Mapillary developer dashboard and use its client access token.
 
+You can also enter either key in the Street View panel's API key inputs and apply it (this affects Street View only; Google 3D Tiles still use their own per-layer key or the environment variable). A key applied there is saved (in the OS credential store on desktop, in browser storage on the web), survives closing the panel and restarting the app, and takes precedence over the matching environment variable. Clear the field and apply to remove it.
+
 Restart `npm run dev` or `npm run tauri:dev` after changing environment variables.
 
 ## Optional basemap credentials
 
-The **New map** dialog offers [Protomaps](https://protomaps.com) basemaps (Light, Dark, White, Grayscale, Black) when a Protomaps API key is configured. Without a key these options are hidden, and you can still use the OpenFreeMap basemaps or a custom style URL.
+The **New project** dialog offers [Protomaps](https://protomaps.com) basemaps (Light, Dark, White, Grayscale, Black) when a Protomaps API key is configured. Without a key these options are hidden, and you can still use the OpenFreeMap basemaps or a custom style URL.
 
 Use your own key — create one in the [Protomaps dashboard](https://protomaps.com). Set it one of two ways:
 
@@ -852,11 +924,13 @@ VITE_AMAZON_LOCATION_AWS_REGION=us-east-1                   # optional; omit to 
 The Basemaps control also carries **Protomaps** and **Stadia Maps** (including Stadia x Stamen) style basemaps. Both authenticate with your own key:
 
 ```env
-VITE_PROTOMAPS_API_KEY=your_protomaps_api_key   # same key as the New map dialog's Protomaps basemaps
+VITE_PROTOMAPS_API_KEY=your_protomaps_api_key   # same key as the New project dialog's Protomaps basemaps
 VITE_STADIA_API_KEY=your_stadia_api_key         # https://client.stadiamaps.com
 ```
 
 Protomaps reuses the key described in [Optional basemap credentials](#optional-basemap-credentials) above — set it once and both places pick it up. Until each key is set, the panel shows a "Get a … API key" prompt in place of the basemap rather than loading tiles.
+
+Any of these keys can instead be typed into the panel's **API keys** view (the key button in its header). A key entered there is saved (in the OS credential store on desktop, in browser storage on the web), survives closing the panel and restarting the app, and takes precedence over the matching environment variable. Clear the field to remove the saved key; a key set in the matching environment variable applies again the next time the panel opens.
 
 ## Basemaps in mainland China
 
@@ -864,7 +938,9 @@ GeoLibre's default basemaps (OpenFreeMap, Protomaps) are hosted outside mainland
 
 ### The Regional section (no key)
 
-**New project** and **Change basemap** both carry a collapsed **Regional → China (中国)** section with five keyless basemaps: 高德地图, 高德卫星, 高德混合 (Amap street, satellite, and satellite-with-labels) and 腾讯地图, 腾讯深色 (Tencent street and dark). Pick one and it applies like any other basemap. Nothing to configure.
+**New project** and **Change background** both carry a collapsed **Regional → China (中国)** section with five keyless basemaps: 高德地图, 高德卫星, 高德混合 (Amap street, satellite, and satellite-with-labels) and 腾讯地图, 腾讯深色 (Tencent street and dark). Pick one and it applies like any other basemap. Nothing to configure.
+
+When you open a project file, link or shared project that uses one of these basemaps, GeoLibre asks before loading tiles from mainland China and shows the default basemap until you choose **Load** or **Use default basemap**. Basemaps you pick yourself never ask. A self-hosted deployment can remove these basemaps entirely; see [Deployment Policy: Regional basemaps](deployment-policy.md#regional-basemaps).
 
 ### The Basemaps control (adds Tianditu)
 
@@ -894,7 +970,7 @@ Keys set via **Settings → Environment Variables**, or typed directly into the 
 
 ## Optional 3D globe credentials (Cesium Ion)
 
-The optional **Cesium 3D-globe renderer** can own the primary map or any pane in a mixed-engine split layout. It requires a [Cesium Ion](https://ion.cesium.com/) access token. The hosted web version bundles a demo token, so the globe works there out of the box, but the desktop and mobile apps need your own. The token enables Cesium World Terrain (relief on tilted views) plus Ion World Imagery as the fallback for a basemap that has no raster form. To get one, create a free Ion account, copy your default access token, and set it at build time:
+The optional **Cesium 3D-globe renderer** can own the primary map or any pane in a mixed-engine split layout. It works without a token, draping the project basemap as its imagery, but a [Cesium Ion](https://ion.cesium.com/) access token unlocks more. The hosted web version bundles a demo token; the desktop and mobile apps need your own. The token enables Cesium World Terrain (relief on tilted views) plus Ion World Imagery as the fallback for a basemap that has no raster form. To get one, create a free Ion account, copy your default access token, and set it at build time:
 
 ```env
 CESIUM_TOKEN=your_cesium_ion_access_token
@@ -1111,9 +1187,7 @@ extra is unavailable. See [Processing Tools](user-guide/processing.md) for what
 each engine does, and [AI Segmentation](user-guide/segmentation.md) for the
 separate `samgeo-api` model server.
 
-## Linux desktop troubleshooting
-
-### A blank window on a CPU without AVX
+## Linux desktop: a blank window on a CPU without AVX
 
 On x86-64 CPUs with no AVX (Intel Celeron and Pentium N-series, Atom, and
 anything older than Sandy Bridge), WebKitGTK can kill its own renderer as soon
@@ -1141,7 +1215,7 @@ The two options only work as a pair, so GeoLibre treats them as one decision.
 Turning either one back on is the opt-out and leaves both alone:
 
 ```bash
-JSC_useWasmOSR=true geolibre
+JSC_useWasmOSR=true geolibre-desktop
 ```
 
 Setting one of them to `false` yourself is not an opt-out: GeoLibre keeps your
@@ -1152,7 +1226,7 @@ Or, if a renderer crash persists, fall back to disabling the WebAssembly JIT
 entirely:
 
 ```bash
-JSC_useBBQJIT=false geolibre
+JSC_useBBQJIT=false geolibre-desktop
 ```
 
 The check is a runtime CPU feature test, not a model or release-date list, so

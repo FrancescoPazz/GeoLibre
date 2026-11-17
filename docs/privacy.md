@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: August 23, 2026_
+_Last updated: November 7, 2026_
 
 GeoLibre Desktop ("GeoLibre", "the app") is an open-source desktop GIS
 application developed by the OpenGeos community. This policy explains how the app
@@ -12,6 +12,9 @@ handle yours.
 GeoLibre runs locally on your device. It does not require an account, and the
 app itself does not collect analytics, telemetry, or usage data. Your geospatial
 data and projects stay on your device unless you choose to share or export them.
+If you install plugins from the plugin registry, the registry counts their use
+anonymously from the requests the app already makes; see
+[Plugins from the plugin registry](#plugins-from-the-plugin-registry) below.
 
 Our websites are separate from the app: geolibre.app and web.geolibre.app measure
 page visits with Google Analytics, as described under
@@ -27,6 +30,31 @@ computer. GeoLibre does not upload them to the developer or to any server. An
 optional helper process (a Python component running on your own machine at
 127.0.0.1) performs some geoprocessing entirely on-device.
 
+## Requests the app makes on its own
+
+A few requests happen without you choosing a service. None of them uploads your
+files or projects, but like any request they reveal your IP address to the host:
+
+- **Default basemap**: a new map loads the OpenFreeMap basemap
+  (tiles.openfreemap.org) for the current view. The tiles requested reveal the
+  area you are looking at, which OpenFreeMap can associate with your IP address.
+- **Plugin registry**: each session downloads the plugin registry and its
+  blocklist from plugins.geolibre.app (the registry only when plugin
+  installation is allowed, which it is by default);
+  see [Plugins from the plugin registry](#plugins-from-the-plugin-registry).
+- **Update check (desktop only)**: at startup, normally at most once every 6 hours, the
+  desktop app asks GitHub (api.github.com) for the latest GeoLibre release. Turn
+  it off in Settings → Updates. The Microsoft Store build does not check.
+- **DuckDB Spatial extension**: the first time a local vector file needs DuckDB
+  to read it (for example a Shapefile or GeoPackage), the extension is
+  downloaded from DuckDB's extension repository (extensions.duckdb.org) and
+  then cached. The file itself is not sent.
+
+The hosts the app itself is built to contact, including which builds contact
+them, are listed on [Network Endpoints](network-endpoints.md). That list does
+not cover URLs you add, the data hosts a project's layers use, or hosts that
+external plugins contact.
+
 ## Data sent to third-party services (optional features)
 
 When you use certain optional features, GeoLibre sends requests directly to the
@@ -39,7 +67,9 @@ the request you make, and are governed by their own privacy policies:
   the configured geocoding provider.
 - **AI assistant**: if you use it, the prompts you enter, together with metadata
   about the layers currently loaded in your project (layer names and attribute
-  field names), are sent to the configured AI/LLM provider.
+  field names), are sent to the configured AI/LLM provider. Signing in with
+  ChatGPT (desktop) contacts OpenAI's sign-in service in your browser and on
+  this computer; the sign-in's refresh token is kept in the system keychain.
 - **Cloud data catalogs**: if you connect to services such as the Microsoft
   Planetary Computer or Google Earth Engine, your queries are sent to them.
 - **Real-time collaboration**: if you join a shared session, your project data
@@ -47,9 +77,48 @@ the request you make, and are governed by their own privacy policies:
   server operated by the OpenGeos project (currently hosted on Cloudflare) and
   shared with the other participants. The relay holds the latest project snapshot
   so that later joiners can load the session, and discards it when the session ends.
+- **Project sharing**: if you use Project → Share, the project file is uploaded
+  to share.geolibre.app, operated by the OpenGeos project. Vector layers added
+  from local files are embedded in the uploaded file; other local files are not
+  uploaded.
 
 GeoLibre does not control these third-party services; please review their privacy
 policies for how they handle data.
+
+For the hosts the app itself is built to contact, which of them are contacted
+by default, and which go through a GeoLibre relay, see
+[Network Endpoints](network-endpoints.md). It does not cover URLs you add,
+project data hosts, or external plugins.
+
+## Plugins from the plugin registry
+
+Settings → Manage Plugins lists plugins from the GeoLibre plugin registry at
+<https://plugins.geolibre.app>, operated by the OpenGeos project (currently
+hosted on GitHub Pages and Cloudflare). Each time GeoLibre starts it downloads
+the registry (unless the deployment disables plugin installation), the
+registry's blocklist (of plugins pulled for safety), and the files of the
+plugins you installed from it; opening that dialog downloads the registry
+again. Like any web server, the registry sees your IP address and which files
+you request.
+
+The registry uses those requests to show how often each plugin is used, as
+public counts on its plugin catalog. It records no more than this:
+
+- a count of launches per plugin per day;
+- for counting distinct weekly users, a hash of the plugin and your IP address
+  (for IPv6, its /64 network), keyed with a secret that changes every week.
+  The hash can't be turned back into an IP without that secret, can't be
+  matched across weeks or plugins, and is deleted when the week ends; only
+  the weekly total is kept.
+
+No IP address, account, or other information about you or your projects is
+stored. The app sends nothing extra for this: the counts come only from the
+plugin downloads it already makes. A deployment that sets its own plugin
+registry (`plugins.registryUrl` in `deployment.json`) contacts
+plugins.geolibre.app only for plugin files its registry points to there; those
+downloads are counted like any other, so a deployment that wants none should
+host the plugin files itself. Details:
+<https://plugins.geolibre.app/registry/#usage-statistics>.
 
 ## Website analytics
 

@@ -1,4 +1,5 @@
-import type { Cartographic, TerrainProvider } from "@cesium/engine";
+import type { Cartographic } from "@cesium/core";
+import type { TerrainProvider } from "@cesium/engine";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { LngLatAlt } from "./line-of-sight-geometry";
 

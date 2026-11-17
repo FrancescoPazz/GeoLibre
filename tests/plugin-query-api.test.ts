@@ -5,6 +5,8 @@ import { SKETCHES_SOURCE_KIND } from "@geolibre/plugins/geo-editor-geometry";
 import type { GeoLibreSelection } from "@geolibre/plugins";
 import { createPluginLayerGroupActions } from "../apps/geolibre-desktop/src/lib/plugin-layer-groups";
 import { createPluginLayerQueries } from "../apps/geolibre-desktop/src/lib/plugin-layer-queries";
+import { createPluginLayerVisibilityActions } from "../apps/geolibre-desktop/src/lib/plugin-layer-visibility";
+import { NULL_GEOMETRY } from "./helpers/null-geometry";
 
 // These exercise `createPluginLayerQueries`, which `createAppAPI` spreads into
 // the object it hands plugins, rather than reaching through `createAppAPI`
@@ -24,8 +26,8 @@ describe("external plugin query API", () => {
     const layerId = store.addGeoJsonLayer("Catchments", {
       type: "FeatureCollection",
       features: [
-        { type: "Feature", id: "A", properties: { NAME: "A" }, geometry: null },
-        { type: "Feature", id: "B", properties: { NAME: "B" }, geometry: null },
+        { type: "Feature", id: "A", properties: { NAME: "A" }, geometry: NULL_GEOMETRY },
+        { type: "Feature", id: "B", properties: { NAME: "B" }, geometry: NULL_GEOMETRY },
       ],
     });
     store.selectLayer(layerId);
@@ -152,8 +154,8 @@ describe("external plugin query API", () => {
     const layerId = store.addGeoJsonLayer("Unkeyed", {
       type: "FeatureCollection",
       features: [
-        { type: "Feature", properties: { NAME: "First" }, geometry: null },
-        { type: "Feature", properties: { NAME: "Second" }, geometry: null },
+        { type: "Feature", properties: { NAME: "First" }, geometry: NULL_GEOMETRY },
+        { type: "Feature", properties: { NAME: "Second" }, geometry: NULL_GEOMETRY },
       ],
     });
     store.selectLayer(layerId);
@@ -171,7 +173,7 @@ describe("external plugin query API", () => {
     const store = useAppStore.getState();
     const layerId = store.addGeoJsonLayer("Catchments", {
       type: "FeatureCollection",
-      features: [{ type: "Feature", id: "A", properties: {}, geometry: null }],
+      features: [{ type: "Feature", id: "A", properties: {}, geometry: NULL_GEOMETRY }],
     });
     store.selectLayer(layerId);
 
@@ -184,7 +186,7 @@ describe("external plugin query API", () => {
     const store = useAppStore.getState();
     store.addGeoJsonLayer("Catchments", {
       type: "FeatureCollection",
-      features: [{ type: "Feature", id: "ordinary", properties: {}, geometry: null }],
+      features: [{ type: "Feature", id: "ordinary", properties: {}, geometry: NULL_GEOMETRY }],
     });
     const sketchLayerId = store.addGeoJsonLayer("Sketches", {
       type: "FeatureCollection",
@@ -283,7 +285,7 @@ describe("external plugin layer-group API", () => {
     const store = useAppStore.getState();
     const layerId = store.addGeoJsonLayer("Catchments", {
       type: "FeatureCollection",
-      features: [{ type: "Feature", id: "A", properties: {}, geometry: null }],
+      features: [{ type: "Feature", id: "A", properties: {}, geometry: NULL_GEOMETRY }],
     });
     const app = { ...createPluginLayerGroupActions(), ...createPluginLayerQueries() };
     const groupId = app.addLayerGroup("Basins");
@@ -296,6 +298,96 @@ describe("external plugin layer-group API", () => {
     assert.deepEqual(
       app.listLayers().map((layer) => layer.id),
       [layerId],
+    );
+  });
+
+  it("reuses the restored folder when a plugin rebuilds it on reopen (#3473)", () => {
+    const store = useAppStore.getState();
+    const collection = { type: "FeatureCollection" as const, features: [] };
+    const gauges = store.addGeoJsonLayer("Gauges", collection);
+    const hexes = store.addGeoJsonLayer("Hexes", collection);
+    // The saved project restores the plugin's folder with its layers in it.
+    const restored = store.addLayerGroup("US Live Flood Gauges", [gauges, hexes]);
+
+    // The reactivated plugin asks for its folder again.
+    const app = { ...createPluginLayerGroupActions(), ...createPluginLayerQueries() };
+    const groupId = app.addLayerGroup("US Live Flood Gauges", [gauges, hexes]);
+
+    assert.equal(groupId, restored);
+    assert.deepEqual(
+      app.listLayerGroups().map((group) => group.name),
+      ["US Live Flood Gauges"],
+    );
+    assert.deepEqual(
+      useAppStore.getState().layers.map((layer) => layer.groupId),
+      [restored, restored],
+    );
+  });
+
+  it("reuses an empty namesake folder for the plugin's layers", () => {
+    const layerId = useAppStore
+      .getState()
+      .addGeoJsonLayer("Gauges", { type: "FeatureCollection", features: [] });
+    const empty = useAppStore.getState().addLayerGroup("US Live Flood Gauges");
+
+    const app = { ...createPluginLayerGroupActions(), ...createPluginLayerQueries() };
+    assert.equal(app.addLayerGroup("US Live Flood Gauges", [layerId]), empty);
+    assert.equal(useAppStore.getState().layers[0]?.groupId, empty);
+    assert.equal(app.listLayerGroups().length, 1);
+  });
+
+  it("still creates a new folder when the namesake holds other layers", () => {
+    const store = useAppStore.getState();
+    const collection = { type: "FeatureCollection" as const, features: [] };
+    const mine = store.addGeoJsonLayer("Mine", collection);
+    const theirs = store.addGeoJsonLayer("Theirs", collection);
+    const existing = store.addLayerGroup("Results", [theirs]);
+
+    const app = { ...createPluginLayerGroupActions(), ...createPluginLayerQueries() };
+    const groupId = app.addLayerGroup("Results", [mine]);
+
+    assert.notEqual(groupId, existing);
+    assert.equal(app.listLayerGroups().length, 2);
+    // A call without layers keeps creating a group, as before.
+    assert.notEqual(app.addLayerGroup("Results"), groupId);
+    assert.equal(app.listLayerGroups().length, 3);
+  });
+});
+
+describe("external plugin layer-visibility API", () => {
+  beforeEach(() => {
+    useAppStore.getState().newProject({ name: "Plugin visibility API" });
+  });
+
+  it("hides and shows a layer, as the Layers panel's eye does", () => {
+    const layerId = useAppStore.getState().addGeoJsonLayer("Change map", {
+      type: "FeatureCollection",
+      features: [{ type: "Feature", id: "A", properties: {}, geometry: NULL_GEOMETRY }],
+    });
+    const app = { ...createPluginLayerVisibilityActions(), ...createPluginLayerQueries() };
+
+    app.setLayerVisibility(layerId, false);
+    assert.equal(app.listLayers()[0]?.visible, false);
+    app.setLayerVisibility(layerId, true);
+    assert.equal(app.listLayers()[0]?.visible, true);
+  });
+
+  it("rejects a visibility that is not a boolean and leaves the layer as it was", () => {
+    const layerId = useAppStore.getState().addGeoJsonLayer("Change map", {
+      type: "FeatureCollection",
+      features: [{ type: "Feature", id: "A", properties: {}, geometry: NULL_GEOMETRY }],
+    });
+    const app = { ...createPluginLayerVisibilityActions(), ...createPluginLayerQueries() };
+    // An untyped JavaScript plugin can pass anything; a truthy string must not reach the store.
+    assert.throws(() => app.setLayerVisibility(layerId, "false" as unknown as boolean), TypeError);
+    assert.equal(app.listLayers()[0]?.visible, true);
+  });
+
+  it("throws for an unknown layer id", () => {
+    const app = createPluginLayerVisibilityActions();
+    assert.throws(
+      () => app.setLayerVisibility("missing-layer", false),
+      /No layer with id "missing-layer"/,
     );
   });
 });

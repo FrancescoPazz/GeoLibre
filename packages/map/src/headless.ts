@@ -89,14 +89,16 @@ export {
   registerPMTilesArchive,
   unregisterPMTilesArchive,
   ensureRemotePMTilesArchive,
-} from "./layer-sync";
+} from "./pmtiles-archive";
 export { readRemotePMTilesInfo, readPMTilesArchiveInfo } from "./pmtiles-layer";
 // Style engine outputs (standard MapLibre style-spec objects).
 export {
   fillPaint,
+  fillOutlineDrawn,
   linePaint,
   circlePaint,
   heatmapPaint,
+  heatmapWeightMax,
   clusterCirclePaint,
   fillExtrusionPaint,
   rasterPaint,
@@ -170,3 +172,8 @@ export {
   type FeatureSelectionShape,
 } from "./feature-selection";
 export { isPlaceholderLayer, placeholderMessage } from "./placeholders";
+export { identifyStyleLayerIds } from "./identify-layer-ids";
+export { createIdentifyPopupElement, type IdentifyPopupOptions } from "./feature-popup";
+export { createBlankMapStyle, resolveMapStyle } from "./basemap-style";
+export { classifyLayer, layerKindSupport } from "./layer-kind";
+export { MAPLIBRE_SUPPORTED_LAYER_KINDS } from "./maplibre-layer-kinds";

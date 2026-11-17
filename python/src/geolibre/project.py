@@ -8,16 +8,20 @@ a project produced entirely from Python.
 
 from __future__ import annotations
 
+import base64
 import copy
 import ipaddress
 import json
 import math
 import re
 import socket
+import time
 import uuid
 import warnings
+import zlib
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.error import URLError
 from urllib.parse import quote, unquote_plus, urlsplit
 from urllib.request import HTTPRedirectHandler, build_opener
@@ -76,6 +80,11 @@ _CREDENTIAL_URL_PARAMS = _CREDENTIAL_FIELD_NAMES | {
     for name in ("key", "sig", "se", "sp", "sv", "sr", "st", "skoid")
 }
 _MAX_REDACT_DEPTH = 12
+# A header value that only names an environment variable (`Bearer ${TOKEN}`)
+# carries no secret and survives redaction. Mirrors `isHeaderReferenceOnly` in
+# packages/core/src/header-references.ts.
+_HEADER_REFERENCE_ONLY = re.compile(r"(?:[A-Za-z][A-Za-z0-9._-]*\s+)?\$\{[A-Za-z_][A-Za-z0-9_]*\}")
+_HEADER_FIELD_NAMES = {"requestheaders", "headers"}
 
 
 def _redact_url(value: str) -> str:
@@ -123,11 +132,22 @@ def _redact_config(value: Any, depth: int = 0) -> Any:
         return copy.deepcopy(value)
     if value.get("type") in {"FeatureCollection", "Feature", "GeometryCollection"}:
         return copy.deepcopy(value)
-    return {
-        key: _redact_config(nested, depth + 1)
-        for key, nested in value.items()
-        if _normalize_credential_name(key) not in _CREDENTIAL_FIELD_NAMES
-    }
+    result: dict[str, Any] = {}
+    for key, nested in value.items():
+        name = _normalize_credential_name(key)
+        if name in _HEADER_FIELD_NAMES and isinstance(nested, dict):
+            kept = {
+                header: header_value
+                for header, header_value in nested.items()
+                if isinstance(header_value, str)
+                and _HEADER_REFERENCE_ONLY.fullmatch(header_value.strip())
+            }
+            if kept:
+                result[key] = kept
+            continue
+        if name not in _CREDENTIAL_FIELD_NAMES:
+            result[key] = _redact_config(nested, depth + 1)
+    return result
 
 
 def _publishable_plugin_settings(settings: dict[str, Any]) -> dict[str, Any]:
@@ -211,7 +231,14 @@ def redact_credentials(project: dict[str, Any]) -> dict[str, Any]:
         safe["basemapStyleUrl"] = _redact_url(safe["basemapStyleUrl"])
     preferences = safe.get("preferences")
     if isinstance(preferences, dict):
-        preferences["environmentVariables"] = []
+        # Only rows explicitly marked non-secret travel (same rule as the app's
+        # redactProjectCredentials); everything else is a credential.
+        variables = preferences.get("environmentVariables")
+        preferences["environmentVariables"] = (
+            [v for v in variables if isinstance(v, dict) and v.get("secret") is False]
+            if isinstance(variables, list)
+            else []
+        )
         geocoding = preferences.get("geocoding")
         if isinstance(geocoding, dict):
             geocoding["apiKeys"] = {}
@@ -304,6 +331,9 @@ DEFAULT_LAYER_STYLE: dict[str, Any] = {
     "fillColor": "#3b82f6",
     "strokeColor": "#1e40af",
     "strokeWidth": 2,
+    "strokeOpacity": 1,
+    "strokeDash": [],
+    "strokeBlur": 0,
     "fillOpacity": 0.6,
     "circleRadius": 6,
     "textColor": "#111827",
@@ -316,9 +346,13 @@ DEFAULT_LAYER_STYLE: dict[str, Any] = {
     "extrusionHeightProperty": "height",
     "extrusionHeightScale": 1,
     "extrusionBase": 0,
+    "extrusionBaseProperty": "",
+    "extrusionBaseScale": 1,
+    "extrusionFloorHeight": 0,
     "extrusionAdvancedStyleEnabled": False,
     "extrusionColorExpression": "",
     "extrusionHeightExpression": "",
+    "extrusionBaseExpression": "",
     "vectorStyleMode": "single",
     "vectorStyleProperty": "",
     "vectorStyleClassCount": 5,
@@ -969,6 +1003,248 @@ def normalize_popup(
     return apply_tooltip(config, tooltip if tooltip is not None else inline_tooltip)
 
 
+# ---------------------------------------------------------------------------
+# Descriptive (catalog) layer metadata -- mirrors packages/core's
+# layer-descriptive-metadata.ts. Stored on the layer as `descriptiveMetadata`,
+# separate from the internal `metadata` record the app's renderers key off.
+# ---------------------------------------------------------------------------
+
+_METADATA_TEXT_KEYS = ("title", "abstract", "license", "attribution", "lineage")
+_METADATA_LINK_PROTOCOLS = frozenset({"http", "https", "ftp", "s3", "gs", "mailto"})
+_METADATA_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+_METADATA_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_METADATA_DATETIME_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?"
+    r"(Z|[+-]\d{2}:?\d{2})?$",
+    re.IGNORECASE,
+)
+
+
+def _clean_text(value: Any) -> str | None:
+    """Trim a value to a non-empty string.
+
+    Args:
+        value: Any value.
+
+    Returns:
+        The trimmed string, or ``None`` for a non-string or blank value.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def is_valid_metadata_date(value: str) -> bool:
+    """Whether a string is an ISO 8601 date or date-time naming a real instant.
+
+    Accepts ``YYYY-MM-DD`` and ``YYYY-MM-DDTHH:MM[:SS[.fff]][Z|+HH:MM]``, the
+    same forms the app's Metadata dialog accepts.
+
+    Args:
+        value: The candidate date.
+
+    Returns:
+        ``True`` when the value is a valid date or date-time.
+    """
+    import datetime as _dt
+
+    text = value.strip()
+    match = _METADATA_DATE_RE.match(text) or _METADATA_DATETIME_RE.match(text)
+    if not match:
+        return False
+    try:
+        _dt.date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return False
+    if match.re is _METADATA_DATETIME_RE:
+        hours, minutes = int(match.group(4)), int(match.group(5))
+        seconds = int(match.group(6)) if match.group(6) else 0
+        return hours < 24 and minutes < 60 and seconds < 60
+    return True
+
+
+def _metadata_instant(value: str, bound: str) -> Any:
+    """Resolve a validated metadata date to a UTC instant.
+
+    A date-only bound covers its whole day (a start is its first second, an end
+    its last), and a date-time without an offset is read as UTC -- the rules
+    the app's STAC export uses.
+
+    Args:
+        value: A date accepted by :func:`is_valid_metadata_date`.
+        bound: ``"start"`` or ``"end"``.
+
+    Returns:
+        A timezone-aware :class:`datetime.datetime`.
+    """
+    import datetime as _dt
+
+    text = value.strip()
+    if _METADATA_DATE_RE.match(text):
+        text = f"{text}T{'00:00:00' if bound == 'start' else '23:59:59'}+00:00"
+    parsed = _dt.datetime.fromisoformat(text.upper().replace(" ", "T"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=_dt.timezone.utc)
+
+
+def _is_valid_metadata_url(value: str) -> bool:
+    """Whether a string is an absolute URL with a scheme a metadata link may use.
+
+    Args:
+        value: The candidate URL.
+
+    Returns:
+        ``True`` for an http(s), ftp, s3, gs or mailto URL.
+    """
+    parts = urlsplit(value.strip())
+    if parts.scheme.lower() not in _METADATA_LINK_PROTOCOLS:
+        return False
+    return bool(parts.netloc or parts.scheme.lower() == "mailto" and parts.path)
+
+
+def normalize_layer_metadata(value: Any) -> dict[str, Any] | None:
+    """Clean a raw descriptive-metadata mapping the way the app does on load.
+
+    Keeps only string fields, trims them, drops blank fields, blank or
+    duplicate (case-insensitive) keywords, and links without an ``href``. Values
+    are not validated -- see :func:`layer_metadata` for the checked builder.
+
+    Args:
+        value: A ``descriptiveMetadata`` mapping (camelCase keys), or anything.
+
+    Returns:
+        The cleaned mapping, or ``None`` when nothing is left, so an empty block
+        is never written to a project.
+    """
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, Any] = {}
+    for key in _METADATA_TEXT_KEYS:
+        text = _clean_text(value.get(key))
+        if text:
+            out[key] = text
+    keywords: list[str] = []
+    seen: set[str] = set()
+    raw_keywords = value.get("keywords")
+    for entry in raw_keywords if isinstance(raw_keywords, list) else []:
+        keyword = _clean_text(entry)
+        if keyword and keyword.lower() not in seen:
+            seen.add(keyword.lower())
+            keywords.append(keyword)
+    if keywords:
+        out["keywords"] = keywords
+    contact = value.get("contact")
+    if isinstance(contact, dict):
+        cleaned = {
+            key: text
+            for key in ("name", "email", "organization")
+            if (text := _clean_text(contact.get(key)))
+        }
+        if cleaned:
+            out["contact"] = cleaned
+    extent = value.get("temporalExtent")
+    if isinstance(extent, dict):
+        cleaned = {key: text for key in ("start", "end") if (text := _clean_text(extent.get(key)))}
+        if cleaned:
+            out["temporalExtent"] = cleaned
+    links: list[dict[str, str]] = []
+    raw_links = value.get("links")
+    for entry in raw_links if isinstance(raw_links, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        href = _clean_text(entry.get("href"))
+        if not href:
+            continue
+        link = {"href": href}
+        for key in ("rel", "title"):
+            text = _clean_text(entry.get(key))
+            if text:
+                link[key] = text
+        links.append(link)
+    if links:
+        out["links"] = links
+    return out or None
+
+
+def layer_metadata(
+    *,
+    title: str | None = None,
+    abstract: str | None = None,
+    keywords: str | list[str] | None = None,
+    license: str | None = None,
+    attribution: str | None = None,
+    contact: dict[str, str] | None = None,
+    lineage: str | None = None,
+    temporal_extent: tuple[str | None, str | None] | dict[str, str] | None = None,
+    links: list[str | dict[str, str]] | None = None,
+) -> dict[str, Any] | None:
+    """Build a layer's ``descriptiveMetadata`` block, validated like the app.
+
+    This is the catalog description shown and edited in the app's layer
+    Metadata dialog and exported as a STAC Item.
+
+    Args:
+        title: Human-readable title.
+        abstract: Free-text summary of the data.
+        keywords: Keywords, as a list or one comma-separated string.
+        license: SPDX license identifier (e.g. ``"CC-BY-4.0"``) or free text.
+        attribution: Credit line for the data's producers.
+        contact: Mapping with any of ``name``, ``email``, ``organization``.
+        lineage: How the data was produced (sources, processing steps).
+        temporal_extent: ``(start, end)`` ISO 8601 dates or date-times (either
+            may be ``None``), or a mapping with ``start``/``end``.
+        links: URLs, or mappings with ``href`` plus optional ``rel`` and
+            ``title``.
+
+    Returns:
+        The cleaned block, or ``None`` when every field is blank.
+
+    Raises:
+        ValueError: If the contact email, a temporal-extent date, or a link URL
+            is malformed, or the extent ends before it starts.
+    """
+    if isinstance(keywords, str):
+        keywords = keywords.split(",")
+    if isinstance(temporal_extent, (tuple, list)):
+        if len(temporal_extent) != 2:
+            raise ValueError("temporal_extent must be a (start, end) pair")
+        temporal_extent = {"start": temporal_extent[0], "end": temporal_extent[1]}
+    link_entries = [{"href": entry} if isinstance(entry, str) else entry for entry in (links or [])]
+    raw = {
+        "title": title,
+        "abstract": abstract,
+        "keywords": list(keywords) if keywords is not None else None,
+        "license": license,
+        "attribution": attribution,
+        "contact": contact,
+        "lineage": lineage,
+        "temporalExtent": temporal_extent,
+        "links": link_entries,
+    }
+    metadata = normalize_layer_metadata(raw)
+    if metadata is None:
+        return None
+    email = metadata.get("contact", {}).get("email")
+    if email and not _METADATA_EMAIL_RE.match(email):
+        raise ValueError(f"contact email is not a valid address: {email!r}")
+    extent = metadata.get("temporalExtent", {})
+    for key in ("start", "end"):
+        if key in extent and not is_valid_metadata_date(extent[key]):
+            raise ValueError(
+                f"temporal extent {key} must be an ISO 8601 date or date-time: {extent[key]!r}"
+            )
+    if "start" in extent and "end" in extent:
+        if _metadata_instant(extent["start"], "start") > _metadata_instant(extent["end"], "end"):
+            raise ValueError("temporal extent end must not be before its start")
+    for link in metadata.get("links", []):
+        if not _is_valid_metadata_url(link["href"]):
+            raise ValueError(
+                "link href must be an absolute http(s), ftp, s3, gs or mailto URL: "
+                f"{link['href']!r}"
+            )
+    return metadata
+
+
 def marker_style(
     *,
     color: str | None = None,
@@ -996,7 +1272,8 @@ def marker_style(
         stroke_width: Outline width in pixels.
         shape: One of :data:`MARKER_SHAPES`. Switches to sprite rendering.
         size: Sprite size in pixels. Switches to sprite rendering.
-        icon: Raw SVG markup (or a data URL) for a ``"custom"`` sprite.
+        icon: Raw SVG markup, or a data/https URL to an SVG, PNG, JPEG, or
+            GIF image, for a ``"custom"`` sprite. Only SVG takes ``color``.
             Switches to sprite rendering and implies ``shape="custom"``.
 
     Returns:
@@ -1191,6 +1468,238 @@ def tile_layer(
     return layer
 
 
+PLANETARY_COMPUTER_SOURCE_KIND = "planetary-computer-raster"
+
+# A band of one asset is spelled `<asset>_b<N>` in a band-math expression. An
+# expression without one refers to whole assets (`(B08-B04)/(B08+B04)`), which
+# the Planetary Computer Data API only evaluates with `asset_as_band` set.
+_ASSET_BAND_REFERENCE = re.compile(r"_b\d+\b")
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _planetary_computer_datetime(value: str | tuple[str, str] | list[str]) -> str:
+    """Normalize a date or date range to the RFC 3339 form a STAC search takes.
+
+    Args:
+        value: A single date/datetime, a ``"start/end"`` range, or a
+            ``(start, end)`` pair. A date-only bound is widened to the whole
+            day (start of day for the first bound, end of day for the last).
+            ``".."`` leaves a bound open.
+
+    Returns:
+        The datetime, or ``start/end`` range, with full timestamps.
+
+    Raises:
+        ValueError: If the value is empty or has more than two bounds.
+    """
+    if isinstance(value, (tuple, list)):
+        parts = [str(part) for part in value]
+    else:
+        parts = str(value).split("/")
+    parts = [part.strip() for part in parts]
+    if not 1 <= len(parts) <= 2 or not all(parts):
+        raise ValueError("datetime must be a date, a 'start/end' range, or a (start, end) pair")
+
+    def bound(text: str, end: bool) -> str:
+        if text == ".." or "T" in text.upper():
+            return text
+        # A partial date ("2024-06") would be widened into a timestamp the STAC
+        # search rejects, and only when the app opens the project.
+        if not _DATE_ONLY.fullmatch(text):
+            raise ValueError(
+                f"datetime bound {text!r} must be a YYYY-MM-DD date, an RFC 3339 datetime, or '..'"
+            )
+        return f"{text}T23:59:59Z" if end else f"{text}T00:00:00Z"
+
+    if len(parts) == 1:
+        if parts[0] == "..":
+            raise ValueError("datetime cannot be an open bound on its own")
+        # A date-only value means that whole day.
+        if "T" not in parts[0].upper():
+            return f"{bound(parts[0], False)}/{bound(parts[0], True)}"
+        return parts[0]
+    return f"{bound(parts[0], False)}/{bound(parts[1], True)}"
+
+
+def planetary_computer_layer(
+    collection: str,
+    item: str | None = None,
+    *,
+    name: str | None = None,
+    datetime: str | tuple[str, str] | list[str] | None = None,
+    bbox: list[float] | tuple[float, ...] | None = None,
+    preset: str | None = None,
+    assets: list[str] | None = None,
+    expression: str | None = None,
+    rescale: tuple[float, float] | list[float] | None = None,
+    colormap: str | None = None,
+    max_cloud_cover: float | None = None,
+) -> dict[str, Any]:
+    """Build a Microsoft Planetary Computer raster layer.
+
+    With ``item`` the layer draws that one STAC item. Without it the layer is a
+    mosaic: every item of the collection matching ``datetime`` and
+    ``max_cloud_cover``, composited into one seamless layer.
+
+    The layer holds no tile URL. It carries the collection, the item id or the
+    mosaic's search, and the render options, in the shape the app's Planetary
+    Computer panel saves (see
+    packages/plugins/src/plugins/maplibre-planetary-computer.ts), so opening
+    the project makes the panel rebuild it: the layer is listed in the panel's
+    Layers tab and can be restyled there. Building it needs no network access.
+
+    Args:
+        collection: STAC collection id, e.g. ``"sentinel-2-l2a"``.
+        item: STAC item id to draw. Omit for a mosaic of the collection.
+        name: Layer display name. Defaults to the item id, or to the collection
+            id with the date range for a mosaic.
+        datetime: Mosaic only. The date range to composite: a ``"start/end"``
+            string or a ``(start, end)`` pair. Date-only bounds cover whole days.
+        bbox: ``[west, south, east, north]`` extent of the layer, used by
+            zoom-to-layer and to bound a mosaic's tile requests.
+        preset: Name of one of the panel's render presets for the collection,
+            e.g. ``"true-color"``, ``"false-color"``, ``"ndvi"``. With none of
+            the render options the collection's default preset is used.
+        assets: Asset names to render, e.g. ``["B08", "B04", "B03"]``.
+        expression: Band-math expression over assets, e.g.
+            ``"(B08-B04)/(B08+B04)"``. Mutually exclusive with ``assets``.
+        rescale: ``(min, max)`` value range stretched to the output colors.
+        colormap: Named colormap for a single-band or expression render, e.g.
+            ``"viridis"``.
+        max_cloud_cover: Mosaic only. Keep items at or below this
+            ``eo:cloud_cover`` percentage; the least cloudy are drawn on top.
+
+    Returns:
+        A layer dict for the project's ``layers`` array.
+
+    Raises:
+        ValueError: If the collection is empty, ``assets`` and ``expression``
+            are combined, a mosaic-only option is given with ``item``, or
+            ``bbox``/``rescale``/``max_cloud_cover`` is malformed.
+    """
+    collection = str(collection or "").strip()
+    if not collection:
+        raise ValueError("collection is required")
+    if item is not None:
+        item = str(item).strip()
+        if not item:
+            raise ValueError("item must be a non-empty STAC item id")
+        if datetime is not None or max_cloud_cover is not None:
+            raise ValueError(
+                "datetime and max_cloud_cover select the items of a mosaic; "
+                "omit them when item names a single STAC item"
+            )
+    if assets and expression:
+        raise ValueError("pass either assets or expression, not both")
+
+    render_params: dict[str, Any] = {}
+    if assets:
+        render_params["assets"] = [str(asset) for asset in assets]
+    if expression:
+        render_params["expression"] = expression
+        if not _ASSET_BAND_REFERENCE.search(expression):
+            render_params["asset_as_band"] = True
+    if rescale is not None:
+        if isinstance(rescale, str) or len(rescale) != 2:
+            raise ValueError("rescale must be a (min, max) pair")
+        low, high = (_finite_number(value, "rescale") for value in rescale)
+        render_params["rescale"] = f"{_format_number(low)},{_format_number(high)}"
+    if colormap:
+        render_params["colormap_name"] = colormap
+
+    bounds: list[float] | None = None
+    if bbox is not None:
+        if len(bbox) != 4:
+            raise ValueError("bbox must be [west, south, east, north]")
+        bounds = [_finite_number(value, "bbox") for value in bbox]
+        if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+            raise ValueError("bbox must be [west, south, east, north]")
+
+    search: dict[str, Any] | None = None
+    range_label = ""
+    if item is None:
+        search = {"collections": [collection]}
+        if datetime is not None:
+            search["datetime"] = _planetary_computer_datetime(datetime)
+            range_label = " to ".join(
+                part[:10] for part in search["datetime"].split("/") if part != ".."
+            )
+        if max_cloud_cover is not None:
+            cloud = _finite_number(max_cloud_cover, "max_cloud_cover")
+            if not 0 <= cloud <= 100:
+                raise ValueError("max_cloud_cover must be between 0 and 100")
+            search["query"] = {"eo:cloud_cover": {"lte": cloud}}
+            search["sortby"] = [{"field": "properties.eo:cloud_cover", "direction": "asc"}]
+        else:
+            search["sortby"] = [{"field": "properties.datetime", "direction": "desc"}]
+
+    default_name = item or (f"{collection} ({range_label})" if range_label else collection)
+    layer = _layer_base(name or default_name, "raster")
+    source_id = f"{layer['id']}-source"
+    layer["source"] = {
+        "collectionId": collection,
+        "sourceId": source_id,
+        "type": "raster",
+    }
+    metadata: dict[str, Any] = {
+        "assets": render_params.get("assets", []),
+        "externalNativeLayer": True,
+        "identifiable": True,
+        "nativeLayerIds": [layer["id"]],
+        "planetaryComputerLayerType": "item" if item else "mosaic",
+        "renderParams": render_params,
+        "sourceId": source_id,
+        "sourceIds": [source_id],
+        "sourceKind": PLANETARY_COMPUTER_SOURCE_KIND,
+        "stacCollectionId": collection,
+        "tileType": "raster",
+    }
+    if preset:
+        metadata["presetName"] = preset
+    if item:
+        metadata["stacItemId"] = item
+    if search is not None:
+        metadata["stacSearchParams"] = search
+    if bounds is not None:
+        metadata["bounds"] = bounds
+    layer["metadata"] = metadata
+    layer["sourcePath"] = collection
+    return layer
+
+
+def _finite_number(value: Any, label: str) -> float:
+    """Coerce a value to a finite float.
+
+    Args:
+        value: The value to coerce.
+        label: The argument name, for the error message.
+
+    Returns:
+        The value as a float.
+
+    Raises:
+        ValueError: If the value is not a finite number.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{label} values must be numbers")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{label} values must be finite")
+    return number
+
+
+def _format_number(value: float) -> str:
+    """Format a number without a trailing ``.0`` for whole values.
+
+    Args:
+        value: The number to format.
+
+    Returns:
+        ``"3000"`` for ``3000.0`` and ``"0.8"`` for ``0.8``.
+    """
+    return str(int(value)) if value == int(value) else repr(value)
+
+
 def cog_layer(
     name: str,
     url: str,
@@ -1380,13 +1889,18 @@ def _normalize_wms_version(version: str | None) -> str:
     return "1.3.0" if version.strip().startswith("1.3") else "1.1.1"
 
 
-#: CRSs a WMS layer can be requested in. MapLibre tiles are Web Mercator; the
-#: geographic ones are for servers without EPSG:3857, which the desktop app
-#: requests per tile in that CRS and redraws into Web Mercator. Keep in step with
-#: `GEOGRAPHIC_WMS_CRS` in `apps/geolibre-desktop/src/lib/wms-geographic.ts`:
-#: a geographic CRS accepted here but missing there renders blank, and
-#: `tests/wms-geographic.test.ts` fails when the two drift.
+#: Web Mercator and the geographic CRSs a WMS layer can be requested in.
+#: MapLibre tiles are Web Mercator; the geographic ones are for servers without
+#: EPSG:3857, which the desktop app requests per tile in that CRS and redraws
+#: into Web Mercator strip by strip. Keep in step with `GEOGRAPHIC_WMS_CRS` in
+#: `apps/geolibre-desktop/src/lib/wms-geographic.ts`: a geographic CRS accepted
+#: here but missing there takes the projected path, and
+#: `tests/wms-geographic.test.ts` fails when the two drift. Any other
+#: ``EPSG:<code>`` is accepted too, projected or geographic, and warped by the
+#: desktop app (see `_normalize_wms_crs`).
 WMS_CRS = frozenset({"EPSG:3857", "EPSG:4326", "EPSG:4258", "EPSG:6706", "CRS:84"})
+
+_EPSG_CODE = re.compile(r"EPSG:\d{4,6}")
 
 
 def _normalize_wms_crs(crs: str | None) -> str:
@@ -1399,13 +1913,20 @@ def _normalize_wms_crs(crs: str | None) -> str:
         The upper-cased code, ``"EPSG:3857"`` for None.
 
     Raises:
-        ValueError: If ``crs`` is not one of :data:`WMS_CRS`.
+        ValueError: If ``crs`` is neither one of :data:`WMS_CRS` nor an
+            ``EPSG:<code>``.
     """
     if crs is None:
         return "EPSG:3857"
     code = str(crs).strip().upper()
-    if code not in WMS_CRS:
-        raise ValueError(f"crs must be one of {sorted(WMS_CRS)}, got {crs!r}")
+    # Any other EPSG CRS (UTM, a national grid, another geographic datum) is
+    # resolved by the desktop app from its EPSG tables; a code it does not know
+    # is sent to the server as is.
+    if code not in WMS_CRS and not _EPSG_CODE.fullmatch(code):
+        raise ValueError(
+            f"crs must be one of {sorted(WMS_CRS)} or an EPSG code such as 'EPSG:25832', "
+            f"got {crs!r}"
+        )
     return code
 
 
@@ -1442,12 +1963,13 @@ def wms_layer(
             only one version. EPSG:3857 keeps its axis order in both, so the
             BBOX template is unchanged. None falls back to ``"1.1.1"``.
         crs: The CRS tiles are requested in: ``"EPSG:3857"`` (None, the
-            default) or, for a server that does not offer Web Mercator, a
-            geographic CRS it does list in its capabilities (``"EPSG:4326"``,
-            ``"EPSG:4258"``, ``"EPSG:6706"``, ``"CRS:84"``). The desktop app
-            requests each tile's lon/lat extent in that CRS and redraws it
-            into Web Mercator; the web build still sends the Web Mercator
-            BBOX, which such a server rejects.
+            default) or, for a server that does not offer Web Mercator, a CRS
+            it does list in its capabilities: a geographic one
+            (``"EPSG:4326"``, ``"EPSG:4258"``, ``"EPSG:6706"``, ``"CRS:84"``)
+            or a projected ``"EPSG:<code>"`` such as ``"EPSG:25832"``. The
+            desktop app requests each tile's extent in that CRS and redraws
+            or warps it into Web Mercator; the web build still sends the Web
+            Mercator BBOX, which such a server rejects.
         bounds: Optional ``[west, south, east, north]`` request bounds, in
             WGS84. Take them from the service's ``EX_GeographicBoundingBox``,
             which is always lon/lat, rather than a 1.3.0 ``BoundingBox
@@ -1459,8 +1981,8 @@ def wms_layer(
 
     Raises:
         ValueError: If ``bounds`` is not four finite numbers with valid latitudes,
-            ``crs`` is not one of :data:`WMS_CRS`, or ``crs`` is ``"CRS:84"``
-            with a version other than 1.3.0.
+            ``crs`` is neither one of :data:`WMS_CRS` nor an ``EPSG:<code>``,
+            or ``crs`` is ``"CRS:84"`` with a version other than 1.3.0.
     """
     wms_version = _normalize_wms_version(version)
     wms_crs = _normalize_wms_crs(crs)
@@ -1775,13 +2297,17 @@ def three_d_tiles_layer(
     """Build a 3D Tiles layer from a ``tileset.json`` URL or a Cesium Ion asset.
 
     A URL layer matches what ``restoreThreeDTilesLayers`` replays from a saved
-    project, so the deck.gl 3D-tiles overlay is rebuilt on load. An Ion asset
-    (``ion_asset_id``) renders only on the 3D globe, which loads it with the
-    app's Cesium Ion token; the token itself is never written to the project.
+    project, so the deck.gl 3D-tiles overlay is rebuilt on load. An ArcGIS I3S
+    scene layer URL (``.../SceneServer/layers/<n>``) is filed as a scene layer,
+    the way the app's 3D Tiles panel files it, so it draws on the 2D map and the
+    globe. An Ion asset (``ion_asset_id``) renders only on the 3D globe, which
+    loads it with the app's Cesium Ion token; the token itself is never written
+    to the project.
 
     Args:
         name: Layer display name.
-        url: URL of the 3D Tiles ``tileset.json``. Omit for an Ion asset.
+        url: URL of the 3D Tiles ``tileset.json``, or of an ArcGIS I3S scene
+            layer (``.../SceneServer/layers/<n>``). Omit for an Ion asset.
         ion_asset_id: A Cesium Ion asset id (for example 96188, Cesium OSM
             Buildings). Mutually exclusive with ``url``.
         altitude_offset: Vertical offset applied to the tileset, in meters.
@@ -1807,6 +2333,8 @@ def three_d_tiles_layer(
         )
     layer = _layer_base(name, "3d-tiles", **style)
     source_id = layer["id"]
+    if is_i3s_scene_layer_url(url):
+        return _i3s_scene_layer(layer, url, altitude_offset, request_headers)
     source: dict[str, Any] = {
         "type": "3d-tiles",
         "url": url,
@@ -1829,6 +2357,577 @@ def three_d_tiles_layer(
     }
     layer["sourcePath"] = url
     return layer
+
+
+ARCGIS_I3S_SOURCE_KIND = "arcgis-i3s"
+"""``source.type`` and ``metadata.sourceKind`` of an ArcGIS I3S scene layer."""
+
+_I3S_SCENE_SERVER_PATH_RE = re.compile(
+    r"/SceneServer(/layers/\d+(/sublayers/\d+)?)?/?$", re.IGNORECASE
+)
+
+
+def is_i3s_scene_layer_url(url: str) -> bool:
+    """Return whether a URL points at an ArcGIS I3S scene service.
+
+    Matches the same URLs as the project migration ``withI3sSceneLayerKind``
+    in ``packages/core/src/project.ts``: the path of the service or one of its
+    layers. That is narrower than the 3D Tiles panel's
+    ``isArcgisI3sSceneLayerUrl`` on purpose, so a ``tileset.json`` stored under
+    a ``SceneServer`` folder stays a tileset.
+
+    Args:
+        url: The tileset or scene layer URL.
+
+    Returns:
+        True for a ``.../SceneServer``, ``.../SceneServer/layers/<n>`` or
+        Building Scene Layer ``.../layers/<n>/sublayers/<m>`` URL. Only the
+        path is matched, so a query such as ``?ref=/SceneServer/x`` does not
+        count, and a URL that does not parse is not a scene layer.
+    """
+    try:
+        path = urlsplit(url.strip()).path
+    except ValueError:
+        return False
+    return bool(_I3S_SCENE_SERVER_PATH_RE.search(path))
+
+
+def _i3s_scene_layer(
+    layer: dict[str, Any],
+    url: str,
+    altitude_offset: float,
+    request_headers: dict[str, str] | None,
+) -> dict[str, Any]:
+    """Turn a 3D Tiles layer base into an ArcGIS I3S scene layer record.
+
+    The record matches ``createArcgisI3sStoreLayer`` in the app: the app draws a
+    scene layer only when its source kind is ``arcgis-i3s``, through its deck.gl
+    overlay on the 2D map and ``I3SDataProvider`` on the globe. Filed as a plain
+    tileset, the URL is loaded as a ``tileset.json`` and nothing draws.
+
+    Args:
+        layer: The layer from ``_layer_base``.
+        url: The ``.../SceneServer/layers/<n>`` URL.
+        altitude_offset: Vertical offset in metres.
+        request_headers: Optional request headers (used by the globe).
+
+    Returns:
+        The completed layer dict.
+    """
+    source_id = layer["id"]
+    url = url.strip()
+    source: dict[str, Any] = {
+        "type": ARCGIS_I3S_SOURCE_KIND,
+        "url": url,
+        "sourceId": source_id,
+        "altitudeOffset": altitude_offset,
+    }
+    if request_headers:
+        source["requestHeaders"] = request_headers
+    layer["source"] = source
+    layer["metadata"] = {
+        "customLayerType": ARCGIS_I3S_SOURCE_KIND,
+        "externalDeckLayer": True,
+        "externalNativeLayer": True,
+        "identifiable": False,
+        "nativeLayerIds": [f"{source_id}-deck"],
+        "sourceId": source_id,
+        "sourceKind": ARCGIS_I3S_SOURCE_KIND,
+        "altitudeOffset": altitude_offset,
+    }
+    layer["sourcePath"] = url
+    return layer
+
+
+LIDAR_SOURCE_KIND = "lidar-url"
+"""``metadata.sourceKind`` of a LiDAR point cloud the app streams from a URL."""
+
+
+def lidar_layer(name: str, url: str, **style: Any) -> dict[str, Any]:
+    """Build a LiDAR point cloud layer from a LAS, LAZ, COPC or EPT URL.
+
+    The layer matches what the app's LiDAR control writes, so a saved project
+    re-streams the point cloud when it opens (COPC and EPT by level of detail,
+    LAS/LAZ as a whole download).
+
+    Args:
+        name: Layer display name.
+        url: HTTP(S) URL of a ``.las``, ``.laz``, ``.copc.laz`` file or an EPT
+            ``ept.json``.
+        **style: Style overrides merged into the default layer style.
+
+    Returns:
+        A layer dict for the project's ``layers`` array.
+
+    Raises:
+        ValueError: If ``url`` is not an HTTP(S) URL.
+    """
+    if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+        raise ValueError("url must be an http(s) URL of a LAS/LAZ/COPC file or an EPT ept.json")
+    layer = _layer_base(name, "lidar", **style)
+    source_id = layer["id"]
+    layer["source"] = {"type": "lidar", "url": url, "sourceId": source_id}
+    layer["metadata"] = {
+        "sourceKind": LIDAR_SOURCE_KIND,
+        "externalNativeLayer": True,
+        "customLayerType": "lidar",
+        "identifiable": False,
+        "sourceId": source_id,
+    }
+    layer["sourcePath"] = url
+    return layer
+
+
+POINT_CLOUD_ANNOTATION_PLUGIN_ID = "geolibre-point-cloud-annotation"
+"""Plugin id under which the app saves point cloud labels and 3D boxes."""
+
+
+MAX_POINT_LABEL_NODE_BYTES = 16 * 1024 * 1024
+"""Largest inflated size of one node's saved labels (mirrors the app's cap)."""
+
+MAX_POINT_LABEL_BYTES = 256 * 1024 * 1024
+"""Largest total inflated size of all saved labels in one project."""
+
+MAX_POINT_LABEL_EDITS = 20_000_000
+"""Most decoded label entries across a project; bounds Python memory, since a
+dict entry costs far more than the two inflated bytes behind it."""
+
+
+def decode_point_label_node(text: str, limit: int = MAX_POINT_LABEL_NODE_BYTES) -> dict[int, int]:
+    """Decode one node's saved point labels.
+
+    The app stores a node's edits as raw-DEFLATE compressed pairs of
+    (delta-varint point index, class byte), base64 encoded.
+
+    Args:
+        text: The base64 string from the project.
+        limit: Maximum inflated size in bytes; a larger record is rejected
+            without being inflated in full (a crafted decompression bomb).
+
+    Returns:
+        Point index within the node -> ASPRS class code.
+
+    Raises:
+        ValueError: If the record is truncated, not valid DEFLATE, or
+            inflates past ``limit``.
+    """
+    return _decode_point_label_node_sized(text, limit)[0]
+
+
+def _decode_point_label_node_sized(
+    text: str, limit: int, wide: bool = False
+) -> tuple[dict[int, int], int]:
+    """Decode one node's saved point labels and report its inflated size.
+
+    Args:
+        text: The base64 string from the project.
+        limit: Maximum inflated size in bytes.
+        wide: Values are varints (instance ids, up to 32 bits) rather than
+            class bytes.
+
+    Returns:
+        The edits (as :func:`decode_point_label_node`) and the number of bytes
+        inflated to produce them.
+
+    Raises:
+        ValueError: As :func:`decode_point_label_node`.
+    """
+    try:
+        inflater = zlib.decompressobj(-15)
+        data = inflater.decompress(base64.b64decode(text), limit + 1)
+    except (ValueError, zlib.error) as error:
+        raise ValueError(f"invalid point label record: {error}") from error
+    if len(data) > limit or inflater.unconsumed_tail:
+        raise ValueError("point label record is too large")
+    edits: dict[int, int] = {}
+    previous = -1
+    at = 0
+    while at < len(data):
+        delta = 0
+        shift = 0
+        while True:
+            if at >= len(data):
+                raise ValueError("truncated point label record")
+            byte = data[at]
+            at += 1
+            delta += (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                break
+            # A point index needs at most five varint bytes; a longer run is
+            # malformed (and would make this bigint loop quadratic).
+            if shift >= 35:
+                raise ValueError("invalid point label record: varint too long")
+        if at >= len(data):
+            raise ValueError("truncated point label record")
+        index = previous + 1 + delta
+        previous = index
+        if not wide:
+            edits[index] = data[at]
+            at += 1
+            continue
+        value = 0
+        shift = 0
+        while True:
+            if at >= len(data):
+                raise ValueError("truncated point label record")
+            # An instance id is a uint32: at most five varint bytes.
+            if shift > 28:
+                raise ValueError("invalid point label record: varint too long")
+            byte = data[at]
+            at += 1
+            value += (byte & 0x7F) << shift
+            shift += 7
+            if not byte & 0x80:
+                break
+        if value > 0xFFFFFFFF:
+            raise ValueError("invalid point label record: id out of range")
+        edits[index] = value
+    return edits, len(data)
+
+
+def _decode_label_sources(
+    entries: Any, limits: dict[str, int], wide: bool
+) -> dict[str, dict[str, dict[int, int]]]:
+    """Decode one kind of saved per-source edits (classes or instance ids).
+
+    Args:
+        entries: The saved ``[{"url", "nodes"}]`` list.
+        limits: Shared ``{"budget", "entries"}`` allowances, drawn down in place.
+        wide: Decode varint values (instance ids) rather than class bytes.
+
+    Returns:
+        ``{url: {node_key: {index: value}}}``.
+    """
+    out: dict[str, dict[str, dict[int, int]]] = {}
+    for source in entries if isinstance(entries, list) else []:
+        if not isinstance(source, dict):
+            continue
+        url = source.get("url")
+        nodes = source.get("nodes") or {}
+        if not isinstance(url, str) or not isinstance(nodes, dict):
+            continue
+        decoded: dict[str, dict[int, int]] = {}
+        for key, text in nodes.items():
+            if not isinstance(text, str) or limits["budget"] <= 0 or limits["entries"] <= 0:
+                continue
+            cap = min(MAX_POINT_LABEL_NODE_BYTES, limits["budget"])
+            try:
+                edits, inflated = _decode_point_label_node_sized(text, cap, wide)
+            except ValueError:
+                # A rejected node may have inflated up to its cap before
+                # failing, so charge the cap: bad nodes cannot bypass the budget.
+                limits["budget"] -= cap
+                continue
+            # Charge what was actually inflated (varints run to five bytes).
+            limits["budget"] -= inflated
+            if len(edits) > limits["entries"]:
+                continue
+            limits["entries"] -= len(edits)
+            decoded[key] = edits
+        # Merge repeated entries for one URL rather than dropping the first.
+        out.setdefault(url, {}).update(decoded)
+    return out
+
+
+def point_cloud_annotations(project: dict[str, Any]) -> dict[str, Any]:
+    """Read the point labels and 3D boxes the annotator saved in a project.
+
+    Labels are keyed by each point's stable identity: the source node key (a
+    COPC/EPT octree key such as ``"2-1-0-1"``, or ``"file"`` for a LAS/LAZ
+    loaded whole) and the point's index within that node.
+
+    Args:
+        project: A project dict (e.g. ``Map.project`` or a loaded file).
+
+    Returns:
+        ``{"labels": {url: {node_key: {index: class}}}, "instances": {url:
+        {node_key: {index: instance_id}}}, "boxes": [...], "vectors": [...],
+        "classes": [...]}``. ``vectors`` are the 3D polylines, polygons and
+        keypoints (see :func:`_point_cloud_vectors`).
+        ``classes`` is the project's custom class schema (see
+        :func:`point_cloud_class_schema`), and each box is ``{"url", "id",
+        "class_code", "center", "size", "yaw", "status", "attributes"}``:
+        ``center`` is ``[lng, lat, elevation_m]``, ``size`` ``[length, width,
+        height]`` in metres, ``yaw`` radians counter-clockwise from east,
+        ``status`` one of ``"new"``, ``"reviewed"`` or ``"flagged"``, and
+        ``attributes`` the box's free-form string name/value pairs.
+    """
+    plugins = project.get("plugins") if isinstance(project, dict) else None
+    settings = plugins.get("settings") if isinstance(plugins, dict) else None
+    state = settings.get(POINT_CLOUD_ANNOTATION_PLUGIN_ID) if isinstance(settings, dict) else None
+    if not isinstance(state, dict):
+        state = {}
+    limits = {"budget": MAX_POINT_LABEL_BYTES, "entries": MAX_POINT_LABEL_EDITS}
+    labels = _decode_label_sources(state.get("sources"), limits, wide=False)
+    instances = _decode_label_sources(state.get("instances"), limits, wide=True)
+    boxes: list[dict[str, Any]] = []
+    cuboids = state.get("cuboids") if isinstance(state, dict) else None
+    for entry in cuboids if isinstance(cuboids, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        url = entry.get("url")
+        if not isinstance(url, str):
+            continue
+        entry_boxes = entry.get("boxes")
+        for box in entry_boxes if isinstance(entry_boxes, list) else []:
+            if not isinstance(box, dict):
+                continue
+            boxes.append(
+                {
+                    "url": url,
+                    "id": box.get("id"),
+                    "class_code": box.get("classCode"),
+                    "center": box.get("center"),
+                    "size": box.get("size"),
+                    "yaw": box.get("yaw"),
+                    "status": _box_status(box.get("status")),
+                    "attributes": _box_attributes(box.get("attributes")),
+                }
+            )
+    classes = point_cloud_class_schema(state.get("customClasses"), strict=False)
+    vectors = _point_cloud_vectors(state.get("vectors"))
+    return {
+        "labels": labels,
+        "instances": instances,
+        "boxes": boxes,
+        "vectors": vectors,
+        "classes": classes,
+    }
+
+
+_VECTOR_KINDS = {"polyline": 2, "polygon": 3, "keypoint": 1}
+_MAX_VECTOR_VERTICES = 10_000
+
+
+def _point_cloud_vectors(entries: Any) -> list[dict[str, Any]]:
+    """Read the annotator's saved 3D vectors, skipping malformed ones.
+
+    Args:
+        entries: The saved ``[{"url", "items"}]`` list.
+
+    Returns:
+        ``[{"url", "id", "kind", "class_code", "points"}]`` with ``kind`` one of
+        ``"polyline"``, ``"polygon"`` or ``"keypoint"`` and ``points`` a list
+        of ``[lng, lat, elevation_m]``.
+    """
+
+    def is_vertex(value: Any) -> bool:
+        return (
+            isinstance(value, list)
+            and len(value) == 3
+            and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                for v in value
+            )
+        )
+
+    out: list[dict[str, Any]] = []
+    for entry in entries if isinstance(entries, list) else []:
+        url = entry.get("url") if isinstance(entry, dict) else None
+        items = entry.get("items") if isinstance(entry, dict) else None
+        if not isinstance(url, str) or not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("kind")
+            points = item.get("points")
+            if kind not in _VECTOR_KINDS or not isinstance(points, list):
+                continue
+            if not _VECTOR_KINDS[kind] <= len(points) <= _MAX_VECTOR_VERTICES:
+                continue
+            if not all(is_vertex(point) for point in points):
+                continue
+            out.append(
+                {
+                    "url": url,
+                    "id": item.get("id"),
+                    "kind": kind,
+                    "class_code": item.get("classCode"),
+                    "points": [
+                        list(point) for point in points[: 1 if kind == "keypoint" else None]
+                    ],
+                }
+            )
+    return out
+
+
+_BOX_STATUSES = ("new", "reviewed", "flagged")
+_MAX_BOX_ATTRIBUTES = 32
+
+
+def _box_status(value: Any) -> str:
+    """Return a saved box status, or ``"new"`` for a missing or unknown one.
+
+    Args:
+        value: The saved ``status`` field.
+
+    Returns:
+        One of ``"new"``, ``"reviewed"`` or ``"flagged"``.
+    """
+    return value if value in _BOX_STATUSES else "new"
+
+
+def _box_attributes(value: Any) -> dict[str, str]:
+    """Return a saved box's string attributes, dropping anything else.
+
+    Args:
+        value: The saved ``attributes`` field.
+
+    Returns:
+        Up to 32 name/value pairs with string keys and values, as the app caps them.
+    """
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, item in value.items():
+        if len(out) >= _MAX_BOX_ATTRIBUTES:
+            break
+        if isinstance(key, str) and key.strip() and isinstance(item, str):
+            out[_clip_utf16(key.strip(), 64)] = _clip_utf16(item, 256)
+    return out
+
+
+def _clip_utf16(text: str, length: int) -> str:
+    """Cut text to at most ``length`` UTF-16 code units, as the app does.
+
+    JavaScript measures strings in UTF-16 code units, so an emoji counts as
+    two; a pair that would be split is dropped whole, matching the app.
+
+    Args:
+        text: The text.
+        length: Maximum UTF-16 code units.
+
+    Returns:
+        The prefix.
+    """
+    encoded = text.encode("utf-16-le", "surrogatepass")
+    if len(encoded) <= 2 * length:
+        return text
+    cut = encoded[: 2 * length].decode("utf-16-le", "surrogatepass")
+    # Drop only a high surrogate left dangling by the cut; interior unpaired
+    # surrogates (valid in JSON) stay, as they do in the app.
+    return cut[:-1] if "\ud800" <= cut[-1] <= "\udbff" else cut
+
+
+CUSTOM_CLASS_MIN = 19
+"""Lowest code a custom class may use (ASPRS reserves 19-63, 64-255 are user)."""
+
+CUSTOM_CLASS_MAX = 255
+"""Highest code a custom class may use (the LAS classification byte)."""
+
+
+def _hex_color(value: Any) -> str | None:
+    """Normalize ``#rrggbb`` text or an ``(r, g, b)`` triple to ``#rrggbb``.
+
+    Args:
+        value: The colour.
+
+    Returns:
+        Lower-case ``#rrggbb``, or None when malformed.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        # Strict, like the app's parseHexColor: int(..., 16) would also take a
+        # sign or "_" separators, which the app then rejects on load.
+        return text.lower() if re.fullmatch(r"#[0-9a-fA-F]{6}", text) else None
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) == 3
+        and all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 255 for v in value)
+    ):
+        return "#{:02x}{:02x}{:02x}".format(*value)
+    return None
+
+
+def point_cloud_class_schema(classes: Any, *, strict: bool = True) -> list[dict[str, Any]]:
+    """Validate custom point classes for the annotator (its label schema).
+
+    Custom classes extend the ASPRS standard classes 0-18 with user codes the
+    annotator can assign, drawn in their own colour and named in the LiDAR
+    legend.
+
+    Args:
+        classes: A list of ``{"code", "name", "color"}`` dicts; ``code`` an
+            integer 19-255, ``name`` non-empty text (clipped to 64 UTF-16
+            units, as the app does), ``color`` ``"#rrggbb"`` or ``(r, g, b)``.
+        strict: Raise on an invalid entry (authoring) instead of skipping it
+            (reading a saved project).
+
+    Returns:
+        The classes as ``{"code", "name", "color": "#rrggbb"}``, ascending by
+        code; a repeated code keeps its last definition.
+
+    Raises:
+        ValueError: With ``strict``, for a malformed list or entry.
+    """
+    if classes is None:
+        return []
+    if not isinstance(classes, list):
+        if strict:
+            raise ValueError("classes must be a list of {code, name, color} objects")
+        return []
+    by_code: dict[int, dict[str, Any]] = {}
+    for entry in classes:
+        code = entry.get("code") if isinstance(entry, dict) else None
+        name = entry.get("name") if isinstance(entry, dict) else None
+        color = _hex_color(entry.get("color")) if isinstance(entry, dict) else None
+        problem = None
+        if not isinstance(code, int) or isinstance(code, bool):
+            problem = "code must be an integer"
+        elif not CUSTOM_CLASS_MIN <= code <= CUSTOM_CLASS_MAX:
+            problem = f"code must be {CUSTOM_CLASS_MIN}-{CUSTOM_CLASS_MAX}"
+        elif not isinstance(name, str) or not name.strip():
+            problem = "name must be non-empty text"
+        elif color is None:
+            problem = "color must be #rrggbb or an (r, g, b) triple"
+        if problem:
+            if strict:
+                raise ValueError(f"invalid custom class {entry!r}: {problem}")
+            continue
+        by_code[code] = {"code": code, "name": _clip_utf16(name.strip(), 64), "color": color}
+    return [by_code[code] for code in sorted(by_code)]
+
+
+def apply_point_labels(classification: Any, nodes: dict[str, dict[int, int]]) -> int:
+    """Apply saved labels to the classification of a LAS/LAZ loaded whole.
+
+    Labels on a whole-file source are keyed ``"file"`` with the point's index
+    in file order, so they map straight onto e.g. ``laspy``'s
+    ``las.classification``. COPC/EPT labels are keyed by octree node and need
+    the node's point order; export those from the app as LAS/LAZ instead.
+
+    Args:
+        classification: A mutable sequence or NumPy array of class codes in
+            file order (modified in place).
+        nodes: One source's labels, as returned in
+            ``point_cloud_annotations(project)["labels"][url]``.
+
+    Returns:
+        The number of points whose class changed.
+
+    Raises:
+        ValueError: If the labels are keyed by COPC/EPT node, or an index is
+            past the end of ``classification``.
+    """
+    # Validate everything first, so a rejected record changes nothing.
+    for key, edits in nodes.items():
+        if key != "file":
+            raise ValueError(
+                f"labels keyed by octree node {key!r} need the COPC node order; "
+                "export the annotated cloud as LAS/LAZ from the app instead"
+            )
+        for index in edits:
+            if index < 0 or index >= len(classification):
+                raise ValueError(f"label index {index} is past the {len(classification)} points")
+    changed = 0
+    for edits in nodes.values():
+        for index, code in edits.items():
+            if int(classification[index]) != code:
+                classification[index] = code
+                changed += 1
+    return changed
 
 
 CESIUM_ION_SOURCE_KIND = "cesium-ion"
@@ -2121,11 +3220,11 @@ def load_featurecollection(data: Any) -> dict[str, Any]:
 # The split-map (swipe), legend, and colorbar helpers are thin wrappers over the
 # app's built-in map-control plugins, configured through the project's `plugins`
 # block. The shapes here mirror the plugin project-state interfaces in
-# packages/plugins/src/plugins/* (maplibre-swipe.ts, maplibre-components.ts), so
-# the app replays them via PluginManager.restoreProjectState on load.
+# packages/plugins/src/plugins/* (maplibre-swipe.ts, components/gui-state.ts),
+# so the app replays them via PluginManager.restoreProjectState on load.
 
 # The four corners every map control accepts (CONTROL_POSITIONS in
-# maplibre-components.ts; PROJECT_PLUGIN_CONTROL_POSITIONS in core).
+# components/gui-state.ts; PROJECT_PLUGIN_CONTROL_POSITIONS in core).
 CONTROL_POSITIONS = frozenset({"top-left", "top-right", "bottom-left", "bottom-right"})
 
 # Plugin ids registered in apps/geolibre-desktop/src/hooks/usePlugins.ts.
@@ -2159,6 +3258,13 @@ PUBLISHABLE_PLUGIN_SETTINGS: dict[str, tuple[str, ...] | None] = {
     # silently start counting each new toggle as a credential. The retained
     # value is still recursively credential-scrubbed by the caller.
     "gods-eye-view": None,
+    # Point class edits keyed by (node key, index): compressed numbers, no user
+    # text. Source URLs are values, so the caller's scrub still covers them.
+    "geolibre-point-cloud-annotation": None,
+    # The server URL, the map's publish key and a layer-id-to-dataset-key map.
+    # The sub-keys are listed rather than the blob, so a key a later change
+    # stores here is dropped instead of published.
+    "maplibre-gl-geolens": ("serverUrl", "mapKey", "layerKeys"),
 }
 
 # Plugins the app activates by default (``activeByDefault: true`` in
@@ -2359,3 +3465,977 @@ def colorbar_gui_state(
         "selectedColorbarIndex": len(colorbars) - 1,
         "colorbars": colorbars,
     }
+
+
+# -- layer filters -------------------------------------------------------------
+
+#: Expression operators that can produce a boolean, which is what the app's
+#: ``filterExpression`` must evaluate to (``normalizeLayer`` in
+#: ``packages/core/src/project.ts`` validates it with ``expectedType:
+#: "boolean"`` and silently drops anything else on load). The app's validator is
+#: the authority; this is the structural pre-check that catches the common
+#: mistakes (a bare property name, a numeric expression) before they are saved
+#: and quietly discarded.
+FILTER_EXPRESSION_OPERATORS = frozenset(
+    {
+        "==",
+        "!=",
+        "<",
+        "<=",
+        ">",
+        ">=",
+        "!",
+        "all",
+        "any",
+        "in",
+        "has",
+        "!has",
+        "within",
+        "boolean",
+        "to-boolean",
+    }
+)
+
+#: Operators whose result type is whichever branch they return, mapped to the
+#: indexes of those branches (``None`` for "the last argument"). A filter built
+#: from one is boolean only when every branch is.
+_POLYMORPHIC_OPERATORS = {"case", "match", "coalesce", "let"}
+
+
+def _polymorphic_branches(expression: list[Any]) -> list[Any]:
+    """Return the branches a ``case``/``match``/``coalesce``/``let`` can yield.
+
+    Args:
+        expression: An expression whose head is in ``_POLYMORPHIC_OPERATORS``.
+
+    Returns:
+        The argument expressions the result is taken from.
+    """
+    head, args = expression[0], expression[1:]
+    if head == "case":
+        # [cond, out, cond, out, ..., fallback]
+        return [*args[1:-1:2], args[-1]] if args else []
+    if head == "match":
+        # [input, labels, out, labels, out, ..., fallback]
+        return [*args[2:-1:2], args[-1]] if len(args) > 1 else []
+    if head == "let":
+        return args[-1:]
+    return list(args)
+
+
+def _yields_boolean(value: Any) -> bool:
+    """Whether an expression (or literal) can only produce a boolean.
+
+    Args:
+        value: An expression array or a literal.
+
+    Returns:
+        ``True`` for a boolean literal, a boolean operator, or a polymorphic
+        operator all of whose branches yield booleans.
+    """
+    if isinstance(value, bool):
+        return True
+    if not isinstance(value, list) or not value or not isinstance(value[0], str):
+        return False
+    if value[0] in FILTER_EXPRESSION_OPERATORS:
+        return True
+    if value[0] in _POLYMORPHIC_OPERATORS:
+        branches = _polymorphic_branches(value)
+        return bool(branches) and all(_yields_boolean(branch) for branch in branches)
+    return False
+
+
+def _parse_expression(expression: Any, what: str) -> list[Any]:
+    """Coerce a MapLibre expression given as a list or a JSON string to a list.
+
+    Args:
+        expression: A list, or a JSON string encoding one.
+        what: The argument name, for error messages.
+
+    Returns:
+        The expression as a non-empty list whose head is an operator string.
+
+    Raises:
+        ValueError: If the value is not a JSON array expression.
+    """
+    try:
+        return _parse_expression_checked(expression, what)
+    except RecursionError as exc:
+        raise ValueError(f"{what} is nested too deeply") from exc
+
+
+def _parse_expression_checked(expression: Any, what: str) -> list[Any]:
+    """Do the work of :func:`_parse_expression` (which guards recursion depth).
+
+    Args:
+        expression: A list, or a JSON string encoding one.
+        what: The argument name, for error messages.
+
+    Returns:
+        The expression as a JSON-clean list.
+
+    Raises:
+        ValueError: If the value is not a JSON array expression.
+    """
+    if isinstance(expression, str):
+        try:
+            expression = json.loads(expression)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{what} is not valid JSON: {exc.msg}") from exc
+    if isinstance(expression, tuple):
+        expression = list(expression)
+    if not isinstance(expression, list) or not expression:
+        raise ValueError(
+            f"{what} must be a MapLibre expression array such as "
+            '[">=", ["get", "population"], 100000]'
+        )
+    if not isinstance(expression[0], str):
+        raise ValueError(f"{what} must start with an operator string, got {expression[0]!r}")
+    try:
+        return json.loads(json.dumps(expression, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{what} must be JSON-serializable: {exc}") from exc
+
+
+def filter_expression(expression: Any) -> list[Any]:
+    """Build a layer's persistent ``filterExpression``.
+
+    Args:
+        expression: A boolean MapLibre expression, as a list or a JSON string,
+            e.g. ``[">=", ["get", "population"], 100000]``.
+
+    Returns:
+        The expression as a list, ready for the layer's ``filterExpression``.
+
+    Raises:
+        ValueError: If the expression is not an array, or its operator cannot
+            produce a boolean.
+    """
+    parsed = _parse_expression(expression, "filter expression")
+    try:
+        yields_boolean = _yields_boolean(parsed)
+    except RecursionError as exc:
+        raise ValueError("filter expression is nested too deeply") from exc
+    if not yields_boolean:
+        raise ValueError(
+            f"a layer filter must evaluate to true/false; this {parsed[0]!r} does not. "
+            "Use a comparison such as ['==', ['get', 'field'], 'value'] or combine "
+            "several with 'all' / 'any'"
+        )
+    return parsed
+
+
+# -- floor picker ----------------------------------------------------------------
+
+#: Mirror of ``LevelFilterMode`` in ``packages/core/src/types.ts``.
+LEVEL_FILTER_MODES = ("all", "only", "below")
+
+# ASCII digits only, as in the app's JavaScript `\d` (Python's `\d` also
+# matches other scripts' digits, which the app reads as named floors).
+_LEVEL_NUMBER = re.compile(r"^-?[0-9]+(?:\.[0-9]+)?$")
+_LEVEL_RANGE = re.compile(r"^(-?[0-9]+(?:\.[0-9]+)?)\s*-\s*(-?[0-9]+(?:\.[0-9]+)?)$")
+#: A span wider than this is read as its two ends (``MAX_RANGE_STEPS`` in level-filter.ts).
+_LEVEL_MAX_RANGE_STEPS = 200
+
+
+def _level_label(value: float) -> str:
+    """Format a floor number exactly as JavaScript's ``String(number)`` does.
+
+    The app labels floors with ``String(number)``, so a label written here must
+    match it byte for byte, including where the two languages switch to
+    exponent notation (JavaScript: below 1e-6 or from 1e21; Python's ``repr``:
+    below 1e-4 or from 1e16).
+
+    Args:
+        value: A finite floor number.
+
+    Returns:
+        The label JavaScript would produce.
+    """
+    number = float(value)
+    if math.isinf(number):  # a numeric text too long for a double
+        return "Infinity" if number > 0 else "-Infinity"
+    if number == 0:
+        return "0"
+    magnitude = abs(number)
+    if 1e-6 <= magnitude < 1e21:
+        if number.is_integer():
+            return str(int(number))
+        # Shortest round-trip digits, in plain positional notation.
+        return format(Decimal(repr(number)), "f")
+    # repr uses exponent notation below 1e-4 and from 1e16, so both ranges here have one.
+    mantissa, _, exponent = repr(number).partition("e")
+    mantissa = mantissa.removesuffix(".0")
+    exp = int(exponent)
+    return f"{mantissa}e{'+' if exp >= 0 else '-'}{abs(exp)}"
+
+
+def parse_level_value(raw: Any) -> list[tuple[str, float | None]]:
+    """Parse one level attribute into the floors it names.
+
+    Mirrors ``parseLevelValue`` in ``packages/core/src/level-filter.ts``:
+    numbers are taken as they are; text is split on ``;`` (OpenStreetMap's list
+    separator) and each part read as a number, an integer span such as ``0-2``
+    (every floor it covers), or a named floor such as ``G``.
+
+    Args:
+        raw: The attribute value.
+
+    Returns:
+        ``(label, ordinal)`` pairs; ``ordinal`` is ``None`` for a named floor.
+    """
+    if isinstance(raw, bool):
+        return []
+    if isinstance(raw, (int, float)):
+        try:
+            number = float(raw)
+        except OverflowError:  # an integer too large for a double: no floor, as in the app
+            return []
+        return [(_level_label(number), number)] if math.isfinite(number) else []
+    if not isinstance(raw, str):
+        return []
+    tokens: list[tuple[str, float | None]] = []
+    for part in raw.split(";"):
+        text = part.strip()
+        if not text:
+            continue
+        if _LEVEL_NUMBER.match(text):
+            tokens.append((_level_label(float(text)), float(text)))
+            continue
+        span = _LEVEL_RANGE.match(text)
+        if span:
+            lo, hi = sorted((float(span.group(1)), float(span.group(2))))
+            if lo.is_integer() and hi.is_integer() and hi - lo <= _LEVEL_MAX_RANGE_STEPS:
+                tokens.extend((_level_label(v), float(v)) for v in range(int(lo), int(hi) + 1))
+            else:
+                tokens.extend([(_level_label(lo), lo), (_level_label(hi), hi)])
+            continue
+        tokens.append((text, None))
+    return tokens
+
+
+def level_value_matches(raw: Any, level: str, mode: str) -> bool:
+    """Whether a feature's level attribute falls on the chosen floor.
+
+    Args:
+        raw: The feature's level attribute.
+        level: The chosen floor's label, e.g. ``"0"``.
+        mode: ``"only"`` for that floor, ``"below"`` for it and every numbered
+            floor under it, ``"all"`` for everything.
+
+    Returns:
+        True when the feature is drawn.
+    """
+    if mode == "all":
+        return True
+    text = level.strip()
+    target = float(text) if _LEVEL_NUMBER.match(text) else None
+    label = text if target is None else _level_label(target)
+    for token_label, ordinal in parse_level_value(raw):
+        if token_label == label:
+            return True
+        if mode == "below" and target is not None and ordinal is not None and ordinal <= target:
+            return True
+    return False
+
+
+def level_filter(
+    field: str,
+    level: Any = None,
+    *,
+    mode: str | None = None,
+    features: Iterable[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a layer's floor picker link (``levelFilter``).
+
+    Args:
+        field: The feature property holding the floor, e.g. ``"level"``.
+        level: The floor to show (``"0"``, ``-1``), or ``None`` for every floor.
+        mode: ``"only"`` (the default once a level is given) or ``"below"`` to
+            also show the floors under it.
+        features: The layer's features, used to resolve the raw values that
+            match. Without them the link is saved unresolved and the app
+            resolves it once it has the layer's features (a local file it
+            re-reads); a layer whose features the app never holds (vector
+            tiles) is not narrowed.
+
+    Returns:
+        The ``levelFilter`` record.
+
+    Raises:
+        ValueError: If the field is blank or the mode is unknown.
+    """
+    if not isinstance(field, str) or not field.strip():
+        raise ValueError("the floor field must be a non-empty property name")
+    if level is None or mode == "all":
+        # "all" draws every floor whatever the level, as the app's selectLevel does.
+        if level is None and mode not in (None, "all"):
+            raise ValueError("choose a level for the 'only' and 'below' modes")
+        return {"field": field, "mode": "all", "level": None}
+    if isinstance(level, bool) or not isinstance(level, (str, int, float)):
+        raise ValueError(f"a floor level must be text or a number, got {level!r}")
+    if isinstance(level, (int, float)):
+        try:
+            finite = math.isfinite(float(level))
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError(f"a floor level must be a finite number, got {level!r}")
+    label = level.strip() if isinstance(level, str) else _level_label(level)
+    if not label:
+        raise ValueError("a floor level must not be blank")
+    if _LEVEL_NUMBER.match(label):
+        label = _level_label(float(label))
+    mode = mode or "only"
+    if mode not in ("only", "below"):
+        raise ValueError(f"mode must be one of {LEVEL_FILTER_MODES}, got {mode!r}")
+    link: dict[str, Any] = {"field": field, "mode": mode, "level": label}
+    if features is not None:
+        values: list[Any] = []
+        seen: set[Any] = set()
+        for feature in features:
+            raw = (feature.get("properties") or {}).get(field)
+            if isinstance(raw, bool) or not isinstance(raw, (str, int, float)):
+                continue
+            key = (type(raw) is str, raw)
+            if key in seen:
+                continue
+            seen.add(key)
+            if level_value_matches(raw, label, mode):
+                values.append(raw)
+        link["values"] = values
+    return link
+
+
+# -- labels --------------------------------------------------------------------
+
+#: Mirror of ``DEFAULT_LAYER_STYLE.labels`` in ``packages/core/src/types.ts``.
+#: The app merges a stored ``labels`` object over these field by field when it
+#: renders, so a written object carries every key to stay stable on round trip.
+DEFAULT_LABEL_STYLE: dict[str, Any] = {
+    "enabled": False,
+    "field": "",
+    "expression": "",
+    "placement": "point",
+    "size": 13,
+    "color": "#111827",
+    "haloColor": "#ffffff",
+    "haloWidth": 1.5,
+    "minZoom": 0,
+    "maxZoom": 24,
+    "allowOverlap": False,
+    "anchor": "center",
+    "offsetX": 0,
+    "offsetY": 0,
+    "rotation": 0,
+    "maxWidth": 10,
+    "transform": "none",
+    "numberFormatEnabled": False,
+    "numberDecimals": 0,
+    "numberLocale": "",
+    "dedupe": "off",
+    "sizeExpression": "",
+    "colorExpression": "",
+    "opacityExpression": "",
+    "visibilityExpression": "",
+    "priorityExpression": "",
+}
+
+LABEL_PLACEMENTS = frozenset({"point", "line"})
+LABEL_ANCHORS = frozenset(
+    {
+        "center",
+        "left",
+        "right",
+        "top",
+        "bottom",
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right",
+    }
+)
+LABEL_TRANSFORMS = frozenset({"none", "uppercase", "lowercase"})
+LABEL_DEDUPE_MODES = frozenset({"off", "unique", "concatenate"})
+#: ``LABEL_NUMBER_LOCALES`` in ``packages/core/src/label-number-format.ts``;
+#: the empty string follows the app's own language.
+LABEL_NUMBER_LOCALES = frozenset({"", "en-US", "de-DE", "ru-RU", "hi-IN"})
+
+# snake_case keyword -> LabelStyle key, with how to check the value.
+_LABEL_OPTIONS: dict[str, tuple[str, str]] = {
+    "placement": ("placement", "placement"),
+    "size": ("size", "positive"),
+    "color": ("color", "color"),
+    "halo_color": ("haloColor", "color"),
+    "halo_width": ("haloWidth", "non_negative"),
+    "min_zoom": ("minZoom", "zoom"),
+    "max_zoom": ("maxZoom", "zoom"),
+    "allow_overlap": ("allowOverlap", "bool"),
+    "anchor": ("anchor", "anchor"),
+    "offset_x": ("offsetX", "number"),
+    "offset_y": ("offsetY", "number"),
+    "rotation": ("rotation", "number"),
+    "max_width": ("maxWidth", "positive"),
+    "transform": ("transform", "transform"),
+    "number_format": ("numberFormatEnabled", "bool"),
+    "number_decimals": ("numberDecimals", "decimals"),
+    "number_locale": ("numberLocale", "locale"),
+    "dedupe": ("dedupe", "dedupe"),
+    "size_expression": ("sizeExpression", "expression"),
+    "color_expression": ("colorExpression", "expression"),
+    "opacity_expression": ("opacityExpression", "expression"),
+    "visibility_expression": ("visibilityExpression", "expression"),
+    "priority_expression": ("priorityExpression", "expression"),
+}
+
+#: The keyword options :func:`label_style` accepts besides field/expression.
+LABEL_OPTION_NAMES = tuple(_LABEL_OPTIONS)
+
+_LABEL_ENUMS = {
+    "placement": LABEL_PLACEMENTS,
+    "anchor": LABEL_ANCHORS,
+    "transform": LABEL_TRANSFORMS,
+    "dedupe": LABEL_DEDUPE_MODES,
+    "locale": LABEL_NUMBER_LOCALES,
+}
+
+
+def _label_value(name: str, kind: str, value: Any) -> Any:
+    """Validate one label option and return the value to store.
+
+    Args:
+        name: The keyword name, for error messages.
+        kind: The check to apply (see ``_LABEL_OPTIONS``).
+        value: The caller's value.
+
+    Returns:
+        The value as the app stores it.
+
+    Raises:
+        ValueError: If the value is out of range or of the wrong kind.
+    """
+    if kind in _LABEL_ENUMS:
+        allowed = _LABEL_ENUMS[kind]
+        if value not in allowed:
+            raise ValueError(f"{name} must be one of {sorted(allowed)}, got {value!r}")
+        return value
+    if kind == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{name} must be true or false, got {value!r}")
+        return value
+    if kind == "color":
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a CSS color string, got {value!r}")
+        return value.strip()
+    if kind == "expression":
+        if value is None or value == "":
+            return ""
+        return json.dumps(_parse_expression(value, name), separators=(",", ":"))
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a number, got {value!r}")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be finite, got {value!r}")
+    if kind == "positive" and number <= 0:
+        raise ValueError(f"{name} must be greater than 0, got {value!r}")
+    if kind == "non_negative" and number < 0:
+        raise ValueError(f"{name} must be 0 or more, got {value!r}")
+    if kind == "zoom" and not 0 <= number <= 24:
+        raise ValueError(f"{name} must be between 0 and 24, got {value!r}")
+    if kind == "decimals":
+        if number != int(number) or not 0 <= number <= 10:
+            raise ValueError(f"{name} must be a whole number from 0 to 10, got {value!r}")
+        return int(number)
+    return int(number) if number == int(number) else number
+
+
+def label_style(
+    field: str | None = None,
+    *,
+    expression: Any = None,
+    enabled: bool | None = None,
+    base: dict[str, Any] | None = None,
+    **options: Any,
+) -> dict[str, Any]:
+    """Build a layer's ``style.labels`` object (``LabelStyle`` in types.ts).
+
+    Args:
+        field: Attribute whose value becomes the label text.
+        expression: A MapLibre expression (list or JSON string) for the label
+            text; overrides ``field`` when set, e.g.
+            ``["concat", ["get", "name"], " (", ["get", "pop"], ")"]``. Pass
+            ``""`` to clear an existing one.
+        enabled: Whether labels are shown. ``False`` keeps the configuration
+            but hides the labels. ``None`` keeps ``base``'s value, or turns
+            labels on when there is no ``base``.
+        base: An existing labels object to update; unspecified options keep
+            its values. Defaults to :data:`DEFAULT_LABEL_STYLE`.
+        **options: Any of :data:`LABEL_OPTION_NAMES` -- ``placement``
+            (``"point"``/``"line"``), ``size``, ``color``, ``halo_color``,
+            ``halo_width``, ``min_zoom``, ``max_zoom``, ``allow_overlap``,
+            ``anchor``, ``offset_x``, ``offset_y``, ``rotation``, ``max_width``,
+            ``transform``, ``number_format``, ``number_decimals``,
+            ``number_locale``, ``dedupe``, and the data-defined
+            ``size_expression``, ``color_expression``, ``opacity_expression``,
+            ``visibility_expression``, ``priority_expression``. ``None``
+            values are skipped. Expressions are checked for shape only (a
+            JSON array with an operator), not for their result type; the app
+            reports a mistyped one when it renders.
+
+    Returns:
+        A complete labels object.
+
+    Raises:
+        ValueError: If an option is unknown or invalid, or labels are enabled
+            with neither a field nor an expression to draw.
+    """
+    unknown = sorted(set(options) - set(_LABEL_OPTIONS))
+    if unknown:
+        raise ValueError(
+            f"unknown label option(s) {unknown}; expected any of {list(LABEL_OPTION_NAMES)}"
+        )
+    labels = copy.deepcopy(DEFAULT_LABEL_STYLE)
+    if isinstance(base, dict):
+        labels.update(copy.deepcopy(base))
+    if enabled is None:
+        # A stored labels object with no `enabled` key (`{}` in a hand-edited
+        # project) counts as on, not as the default's False.
+        enabled = bool(base.get("enabled", True)) if isinstance(base, dict) else True
+    if not isinstance(enabled, bool):
+        raise ValueError(f"enabled must be true or false, got {enabled!r}")
+    labels["enabled"] = enabled
+    if field is not None:
+        if not isinstance(field, str):
+            raise ValueError(f"field must be a property name, got {field!r}")
+        labels["field"] = field.strip()
+    if expression is not None:
+        labels["expression"] = _label_value("expression", "expression", expression)
+    for name, value in options.items():
+        if value is None:
+            continue
+        key, kind = _LABEL_OPTIONS[name]
+        labels[key] = _label_value(name, kind, value)
+    if labels["minZoom"] > labels["maxZoom"]:
+        raise ValueError(
+            f"min_zoom ({labels['minZoom']}) must not exceed max_zoom ({labels['maxZoom']})"
+        )
+    if labels["enabled"] and not labels["field"] and not labels["expression"]:
+        raise ValueError("labels need a field or an expression to draw")
+    return labels
+
+
+# -- plugin state --------------------------------------------------------------
+
+#: Built-in plugins that restore saved project state (they implement
+#: ``applyProjectState`` in ``packages/plugins/src/plugins/*``). A settings blob
+#: stored under any other id is ignored by the app unless an external plugin
+#: with that id is loaded from a manifest URL, so callers refuse unknown ids
+#: unless asked not to. A repo test checks every id here still appears in the
+#: plugin sources.
+PLUGIN_STATE_IDS = frozenset(
+    {
+        "geolibre-elevation-profile",
+        "geolibre-flight-simulator",
+        "geolibre-point-cloud-annotation",
+        "geolibre-route-animation",
+        "geolibre-sun",
+        "geolibre-timelapse",
+        "gods-eye-view",
+        "maplibre-a5-grid",
+        "maplibre-atmosphere-effects",
+        "maplibre-dggal",
+        "maplibre-dggrid",
+        "maplibre-geohash",
+        "maplibre-gl-components",
+        "maplibre-gl-graticule",
+        "maplibre-gl-overture-maps",
+        "maplibre-gl-swipe",
+        "maplibre-gl-time-slider",
+        "maplibre-h3-grid",
+        "maplibre-olc",
+        "maplibre-s2-grid",
+        "maplibre-samgeo",
+        "maplibre-tilecode",
+    }
+)
+
+
+def json_compatible(value: Any, what: str) -> Any:
+    """Return a deep copy of ``value`` after checking it is plain JSON.
+
+    Mirrors ``isJsonCompatible`` in project.ts, which drops a plugin's settings
+    on load when they are not.
+
+    Args:
+        value: The value to check.
+        what: The argument name, for error messages.
+
+    Returns:
+        A deep copy of the value.
+
+    Raises:
+        ValueError: If the value holds something JSON cannot represent.
+    """
+    try:
+        return json.loads(json.dumps(value, allow_nan=False))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{what} must be plain JSON (objects, lists, strings, numbers): {exc}"
+        ) from exc
+
+
+# -- story maps ----------------------------------------------------------------
+
+#: Mirror of ``DEFAULT_STORY_MAP`` in packages/core/src/types.ts.
+DEFAULT_STORY_MAP: dict[str, Any] = {
+    "title": "",
+    "subtitle": "",
+    "byline": "",
+    "footer": "",
+    "theme": "dark",
+    "showMarkers": False,
+    "markerColor": "#3fb1ce",
+    "inset": False,
+    "insetPosition": "bottom-left",
+    "hideChapterNav": False,
+    "startSlide": "none",
+    "endSlide": "none",
+    "chapters": [],
+}
+
+STORY_THEMES = frozenset({"light", "dark"})
+STORY_ALIGNMENTS = frozenset({"left", "center", "right", "full"})
+STORY_ANIMATIONS = frozenset({"flyTo", "easeTo", "jumpTo"})
+STORY_INSET_POSITIONS = CONTROL_POSITIONS
+STORY_SLIDE_MODES = frozenset({"none", "blank", "black", "global", "adjacent"})
+
+# snake_case keyword -> StoryMap key, with the allowed values (`str` for free
+# text, `bool` for flags, otherwise a vocabulary).
+_STORY_SETTINGS: dict[str, tuple[str, Any]] = {
+    "title": ("title", str),
+    "subtitle": ("subtitle", str),
+    "byline": ("byline", str),
+    "footer": ("footer", str),
+    "theme": ("theme", STORY_THEMES),
+    "show_markers": ("showMarkers", bool),
+    "marker_color": ("markerColor", str),
+    "inset": ("inset", bool),
+    "inset_position": ("insetPosition", STORY_INSET_POSITIONS),
+    "hide_chapter_nav": ("hideChapterNav", bool),
+    "start_slide": ("startSlide", STORY_SLIDE_MODES),
+    "end_slide": ("endSlide", STORY_SLIDE_MODES),
+}
+
+#: The keyword settings :func:`story_map_settings` accepts.
+STORY_SETTING_NAMES = tuple(_STORY_SETTINGS)
+
+
+def story_map_settings(**settings: Any) -> dict[str, Any]:
+    """Validate story map presentation settings and map them to project keys.
+
+    Args:
+        **settings: Any of :data:`STORY_SETTING_NAMES`. ``None`` values are
+            skipped.
+
+    Returns:
+        The settings keyed as ``StoryMap`` stores them (``showMarkers``, ...).
+
+    Raises:
+        ValueError: If a setting is unknown or has a value the app rejects.
+    """
+    unknown = sorted(set(settings) - set(_STORY_SETTINGS))
+    if unknown:
+        raise ValueError(
+            f"unknown story map setting(s) {unknown}; expected any of {list(STORY_SETTING_NAMES)}"
+        )
+    out: dict[str, Any] = {}
+    for name, value in settings.items():
+        if value is None:
+            continue
+        key, rule = _STORY_SETTINGS[name]
+        if rule is str:
+            if not isinstance(value, str):
+                raise ValueError(f"{name} must be a string, got {value!r}")
+        elif rule is bool:
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be true or false, got {value!r}")
+        elif value not in rule:
+            raise ValueError(f"{name} must be one of {sorted(rule)}, got {value!r}")
+        out[key] = value
+    return out
+
+
+def _story_number(value: float) -> float | int:
+    """Store a whole float as an int, the way JSON written by the app reads."""
+    return int(value) if value == int(value) else value
+
+
+def _opacity_changes(entries: Any, what: str) -> list[dict[str, Any]]:
+    """Build a chapter's ``onChapterEnter``/``onChapterExit`` list.
+
+    Args:
+        entries: ``None`` or a list of ``{"layer", "opacity", "duration"}``
+            mappings (``layer_id``/``layerId`` are accepted for ``layer``).
+            Layer references are expected to be resolved to ids by the caller.
+        what: The argument name, for error messages.
+
+    Returns:
+        ``StoryLayerOpacityChange`` dicts.
+
+    Raises:
+        ValueError: If an entry has no layer, or an opacity or duration out of
+            range.
+    """
+    if entries is None:
+        return []
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError(f"{what} must be a list of {{layer, opacity}} entries")
+    changes: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError(f"each {what} entry must be an object, got {entry!r}")
+        layer_id = entry.get("layerId", entry.get("layer_id", entry.get("layer")))
+        if not isinstance(layer_id, str) or not layer_id:
+            raise ValueError(f"each {what} entry needs a layer")
+        opacity = entry.get("opacity", 1)
+        if isinstance(opacity, bool) or not isinstance(opacity, (int, float)):
+            raise ValueError(f"{what} opacity must be a number, got {opacity!r}")
+        if not 0 <= float(opacity) <= 1:
+            raise ValueError(f"{what} opacity must be between 0 and 1, got {opacity!r}")
+        change: dict[str, Any] = {
+            "id": str(entry.get("id") or uuid.uuid4()),
+            "layerId": layer_id,
+            "opacity": _story_number(float(opacity)),
+        }
+        duration = entry.get("duration")
+        if duration is not None:
+            if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+                raise ValueError(f"{what} duration must be milliseconds, got {duration!r}")
+            if not math.isfinite(float(duration)) or duration < 0:
+                raise ValueError(f"{what} duration must be 0 or more, got {duration!r}")
+            change["duration"] = _story_number(float(duration))
+        changes.append(change)
+    return changes
+
+
+def story_chapter(
+    title: str,
+    *,
+    center: tuple[float, float] | list[float],
+    zoom: float,
+    pitch: float = 0,
+    bearing: float = 0,
+    description: str = "",
+    image: str | None = None,
+    alignment: str = "left",
+    hidden: bool = False,
+    map_animation: str = "flyTo",
+    rotate_animation: bool = False,
+    on_enter: Any = None,
+    on_exit: Any = None,
+    chapter_id: str | None = None,
+) -> dict[str, Any]:
+    """Build one story map chapter (``StoryChapter`` in types.ts).
+
+    Values are stored the way ``normalizeStoryChapter`` in project.ts leaves
+    them, so the app loads the chapter unchanged: the bearing is wrapped into
+    0-360, and out-of-range coordinates, zooms, and pitches are refused rather
+    than silently clamped.
+
+    Args:
+        title: Chapter heading.
+        center: Camera target as ``(lng, lat)``.
+        zoom: Camera zoom, 0-24.
+        pitch: Camera tilt in degrees, 0-85.
+        bearing: Camera rotation in degrees.
+        description: Chapter body text.
+        image: Optional image URL (or data URI) shown in the chapter panel.
+        alignment: Text panel position: ``"left"``, ``"center"``, ``"right"``,
+            or ``"full"``.
+        hidden: Hide the text panel while still moving the map.
+        map_animation: ``"flyTo"``, ``"easeTo"``, or ``"jumpTo"``.
+        rotate_animation: Slowly rotate the camera once the move settles.
+        on_enter: Layer opacity changes applied on entering the chapter, as
+            ``{"layer": <id>, "opacity": 0-1, "duration": ms}`` entries.
+        on_exit: Layer opacity changes applied on leaving the chapter.
+        chapter_id: Explicit chapter id; a UUID by default.
+
+    Returns:
+        A chapter dict.
+
+    Raises:
+        ValueError: If any value is out of range or not in its vocabulary.
+    """
+    if not isinstance(title, str):
+        raise ValueError(f"title must be a string, got {title!r}")
+    if not isinstance(description, str):
+        raise ValueError(f"description must be a string, got {description!r}")
+    if not isinstance(center, (list, tuple)) or len(center) != 2:
+        raise ValueError(f"center must be (lng, lat), got {center!r}")
+    try:
+        lng, lat, zoom, pitch, bearing = (float(value) for value in (*center, zoom, pitch, bearing))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"center, zoom, pitch and bearing must be numbers: {exc}") from exc
+    if not (math.isfinite(lng) and -180 <= lng <= 180):
+        raise ValueError(f"longitude must be between -180 and 180, got {center[0]!r}")
+    if not (math.isfinite(lat) and -90 <= lat <= 90):
+        raise ValueError(f"latitude must be between -90 and 90, got {center[1]!r}")
+    if not (math.isfinite(zoom) and 0 <= zoom <= 24):
+        raise ValueError(f"zoom must be between 0 and 24, got {zoom!r}")
+    if not (math.isfinite(pitch) and 0 <= pitch <= 85):
+        raise ValueError(f"pitch must be between 0 and 85, got {pitch!r}")
+    if not math.isfinite(bearing):
+        raise ValueError(f"bearing must be finite, got {bearing!r}")
+    if alignment not in STORY_ALIGNMENTS:
+        raise ValueError(f"alignment must be one of {sorted(STORY_ALIGNMENTS)}, got {alignment!r}")
+    if map_animation not in STORY_ANIMATIONS:
+        raise ValueError(
+            f"map_animation must be one of {sorted(STORY_ANIMATIONS)}, got {map_animation!r}"
+        )
+    if not isinstance(hidden, bool) or not isinstance(rotate_animation, bool):
+        raise ValueError("hidden and rotate_animation must be true or false")
+    if image is not None and not isinstance(image, str):
+        raise ValueError(f"image must be a URL string, got {image!r}")
+    chapter_id = str(chapter_id).strip() if chapter_id is not None else str(uuid.uuid4())
+    if not chapter_id:
+        raise ValueError("chapter_id must not be empty")
+
+    chapter: dict[str, Any] = {
+        "id": chapter_id,
+        "title": title,
+        "description": description,
+    }
+    if image:
+        chapter["image"] = image
+    chapter.update(
+        {
+            "alignment": alignment,
+            "hidden": hidden,
+            "location": {
+                "center": [_story_number(lng), _story_number(lat)],
+                "zoom": _story_number(zoom),
+                "pitch": _story_number(pitch),
+                "bearing": _story_number(bearing % 360),
+            },
+            "mapAnimation": map_animation,
+            "rotateAnimation": rotate_animation,
+            "onChapterEnter": _opacity_changes(on_enter, "on_enter"),
+            "onChapterExit": _opacity_changes(on_exit, "on_exit"),
+        }
+    )
+    return chapter
+
+
+#: Bookmarks the app keeps per project (``MAX_PROJECT_BOOKMARKS`` in project.ts);
+#: any past this are dropped when the project is opened.
+MAX_BOOKMARKS = 500
+
+
+def bookmark_folder(
+    name: str, *, collapsed: bool = False, folder_id: str | None = None
+) -> dict[str, Any]:
+    """Build one Bookmarks panel folder (``ProjectBookmarkGroup`` in types.ts).
+
+    Args:
+        name: Folder name shown in the panel.
+        collapsed: Start with the folder collapsed.
+        folder_id: Explicit folder id; a UUID by default.
+
+    Returns:
+        A folder dict.
+
+    Raises:
+        ValueError: If ``name`` is blank or ``collapsed`` is not a bool.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"folder name must be a non-empty string, got {name!r}")
+    if not isinstance(collapsed, bool):
+        raise ValueError("collapsed must be true or false")
+    folder_id = str(folder_id).strip() if folder_id is not None else str(uuid.uuid4())
+    if not folder_id:
+        raise ValueError("folder_id must not be empty")
+    return {"id": folder_id, "name": name.strip(), "collapsed": collapsed}
+
+
+def bookmark(
+    name: str,
+    *,
+    center: tuple[float, float] | list[float],
+    zoom: float,
+    pitch: float = 0,
+    bearing: float = 0,
+    group_id: str | None = None,
+    visible_layer_ids: list[str] | None = None,
+    bookmark_id: str | None = None,
+    created_at: int | None = None,
+) -> dict[str, Any]:
+    """Build one saved map view for the Bookmarks panel (``ProjectBookmark``).
+
+    Values are stored the way ``normalizeBookmarks`` in project.ts leaves them,
+    so the app loads the bookmark unchanged: the bearing is wrapped into 0-360,
+    and out-of-range coordinates, zooms, and pitches are refused rather than
+    silently clamped.
+
+    Args:
+        name: Bookmark name shown in the panel.
+        center: Camera target as ``(lng, lat)``.
+        zoom: Camera zoom, 0-24.
+        pitch: Camera tilt in degrees, 0-85.
+        bearing: Camera rotation in degrees.
+        group_id: Id of the folder it belongs to; ungrouped when omitted.
+        visible_layer_ids: Layer ids to show when the bookmark is opened (all
+            others are hidden). Omit to leave layer visibility alone.
+        bookmark_id: Explicit bookmark id; a UUID by default.
+        created_at: Creation time in milliseconds since the epoch; now by default.
+
+    Returns:
+        A bookmark dict.
+
+    Raises:
+        ValueError: If any value is out of range or of the wrong type.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError(f"bookmark name must be a non-empty string, got {name!r}")
+    if not isinstance(center, (list, tuple)) or len(center) != 2:
+        raise ValueError(f"center must be (lng, lat), got {center!r}")
+    try:
+        lng, lat, zoom, pitch, bearing = (float(value) for value in (*center, zoom, pitch, bearing))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"center, zoom, pitch and bearing must be numbers: {exc}") from exc
+    if not (math.isfinite(lng) and -180 <= lng <= 180):
+        raise ValueError(f"longitude must be between -180 and 180, got {center[0]!r}")
+    if not (math.isfinite(lat) and -90 <= lat <= 90):
+        raise ValueError(f"latitude must be between -90 and 90, got {center[1]!r}")
+    if not (math.isfinite(zoom) and 0 <= zoom <= 24):
+        raise ValueError(f"zoom must be between 0 and 24, got {zoom!r}")
+    if not (math.isfinite(pitch) and 0 <= pitch <= 85):
+        raise ValueError(f"pitch must be between 0 and 85, got {pitch!r}")
+    if not math.isfinite(bearing):
+        raise ValueError(f"bearing must be finite, got {bearing!r}")
+    bookmark_id = str(bookmark_id).strip() if bookmark_id is not None else str(uuid.uuid4())
+    if not bookmark_id:
+        raise ValueError("bookmark_id must not be empty")
+    if created_at is None:
+        created_at = int(time.time() * 1000)
+    elif not isinstance(created_at, int) or isinstance(created_at, bool) or created_at < 0:
+        raise ValueError(f"created_at must be a non-negative integer, got {created_at!r}")
+
+    entry: dict[str, Any] = {
+        "id": bookmark_id,
+        "name": name.strip(),
+        "lng": lng,
+        "lat": lat,
+        "zoom": zoom,
+        "pitch": pitch,
+        "bearing": bearing % 360,
+        "createdAt": created_at,
+    }
+    if group_id is not None:
+        entry["groupId"] = str(group_id)
+    if visible_layer_ids is not None:
+        if not isinstance(visible_layer_ids, (list, tuple)) or not all(
+            isinstance(layer_id, str) for layer_id in visible_layer_ids
+        ):
+            raise ValueError("visible_layer_ids must be a list of layer id strings")
+        entry["extra"] = {"visibleLayerIds": list(visible_layer_ids)}
+    return entry

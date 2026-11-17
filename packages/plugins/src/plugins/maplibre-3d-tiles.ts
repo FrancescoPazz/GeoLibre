@@ -1,5 +1,6 @@
 import { restoreMapboxTiles, isMapboxTilesLayer, flyToDeckTilesLocation } from "./mapbox-3d-tiles";
 import {
+  allowsCredentialHeaders,
   DEFAULT_LAYER_STYLE,
   getGoogleMapsApiKey,
   GOOGLE_MAPS_API_KEY_HEADER,
@@ -11,18 +12,20 @@ import {
   stripGoogleMapsApiKeyHeader,
   type GeoLibreLayer,
   useAppStore,
+  hasHeaderReferences,
+  resolveProjectHeaderReferences,
 } from "@geolibre/core";
 import type { Layer } from "@deck.gl/core";
 import type { Map as MapLibreMap } from "maplibre-gl";
-import {
-  DEFAULT_TILESET_URL,
+import type {
+  LoadedTilesetMetadata,
   ThreeDTilesControl,
+  ThreeDTilesControlEventHandler,
+  ThreeDTilesControlOptions,
+  ThreeDTilesItemState,
   ThreeDTilesLayer,
-  type LoadedTilesetMetadata,
-  type ThreeDTilesControlEventHandler,
-  type ThreeDTilesControlOptions,
-  type ThreeDTilesItemState,
 } from "maplibre-gl-3d-tiles";
+import { createPluginTranslator } from "../plugin-i18n";
 import type { GeoLibreAppAPI, GeoLibreDeckGL, GeoLibreMapControlPosition } from "../types";
 import {
   acquireMercatorProjectionLock,
@@ -31,6 +34,7 @@ import {
 import { ensureSharedDeckOverlay, setSharedDeckLayers } from "./shared-deck-overlay";
 import {
   addArcgisI3sTilesLayer,
+  probeArcgisI3sLayers,
   applyThreeDTilesTilesetMemoryLimit,
   arcgisI3sSceneLayerName,
   createArcgisI3sStoreLayer,
@@ -75,6 +79,11 @@ const GOOGLE_PHOTOREALISTIC_TILES_LABEL = "Google Photorealistic 3D Tiles";
 const ARCGIS_I3S_SAMPLE_TILES_URL =
   "https://tiles.arcgis.com/tiles/z2tnIkrLQ2BRzr6P/arcgis/rest/services/SanFrancisco_Bldgs/SceneServer/layers/0";
 const ARCGIS_I3S_SAMPLE_TILES_LABEL = "San Francisco Buildings (ArcGIS I3S)";
+// Esri's Building E in Redlands, a WGS84 Building Scene Layer (BIM). Its heights
+// are NAVD 88 elevations near 383 m, so it also exercises grounding on a flat map.
+const ARCGIS_I3S_BUILDING_SAMPLE_TILES_URL =
+  "https://tiles.arcgis.com/tiles/cFEFS0EWrhfDeVw9/arcgis/rest/services/BSL__4326__US_Redlands__BuildingE/SceneServer/layers/0";
+const ARCGIS_I3S_BUILDING_SAMPLE_TILES_LABEL = "Redlands Building E (ArcGIS I3S BIM)";
 const THREE_D_BAG_SAMPLE_TILES_URL =
   "https://data.3dbag.nl/v20250903/cesium3dtiles/lod22/tileset.json";
 const THREE_D_BAG_SAMPLE_TILES_LABEL = "3D BAG Netherlands (LoD 2.2)";
@@ -91,32 +100,55 @@ const GOOGLE_PHOTOREALISTIC_INITIAL_VIEW = {
   pitch: 60,
 };
 
-const THREE_D_TILES_OPTIONS = {
-  className: "geolibre-3d-tiles-control",
-  collapsed: true,
-  collapseOnClickOutside: false,
-  layerId: THREE_D_TILES_LAYER_ID,
-  panelWidth: 365,
-  title: "Add 3D Tiles Layer",
-  // Empty input; the sample tileset is the explicit, opt-in way to load one.
-  tilesetUrl: "",
-  sampleData: [
-    { label: "AGI HQ", url: DEFAULT_TILESET_URL },
-    {
-      label: GOOGLE_PHOTOREALISTIC_TILES_LABEL,
-      url: GOOGLE_PHOTOREALISTIC_TILES_URL,
-    },
-    {
-      label: ARCGIS_I3S_SAMPLE_TILES_LABEL,
-      url: ARCGIS_I3S_SAMPLE_TILES_URL,
-    },
-    {
-      label: THREE_D_BAG_SAMPLE_TILES_LABEL,
-      url: THREE_D_BAG_SAMPLE_TILES_URL,
-      altitudeOffset: THREE_D_BAG_SAMPLE_ALTITUDE_OFFSET,
-    },
-  ],
-} satisfies ThreeDTilesControlOptions;
+/**
+ * Builds the options for a new ThreeDTilesControl.
+ *
+ * @param defaultTilesetUrl - The package's sample tileset URL, read from the
+ *   lazily imported module.
+ * @returns The control options.
+ */
+const threeDTilesOptions = (defaultTilesetUrl: string) =>
+  ({
+    className: "geolibre-3d-tiles-control",
+    collapsed: true,
+    collapseOnClickOutside: false,
+    layerId: THREE_D_TILES_LAYER_ID,
+    panelWidth: 365,
+    title: "Add 3D Tiles layer",
+    // Empty input; the sample tileset is the explicit, opt-in way to load one.
+    tilesetUrl: "",
+    sampleData: [
+      { label: "AGI HQ", url: defaultTilesetUrl },
+      {
+        label: GOOGLE_PHOTOREALISTIC_TILES_LABEL,
+        url: GOOGLE_PHOTOREALISTIC_TILES_URL,
+      },
+      {
+        label: ARCGIS_I3S_SAMPLE_TILES_LABEL,
+        url: ARCGIS_I3S_SAMPLE_TILES_URL,
+      },
+      {
+        label: ARCGIS_I3S_BUILDING_SAMPLE_TILES_LABEL,
+        url: ARCGIS_I3S_BUILDING_SAMPLE_TILES_URL,
+      },
+      {
+        label: THREE_D_BAG_SAMPLE_TILES_LABEL,
+        url: THREE_D_BAG_SAMPLE_TILES_URL,
+        altitudeOffset: THREE_D_BAG_SAMPLE_ALTITUDE_OFFSET,
+      },
+    ],
+  }) satisfies ThreeDTilesControlOptions;
+
+type ThreeDTilesModule = typeof import("maplibre-gl-3d-tiles");
+
+// maplibre-gl-3d-tiles (~0.8 MB) is imported on first use, not at startup.
+// The resolved module is kept so code that runs once a control exists can use
+// it synchronously.
+let threeDTilesModule: ThreeDTilesModule | null = null;
+let threeDTilesModulePromise: Promise<ThreeDTilesModule> | null = null;
+// Bumped by closeThreeDTilesLayerPanel so an open or restore still awaiting the
+// package import does not mount the control after the panel was closed.
+let threeDTilesLoadGeneration = 0;
 
 let threeDTilesControl: ThreeDTilesControl | null = null;
 let threeDTilesControlMounted = false;
@@ -124,7 +156,11 @@ let threeDTilesPanelPinned = false;
 let threeDTilesStoreUnsubscribe: (() => void) | null = null;
 let threeDTilesStoreSyncSuspended = 0;
 let threeDTilesRuntimeEnvUnsubscribe: (() => void) | null = null;
+/** Stops re-labelling the panel's own controls on a language change. */
+let threeDTilesLocaleUnsubscribe: (() => void) | null = null;
 let activeThreeDTilesApp: GeoLibreAppAPI | null = null;
+/** Resolves `plugin.3d-tiles.*` keys through the active app, falling back to English. */
+const tr = createPluginTranslator(() => activeThreeDTilesApp, "3d-tiles");
 const pendingThreeDTilesStyleRestores = new WeakSet<MapLibreMap>();
 
 // The Google tiles render through the shared interleaved deck overlay
@@ -171,11 +207,61 @@ interface ThreeDTilesControlInternals {
   };
 }
 
+/**
+ * Loads maplibre-gl-3d-tiles on first use.
+ *
+ * A failed load (e.g. offline) is dropped so the next call retries the import.
+ *
+ * @returns The package module.
+ */
+function loadThreeDTilesModule(): Promise<ThreeDTilesModule> {
+  if (threeDTilesModulePromise) return threeDTilesModulePromise;
+  const promise = import("maplibre-gl-3d-tiles").then((module) => {
+    // When the stale-chunk handler cancels Vite's preload error, the import
+    // resolves to undefined instead of rejecting; treat that as a failure.
+    if (!module) throw new Error("maplibre-gl-3d-tiles failed to load");
+    threeDTilesModule = module;
+    return module;
+  });
+  threeDTilesModulePromise = promise;
+  promise.catch(() => {
+    if (threeDTilesModulePromise === promise) threeDTilesModulePromise = null;
+  });
+  return promise;
+}
+
+/**
+ * Runs `callback` once maplibre-gl-3d-tiles is loaded: synchronously when it
+ * already is, otherwise after the import resolves. The callback is skipped when
+ * the panel was closed (or a new project reset it) while the package loaded.
+ *
+ * @param action - What is being loaded for, used in the failure log.
+ * @param callback - The work that needs the package.
+ */
+function withThreeDTilesModule(action: string, callback: () => void): void {
+  if (threeDTilesModule) {
+    callback();
+    return;
+  }
+  const generation = threeDTilesLoadGeneration;
+  loadThreeDTilesModule().then(
+    () => {
+      if (generation === threeDTilesLoadGeneration) callback();
+    },
+    (error: unknown) => {
+      console.error(`[GeoLibre] Failed to load the 3D Tiles control to ${action}`, error);
+    },
+  );
+}
+
 export function openThreeDTilesLayerPanel(app: GeoLibreAppAPI): void {
-  openStandaloneThreeDTilesControl(app);
+  withThreeDTilesModule("open the panel", () => {
+    openStandaloneThreeDTilesControl(app);
+  });
 }
 
 export function closeThreeDTilesLayerPanel(app: GeoLibreAppAPI): void {
+  threeDTilesLoadGeneration += 1;
   if (threeDTilesControl && threeDTilesControlMounted) {
     app.removeMapControl(threeDTilesControl);
     return;
@@ -189,7 +275,15 @@ export function restoreThreeDTilesLayers(app: GeoLibreAppAPI): void {
   // Google and I3S alike, so there is nothing to bind to a renderer here, and
   // the control's facade map has neither the style layers the MapLibre restore
   // queries nor the deck overlay the Google/I3S restores need (issue #2505).
-  if (renderer === "cesium") return;
+  // Each engine restores 3D Tiles through its own path.
+  // eslint-disable-next-line local/no-renderer-kind-checks -- picks the engine's own adapter
+  if (renderer === "cesium") {
+    // The globe reads no layer document itself; probe scene layers for the
+    // Building settings it honours (#3374).
+    probeArcgisI3sLayers();
+    return;
+  }
+  // eslint-disable-next-line local/no-renderer-kind-checks -- picks the engine's own adapter
   if (renderer === "arcgis") {
     if (useAppStore.getState().layers.some(isMapboxTilesLayer))
       void restoreMapboxTiles(app).catch(console.error);
@@ -197,12 +291,25 @@ export function restoreThreeDTilesLayers(app: GeoLibreAppAPI): void {
   }
   restoreGooglePhotorealisticTilesLayers(app);
   restoreArcgisI3sTilesLayers(app);
+  // eslint-disable-next-line local/no-renderer-kind-checks -- picks the engine's own adapter
   if (renderer === "mapbox") {
     if (useAppStore.getState().layers.some(isMapboxTilesLayer))
       void restoreMapboxTiles(app).catch(console.error);
     return;
   }
 
+  if (!useAppStore.getState().layers.some(isThreeDTilesControlLayer)) return;
+  withThreeDTilesModule("restore 3D Tiles layers", () => restoreThreeDTilesControlLayers(app));
+}
+
+/**
+ * Restores the tileset layers the MapLibre 3D Tiles control paints. Needs the
+ * maplibre-gl-3d-tiles module to be loaded.
+ *
+ * @param app - The GeoLibre app API.
+ */
+function restoreThreeDTilesControlLayers(app: GeoLibreAppAPI): void {
+  // Re-read the store: the project may have changed while the package loaded.
   const layers = useAppStore.getState().layers.filter(isThreeDTilesControlLayer);
   if (layers.length === 0) return;
 
@@ -293,12 +400,14 @@ function ensureThreeDTilesControl(app: GeoLibreAppAPI): ThreeDTilesControl | nul
     }
     threeDTilesControlMounted = true;
   }
+  threeDTilesLocaleUnsubscribe ??= app.onLocaleChange?.(relabelThreeDTilesPanel) ?? null;
 
   return threeDTilesControl;
 }
 
 function createThreeDTilesControl(): ThreeDTilesControl {
-  const control = new ThreeDTilesControl(THREE_D_TILES_OPTIONS);
+  const { DEFAULT_TILESET_URL, ThreeDTilesControl } = requireThreeDTilesModule();
+  const control = new ThreeDTilesControl(threeDTilesOptions(DEFAULT_TILESET_URL));
   const syncHandler: ThreeDTilesControlEventHandler = () => {
     if (!isThreeDTilesStoreSyncSuspended()) {
       syncThreeDTilesStoreFromControl(control);
@@ -314,6 +423,10 @@ function createThreeDTilesControl(): ThreeDTilesControl {
   addThreeDTilesRuntimeEnvListener(control);
   threeDTilesStoreUnsubscribe ??= useAppStore.subscribe((state, previous) => {
     if (state.layers !== previous.layers) {
+      // Forget the resolved headers of tilesets that left the project.
+      for (const id of threeDTilesResolvedHeaders.keys()) {
+        if (!state.layers.some((layer) => layer.id === id)) threeDTilesResolvedHeaders.delete(id);
+      }
       updateDeckTilesPanelList(control);
     }
 
@@ -344,6 +457,13 @@ function createThreeDTilesControl(): ThreeDTilesControl {
 
       if (currentLayer.opacity !== layer.opacity) {
         setThreeDTilesOpacity(control, currentLayer.id, currentLayer.opacity);
+      }
+
+      // The Style panel's height field writes the offset to the store (#3107);
+      // the control repositions the loaded tileset without reloading it.
+      const offset = numberValue(currentLayer.source.altitudeOffset, 0);
+      if (offset !== numberValue(layer.source.altitudeOffset, 0)) {
+        setThreeDTilesAltitudeOffset(control, currentLayer.id, offset);
       }
     }
   });
@@ -410,10 +530,15 @@ function hydrateThreeDTilesControlFromStore(
   }
 }
 
+/**
+ * @param flyToOnLoad Fly to the tileset once it loads, as the panel's "Fly to
+ *   tileset after load" does for the library's own submit path.
+ */
 function restoreThreeDTilesMapLayer(
   control: ThreeDTilesControl,
   layer: GeoLibreLayer,
   url: string,
+  flyToOnLoad = false,
 ): void {
   const map = control.getMap();
   const controlLayers = getThreeDTilesControlLayers(control);
@@ -424,9 +549,12 @@ function restoreThreeDTilesMapLayer(
   const layerName = layer.name || layerNameFromUrl(url, id);
   const beforeId = validThreeDTilesBeforeId(control, layer.beforeId);
   const altitudeOffset = numberValue(layer.source.altitudeOffset, 0);
-  const requestHeaders = resolveThreeDTilesRequestHeaders(
+  // The control state is persisted back to the store (createThreeDTilesStoreLayer),
+  // so it keeps the `${NAME}` template; only the rendered layer gets values.
+  const requestHeaders = stringRecordValue(layer.source.requestHeaders);
+  const loadHeaders = resolveThreeDTilesRequestHeaders(
     url,
-    stringRecordValue(layer.source.requestHeaders),
+    resolveProjectHeaderReferences(requestHeaders),
   );
   const existingTilesets = control.getState().tilesets.filter((tileset) => tileset.id !== id);
   const savedCenter = lngLatPairValue(layer.metadata.center);
@@ -471,15 +599,27 @@ function restoreThreeDTilesMapLayer(
     return;
   }
 
+  if (loadHeaders && Object.keys(loadHeaders).length > 0 && !allowsCredentialHeaders(url)) {
+    updateThreeDTilesError(control, id, new Error(THREE_D_TILES_INSECURE_HEADERS));
+    return;
+  }
+  if (hasHeaderReferences(requestHeaders)) {
+    threeDTilesResolvedHeaders.set(id, JSON.stringify(loadHeaders ?? null));
+  }
+
+  const { ThreeDTilesLayer } = requireThreeDTilesModule();
   const restoredLayer = new ThreeDTilesLayer({
     id: layerId,
     tilesetUrl: url,
     altitudeOffset,
     opacity: layer.opacity,
     visible: layer.visible,
-    requestHeaders,
+    requestHeaders: loadHeaders,
     ...getThreeDTilesDecoderOptions(control),
-    onLoad: (metadata) => updateThreeDTilesLoaded(control, id, metadata),
+    onLoad: (metadata) => {
+      updateThreeDTilesLoaded(control, id, metadata);
+      if (flyToOnLoad) control.flyToTileset(id);
+    },
     onError: (error) => updateThreeDTilesError(control, id, error),
   });
   // ThreeDTilesControl keys its internal `_layers` map by tileset id (see
@@ -487,6 +627,47 @@ function restoreThreeDTilesMapLayer(
   // this entry. The ThreeDTilesLayer itself carries the native map layer id.
   controlLayers.set(id, restoredLayer);
   map.addLayer(restoredLayer, beforeId);
+}
+
+const THREE_D_TILES_INSECURE_HEADERS =
+  "Request headers are only sent to an HTTPS tileset URL (or localhost).";
+
+/**
+ * The resolved `${NAME}` headers each native tileset was built with, so a
+ * changed variable can rebuild exactly the tilesets it affects.
+ */
+const threeDTilesResolvedHeaders = new Map<string, string>();
+
+/**
+ * Rebuild native tilesets whose `${NAME}` request headers resolve differently
+ * now. The store records hold only the template, so nothing else notices.
+ */
+function rebuildThreeDTilesWithChangedHeaders(control: ThreeDTilesControl): void {
+  if (isStoreDrivenThreeDTilesRenderer()) return;
+  const layers = new Map(
+    useAppStore
+      .getState()
+      .layers.filter(isThreeDTilesControlLayer)
+      .map((layer) => [layer.id, layer]),
+  );
+  for (const [id, built] of threeDTilesResolvedHeaders) {
+    const layer = layers.get(id);
+    const url = layer ? (stringValue(layer.source.url) ?? layer.sourcePath) : undefined;
+    if (!layer || !url) {
+      threeDTilesResolvedHeaders.delete(id);
+      continue;
+    }
+    const now = resolveThreeDTilesRequestHeaders(
+      url,
+      resolveProjectHeaderReferences(stringRecordValue(layer.source.requestHeaders)),
+    );
+    if (JSON.stringify(now ?? null) === built) continue;
+    threeDTilesResolvedHeaders.delete(id);
+    runWithThreeDTilesStoreSyncSuspended(() => {
+      control.removeTileset(id);
+      restoreThreeDTilesMapLayer(control, layer, url);
+    });
+  }
 }
 
 function updateThreeDTilesLoaded(
@@ -613,6 +794,19 @@ function createThreeDTilesLayerUpdate(
   return Object.keys(update).length > 0 ? update : null;
 }
 
+/**
+ * Returns the loaded maplibre-gl-3d-tiles module. Only called on paths that run
+ * after {@link withThreeDTilesModule} resolved it.
+ *
+ * @returns The package module.
+ */
+function requireThreeDTilesModule(): ThreeDTilesModule {
+  if (!threeDTilesModule) {
+    throw new Error("maplibre-gl-3d-tiles is used before it was loaded");
+  }
+  return threeDTilesModule;
+}
+
 function patchThreeDTilesControlOnRemove(control: ThreeDTilesControl): void {
   const originalOnRemove = control.onRemove.bind(control);
   control.onRemove = () => {
@@ -628,6 +822,8 @@ function resetThreeDTilesControl(control: ThreeDTilesControl | null): void {
   threeDTilesStoreUnsubscribe = null;
   threeDTilesRuntimeEnvUnsubscribe?.();
   threeDTilesRuntimeEnvUnsubscribe = null;
+  threeDTilesLocaleUnsubscribe?.();
+  threeDTilesLocaleUnsubscribe = null;
   threeDTilesPanelPinned = false;
   threeDTilesControlMounted = false;
   threeDTilesControl = null;
@@ -654,6 +850,7 @@ function activeThreeDTilesRenderer(): string {
  * out of the way and let the store record reach the globe (issue #2505).
  */
 function isGlobeThreeDTilesRenderer(): boolean {
+  // eslint-disable-next-line local/no-renderer-kind-checks -- the globe's facade map has no style layers
   return activeThreeDTilesRenderer() === "cesium";
 }
 
@@ -663,6 +860,7 @@ function isGlobeThreeDTilesRenderer(): boolean {
  * through deck.gl, Cesium through its own tileset primitives.
  */
 function isStoreDrivenThreeDTilesRenderer(): boolean {
+  // eslint-disable-next-line local/no-renderer-kind-checks -- picks the engine's own adapter
   return ["mapbox", "arcgis", "cesium"].includes(activeThreeDTilesRenderer());
 }
 
@@ -694,6 +892,7 @@ function installThreeDTilesPanelHandlers(control: ThreeDTilesControl | null): vo
   const panel = getThreeDTilesPanel(control);
   if (panel) {
     panel.classList.add("geolibre-3d-tiles-panel");
+    applyThreeDTilesHeaderHint(panel);
     installThreeDTilesCloseHandler(control, panel);
     if (control) {
       installGooglePhotorealisticTilesPanelHandlers(control, panel);
@@ -704,11 +903,38 @@ function installThreeDTilesPanelHandlers(control: ThreeDTilesControl | null): vo
   installThreeDTilesToggleHandler(control);
 }
 
+const THREE_D_TILES_HEADER_PLACEHOLDER = "Authorization: Bearer ${TOKEN}";
+const THREE_D_TILES_HEADER_HINT =
+  "One per line as Name: Value. Use ${NAME} to insert an environment variable from Settings → Environment; the value is not saved with the layer.";
+
+/**
+ * Point the Request headers field at `${NAME}` references, so a token lives
+ * in Settings → Environment instead of on the layer.
+ */
+function applyThreeDTilesHeaderHint(panel: HTMLElement): void {
+  if (panel.dataset.geolibreHeaderHint === "true") return;
+  const headersInput = panel.querySelector<HTMLTextAreaElement>(
+    'textarea[aria-label="Request headers"]',
+  );
+  if (!headersInput) return;
+  panel.dataset.geolibreHeaderHint = "true";
+  headersInput.placeholder = THREE_D_TILES_HEADER_PLACEHOLDER;
+  const hint = headersInput
+    .closest(".three-d-tiles-field")
+    ?.querySelector<HTMLElement>(".three-d-tiles-field-hint");
+  if (hint) {
+    hint.textContent =
+      activeThreeDTilesApp?.translate?.("plugin.3d-tiles.headersHint", THREE_D_TILES_HEADER_HINT) ??
+      THREE_D_TILES_HEADER_HINT;
+  }
+}
+
 function addThreeDTilesRuntimeEnvListener(control: ThreeDTilesControl): void {
   if (threeDTilesRuntimeEnvUnsubscribe || typeof window === "undefined") return;
 
   const handleRuntimeEnvChange = () => {
     applyGooglePhotorealisticTilesPanelDefaults(control);
+    rebuildThreeDTilesWithChangedHeaders(control);
     // The resolved API key may have changed, but the persisted layer records
     // (which never carry the key) have not, so the render signature would be
     // unchanged. Force a rebuild so the new key reaches the deck.gl layer.
@@ -734,6 +960,13 @@ function installGooglePhotorealisticTilesPanelHandlers(
   const urlInput = getThreeDTilesUrlInput(panel);
   urlInput?.addEventListener("input", applyDefaults);
   urlInput?.addEventListener("change", applyDefaults);
+  // Once the user edits the Layer name it is theirs, even if they type a
+  // sample label back in, so forget the name a sample pick filled in.
+  panel
+    .querySelector<HTMLInputElement>('input[aria-label="Layer name"]')
+    ?.addEventListener("input", () => {
+      delete panel.dataset.geolibreSampleLayerName;
+    });
   // Intercept the submit on the panel (an ancestor of the form) during the
   // capture phase so this runs before maplibre-gl-3d-tiles' own form-level
   // submit listener. A capture listener on the form target itself would not:
@@ -765,6 +998,7 @@ function installGooglePhotorealisticTilesPanelHandlers(
         return;
       }
       if (
+        // eslint-disable-next-line local/no-renderer-kind-checks -- the ArcGIS deck bridge has no Google or I3S tiles
         activeThreeDTilesRenderer() === "arcgis" &&
         (isGooglePhotorealisticTilesetUrl(url) || isArcgisI3sSceneLayerUrl(url))
       ) {
@@ -782,6 +1016,7 @@ function installGooglePhotorealisticTilesPanelHandlers(
       if (
         url &&
         activeThreeDTilesApp &&
+        // eslint-disable-next-line local/no-renderer-kind-checks -- picks the engine's own adapter
         ["mapbox", "arcgis"].includes(activeThreeDTilesRenderer()) &&
         !isGooglePhotorealisticTilesetUrl(url) &&
         !isArcgisI3sSceneLayerUrl(url)
@@ -799,6 +1034,48 @@ function installGooglePhotorealisticTilesPanelHandlers(
         control.collapse();
         return;
       }
+      const panelHeaders = parseThreeDTilesRequestHeaders(
+        panel.querySelector<HTMLTextAreaElement>('textarea[aria-label="Request headers"]')?.value ??
+          "",
+      );
+      const nativeTileset =
+        url && !isGooglePhotorealisticTilesetUrl(url) && !isArcgisI3sSceneLayerUrl(url);
+      // The library's own loader sends headers to the URL as given, plaintext
+      // included; keep credentials to HTTPS (or localhost).
+      if (
+        nativeTileset &&
+        panelHeaders &&
+        Object.keys(panelHeaders).length > 0 &&
+        !allowsCredentialHeaders(url)
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setThreeDTilesPanelError(
+          panel,
+          "plugin.3d-tiles.insecureHeaders",
+          THREE_D_TILES_INSECURE_HEADERS,
+        );
+        return;
+      }
+      // The library's own `loadTileset` would send `${NAME}` literally and
+      // keep it in its state, so a templated header is loaded here instead:
+      // the store record and control state hold the template, only the
+      // ThreeDTilesLayer gets the resolved values.
+      if (nativeTileset && hasHeaderReferences(panelHeaders)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const tileset = threeDTilesItemStateFromPanel(control, panel, url, "loading");
+        const layer = createThreeDTilesStoreLayer(tileset, control.getState().opacity);
+        const flyToOnLoad =
+          panel.querySelector<HTMLInputElement>('input[aria-label="Fly to tileset after load"]')
+            ?.checked ?? true;
+        runWithThreeDTilesStoreSyncSuspended(() => {
+          useAppStore.getState().addLayer(layer);
+          restoreThreeDTilesMapLayer(control, layer, url, flyToOnLoad);
+        });
+        control.collapse();
+        return;
+      }
       if (!isGooglePhotorealisticTilesetUrl(url)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -810,12 +1087,55 @@ function installGooglePhotorealisticTilesPanelHandlers(
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const option = target.closest<HTMLButtonElement>(".three-d-tiles-sample-option");
-    if (option?.title === GOOGLE_PHOTOREALISTIC_TILES_URL) {
-      deferApplyDefaults();
+    if (!option) return;
+    // The library's own option handler (on the option itself, so it ran
+    // first) only fills the URL and altitude; name the layer after the sample
+    // too, unless the user typed a name of their own (#3258).
+    const layerNameInput = panel.querySelector<HTMLInputElement>('input[aria-label="Layer name"]');
+    if (layerNameInput) {
+      const currentName = layerNameInput.value;
+      const nextName = threeDTilesSampleLayerName(
+        currentName,
+        option.textContent ?? "",
+        panel.dataset.geolibreSampleLayerName,
+      );
+      layerNameInput.value = nextName;
+      // Remember only a name this pick filled in, so the next pick can tell it
+      // apart from one the user typed (even one that matches a sample label).
+      if (nextName !== currentName) panel.dataset.geolibreSampleLayerName = nextName;
     }
+    // Run the URL defaults for every pick, not only the Google one: the
+    // library sets the URL without an input event, so switching from the
+    // Google sample to another would otherwise keep its masked
+    // X-GOOG-API-KEY header.
+    deferApplyDefaults();
   });
 
   applyDefaults();
+}
+
+/**
+ * The Layer name to show after a sample tileset is picked. A blank name, the
+ * "3D Tiles" default, or the name the previous sample pick filled in is
+ * replaced by the picked sample's label, so switching samples renames the
+ * layer; any other name is one the user typed and is kept.
+ *
+ * @param currentName - The Layer name field's current value.
+ * @param sampleLabel - The label of the sample that was just picked.
+ * @param lastSampleName - The name the previous sample pick filled in, if any.
+ * @returns The Layer name to put in the field.
+ */
+export function threeDTilesSampleLayerName(
+  currentName: string,
+  sampleLabel: string,
+  lastSampleName?: string,
+): string {
+  const label = sampleLabel.trim();
+  if (!label) return currentName;
+  const current = currentName.trim();
+  const replaceable =
+    !current || current === "3D Tiles" || (!!lastSampleName && current === lastSampleName.trim());
+  return replaceable ? label : currentName;
 }
 
 /**
@@ -932,10 +1252,10 @@ export function createThreeDTilesGlobeStoreLayer(tileset: ThreeDTilesItemState):
  * offset and resolves the same request headers the 2D path resolves, and
  * reports a load failure through the engine's readiness channel rather than
  * back onto the record, so the entry is recorded as loaded rather than left
- * reading "loading" forever. The panel's "Fly to tileset after load" has no
- * effect here for the same reason the Cesium Ion source does not fit either:
- * the extent is only known once the globe has the tileset, and the Layers
- * panel's zoom-to reaches it from there.
+ * reading "loading" forever. The panel's "Fly to tileset after load" asks the
+ * engine to frame the layer (`fitLayer`), which the globe defers until the
+ * tileset has loaded and its extent is known; without it, a tileset added
+ * from the world view loaded out of sight and looked as if it had not drawn.
  *
  * @param control - The panel's control, collapsed once the layer is added.
  * @param panel - The panel DOM holding the form fields.
@@ -967,7 +1287,14 @@ function addThreeDTilesLayerForGlobe(
     "loaded",
     threeDTilesDefaultLayerName(url),
   );
-  useAppStore.getState().addLayer(createThreeDTilesGlobeStoreLayer(tileset));
+  const layer = createThreeDTilesGlobeStoreLayer(tileset);
+  useAppStore.getState().addLayer(layer);
+  probeArcgisI3sLayers();
+  // The checkbox is on by default, so a panel without it flies, as in 2D.
+  const flyTo =
+    panel.querySelector<HTMLInputElement>('input[aria-label="Fly to tileset after load"]')
+      ?.checked ?? true;
+  if (flyTo) activeThreeDTilesApp?.fitLayer?.(layer.id);
   control.collapse();
 }
 
@@ -985,12 +1312,15 @@ function applyGooglePhotorealisticTilesPanelDefaults(control: ThreeDTilesControl
       'textarea[aria-label="Request headers"]',
     );
     if (headersInput) {
+      const rawHeaders = parseThreeDTilesRequestHeaders(headersInput.value);
+      // Keep a typed key in panel memory (never in the field) so switching to
+      // another sample and back to Google does not make the user re-enter it.
+      rememberGoogleMapsApiKeyFromHeaders(panel, rawHeaders);
       headersInput.value = serializeThreeDTilesRequestHeaders(
-        stripGoogleMapsApiKeyHeader(parseThreeDTilesRequestHeaders(headersInput.value)),
+        stripGoogleMapsApiKeyHeader(rawHeaders),
       );
-      headersInput.placeholder = "";
+      headersInput.placeholder = THREE_D_TILES_HEADER_PLACEHOLDER;
     }
-    googleTilesApiKeysByPanel.delete(panel);
     panel.dataset.geolibreGoogleMapsApiKeyVisible = "false";
     // Re-arm the one-shot altitude default so it applies again if the user
     // returns to a Google URL.
@@ -1007,6 +1337,8 @@ function applyGooglePhotorealisticTilesPanelDefaults(control: ThreeDTilesControl
       layerNameInput.value.trim() === layerNameFromUrl(GOOGLE_PHOTOREALISTIC_TILES_URL, "3D Tiles"))
   ) {
     layerNameInput.value = GOOGLE_PHOTOREALISTIC_TILES_LABEL;
+    // An auto-filled name, so a later sample pick may replace it.
+    panel.dataset.geolibreSampleLayerName = GOOGLE_PHOTOREALISTIC_TILES_LABEL;
   }
 
   const altitudeInput = panel.querySelector<HTMLInputElement>(
@@ -1066,9 +1398,8 @@ function installGooglePhotorealisticHeadersToggle(
   const toggle = document.createElement("button");
   toggle.type = "button";
   toggle.className = "geolibre-google-tiles-key-toggle three-d-tiles-small-button";
-  toggle.textContent = "Show key";
-  toggle.setAttribute("aria-label", "Show Google Maps API key");
   toggle.setAttribute("aria-pressed", "false");
+  updateGooglePhotorealisticHeadersToggle(toggle, false);
   toggle.hidden = true;
 
   toggle.addEventListener("click", () => {
@@ -1095,14 +1426,47 @@ function setGooglePhotorealisticHeadersToggleVisible(panel: HTMLElement, visible
   if (toggle) toggle.hidden = !visible;
 }
 
+/** Labels a layer row's visibility checkbox from its `data-geolibre-toggle-name`. */
+function labelThreeDTilesVisibilityToggle(input: HTMLInputElement): void {
+  input.setAttribute(
+    "aria-label",
+    tr("toggleLayerAria", "Toggle {{name}}", { name: input.dataset.geolibreToggleName ?? "" }),
+  );
+}
+
+/**
+ * Re-applies the text GeoLibre adds to the 3D Tiles panel (the API-key toggle
+ * and the layer rows' visibility checkboxes) after the app language changes.
+ * The rest of the panel is the upstream control's own DOM.
+ */
+function relabelThreeDTilesPanel(): void {
+  if (typeof document === "undefined") return;
+  for (const toggle of document.querySelectorAll<HTMLButtonElement>(
+    ".geolibre-google-tiles-key-toggle",
+  )) {
+    const panel = toggle.closest<HTMLElement>("[data-geolibre-google-maps-api-key-visible]");
+    updateGooglePhotorealisticHeadersToggle(
+      toggle,
+      panel?.dataset.geolibreGoogleMapsApiKeyVisible === "true",
+    );
+  }
+  for (const input of document.querySelectorAll<HTMLInputElement>(
+    "input[data-geolibre-toggle-name]",
+  )) {
+    labelThreeDTilesVisibilityToggle(input);
+  }
+}
+
 function updateGooglePhotorealisticHeadersToggle(
   toggle: HTMLButtonElement,
   visible: boolean,
 ): void {
-  toggle.textContent = visible ? "Hide key" : "Show key";
+  toggle.textContent = visible ? tr("hideKey", "Hide key") : tr("showKey", "Show key");
   toggle.setAttribute(
     "aria-label",
-    visible ? "Hide Google Maps API key" : "Show Google Maps API key",
+    visible
+      ? tr("hideKeyAria", "Hide Google Maps API key")
+      : tr("showKeyAria", "Show Google Maps API key"),
   );
   toggle.setAttribute("aria-pressed", visible ? "true" : "false");
 }
@@ -1451,7 +1815,8 @@ function createDeckTilesPanelListItem(layer: GeoLibreLayer): HTMLElement {
   const visible = document.createElement("input");
   visible.type = "checkbox";
   visible.checked = layer.visible;
-  visible.setAttribute("aria-label", `Toggle ${layer.name || GOOGLE_PHOTOREALISTIC_TILES_LABEL}`);
+  visible.dataset.geolibreToggleName = layer.name || GOOGLE_PHOTOREALISTIC_TILES_LABEL;
+  labelThreeDTilesVisibilityToggle(visible);
   visible.addEventListener("change", () => {
     useAppStore.getState().updateLayer(layer.id, { visible: visible.checked });
   });
@@ -1637,7 +2002,9 @@ function renderGooglePhotorealisticTilesLayers(): void {
 function googleTilesLayerSignature(layers: GeoLibreLayer[]): string {
   return layers
     .map((layer) => {
-      const headers = stringRecordValue(layer.source.requestHeaders);
+      const headers = resolveProjectHeaderReferences(
+        stringRecordValue(layer.source.requestHeaders),
+      );
       const altitudeOffset = numberValue(layer.source.altitudeOffset, 0);
       // Sign both header names AND values: a changed custom header value must
       // produce a new signature so the Tile3DLayer rebuilds rather than reusing
@@ -1657,7 +2024,7 @@ function buildGooglePhotorealisticTilesDeckLayer(layer: GeoLibreLayer): Layer | 
   const altitudeOffset = numberValue(layer.source.altitudeOffset, 0);
   const requestHeaders = resolveThreeDTilesRequestHeaders(
     GOOGLE_PHOTOREALISTIC_TILES_URL,
-    stringRecordValue(layer.source.requestHeaders),
+    resolveProjectHeaderReferences(stringRecordValue(layer.source.requestHeaders)),
     googleTilesApiKeysByLayerId.get(layer.id),
   );
 
@@ -1810,6 +2177,16 @@ function keepThreeDTilesPanelExpanded(control: ThreeDTilesControl): void {
 function setThreeDTilesOpacity(control: ThreeDTilesControl, id: string, opacity: number): void {
   runWithThreeDTilesStoreSyncSuspended(() => {
     control.setOpacity(opacity, id, false);
+  });
+}
+
+function setThreeDTilesAltitudeOffset(
+  control: ThreeDTilesControl,
+  id: string,
+  altitudeOffset: number,
+): void {
+  runWithThreeDTilesStoreSyncSuspended(() => {
+    control.setAltitudeOffset(altitudeOffset, id, false);
   });
 }
 

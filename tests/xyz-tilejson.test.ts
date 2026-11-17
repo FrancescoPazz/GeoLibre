@@ -219,7 +219,7 @@ describe("raster TileJSON import", () => {
   });
 
   it("retains TileJSON metadata through the desktop CORS fallback", async () => {
-    const globals = globalThis as typeof globalThis & { window?: unknown };
+    const globals = globalThis as unknown as { window?: unknown };
     const previousWindow = globals.window;
     const nativeCalls: string[] = [];
     globals.window = {
@@ -247,7 +247,7 @@ describe("raster TileJSON import", () => {
   });
 
   it("still resolves desktop short URLs that redirect to an image template", async () => {
-    const globals = globalThis as typeof globalThis & { window?: unknown };
+    const globals = globalThis as unknown as { window?: unknown };
     const previousWindow = globals.window;
     const nativeCalls: string[] = [];
     globals.window = {
@@ -283,6 +283,38 @@ describe("TileJSON validation", () => {
     });
     assert.equal(parsed.scheme, "tms");
     assert.deepEqual(parsed.tiles, ["https://tiles.example/{z}/{x}/{y}.png"]);
+  });
+
+  it("keeps {-y} as a row flip and does not treat it as the scheme", async () => {
+    const parsed = parseXyzTileJson({
+      ...manifest(),
+      scheme: "tms",
+      tiles: ["https://tiles.example/%7B-y%7D/{z}/{x}/{-Y}.webp"],
+    });
+    assert.equal(parsed.scheme, "tms");
+    assert.deepEqual(parsed.tiles, ["https://tiles.example/{-y}/{z}/{x}/{-y}.webp"]);
+    const bare = await resolveXyzTileUrlTemplate("https://tiles.example/{z}/{x}/{-y}.webp");
+    assert.equal(bare.renderUrl, "https://tiles.example/{z}/{x}/{-y}.webp");
+    assert.equal(bare.tilejson, undefined);
+    assert.throws(
+      () =>
+        parseXyzTileJson({
+          ...manifest(),
+          tiles: ["https://tiles.example/{z}/{x}/{y}/{-y}.png"],
+        }),
+      /not both/,
+    );
+    assert.throws(
+      () =>
+        parseXyzTileJson({
+          ...manifest(),
+          tiles: [
+            "https://tiles.example/{z}/{x}/{y}.png",
+            "https://tiles.example/replica/{z}/{x}/{-y}.png",
+          ],
+        }),
+      /not both/,
+    );
   });
 
   it("rejects missing endpoints, invalid URLs, and vector TileJSON", () => {

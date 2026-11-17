@@ -1,5 +1,6 @@
 /** Zipped shapefile reading: shpjs for ordinary files, DuckDB for the rest. */
 
+import { withWktDatumShift } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import { combine, parseDbf, parseShp } from "shpjs";
 import { shouldRouteToDuckDb, type DuckDbVectorLoadOptions } from "../duckdb-vector-guard";
@@ -110,7 +111,8 @@ function parseShapefileComponents({ file, sidecar }: UnzippedShapefile): Feature
     throw new Error("Shapefile archive is missing its .dbf sidecar.");
   }
   const decoder = new TextDecoder();
-  const prj = sidecar.prj ? decoder.decode(sidecar.prj) : undefined;
+  // An ESRI `.prj` has no TOWGS84, so add the datum's shift (see datum-shift.ts).
+  const prj = sidecar.prj ? withWktDatumShift(decoder.decode(sidecar.prj)) : undefined;
   const cpg = sidecar.cpg ? decoder.decode(sidecar.cpg).trim() : undefined;
   const geometries = parseShp(toArrayBuffer(file.data), prj);
   const attributes = parseDbf(toArrayBuffer(sidecar.dbf), cpg);
@@ -125,7 +127,8 @@ function parseShapefileComponents({ file, sidecar }: UnzippedShapefile): Feature
  * corrupt archive or one without a `.shp` throws, since GeoLibre reads only
  * shapefile `.zip`s.
  *
- * A `.shp` at or above {@link DUCKDB_VECTOR_ROUTE_BYTES} skips shpjs and streams
+ * A `.shp` that {@link shouldRouteToDuckDb} routes (at or above
+ * `DUCKDB_VECTOR_ROUTE_BYTES`, from `@geolibre/core`) skips shpjs and streams
  * through DuckDB: shpjs would otherwise freeze the main thread reprojecting
  * every coordinate synchronously, with no progress, no cancel, and no
  * feature-count guard. The threshold is measured on the *uncompressed* `.shp`,

@@ -6,7 +6,7 @@ import {
   type DecodedTile,
 } from "./cesium-protocol-imagery";
 import { createLayerSync, type LayerSync } from "./headless";
-import { arcgisVectorStyle } from "./arcgis-vector-style";
+import { arcgisVectorStyle } from "./vector-style";
 
 // The MapLibre drape (issue #2284): tile-backed vector layers on the globe.
 //
@@ -120,6 +120,7 @@ function layerSignature(layer: GeoLibreLayer): string {
       layer.metadata,
       layer.sourcePath,
       layer.quickFilters,
+      layer.levelFilter,
       layer.filterExpression,
       layer.timeFilter,
       layer.embedFilter,

@@ -1,6 +1,11 @@
-import bbox from "@turf/bbox";
 import type { FeatureCollection, Geometry } from "geojson";
-import { type GeoLibreLayer, horizontalBbox } from "@geolibre/core";
+import {
+  antimeridianAwareBbox,
+  type GeoLibreLayer,
+  isGeoArrowBatch,
+  computeGeoArrowBBox,
+  type GeoArrowBatch,
+} from "@geolibre/core";
 
 export type GeometryKind = "point" | "line" | "polygon";
 
@@ -10,13 +15,25 @@ export interface GeometryProfile {
   hasPolygon: boolean;
 }
 
-export function detectGeometryProfile(fc: FeatureCollection): GeometryProfile {
+export function detectGeometryProfile(
+  data: FeatureCollection | GeoArrowBatch | undefined,
+): GeometryProfile {
   const profile: GeometryProfile = {
     hasPoint: false,
     hasLine: false,
     hasPolygon: false,
   };
-  for (const feature of fc.features) {
+  if (!data) return profile;
+
+  if (isGeoArrowBatch(data)) {
+    const t = data.geometryType;
+    if (t === "Point" || t === "MultiPoint") profile.hasPoint = true;
+    if (t === "LineString" || t === "MultiLineString") profile.hasLine = true;
+    if (t === "Polygon" || t === "MultiPolygon") profile.hasPolygon = true;
+    return profile;
+  }
+
+  for (const feature of data.features ?? []) {
     if (feature.geometry) addGeometryToProfile(profile, feature.geometry);
   }
   return profile;
@@ -38,17 +55,50 @@ function addGeometryToProfile(profile: GeometryProfile, geometry: Geometry): voi
   }
 }
 
+/**
+ * A layer's extent as `[west, south, east, north]`, for fitting the camera.
+ *
+ * A GeoJSON layer that crosses the antimeridian gets the narrow extent across
+ * it with `east > 180` (see `antimeridianAwareBbox`); combine several with
+ * `unionLonLatExtents` rather than a plain min/max.
+ *
+ * @param layer - The layer to measure.
+ * @returns The extent, or null when the layer has none.
+ */
 export function getLayerBounds(layer: GeoLibreLayer): [number, number, number, number] | null {
+  // A layer that loads by viewport (an ArcGIS feature layer) holds only the
+  // features in view, so their extent is the view, not the layer: prefer the
+  // service extent it stored.
+  if (layer.metadata.viewportLoading === true) {
+    const stored = storedLayerBounds(layer);
+    if (stored) return stored;
+  }
+  if (layer.geoarrow) {
+    const box = computeGeoArrowBBox(layer.geoarrow);
+    if (box) return box;
+  }
   if (layer.geojson?.features?.length) {
     // A collection whose features all carry a null geometry (e.g. a delimited
     // text file imported as an attribute table, or a non-spatial SQL result)
-    // yields a degenerate ±Infinity box, and one that carries its own 3D `bbox`
-    // member yields six values. `horizontalBbox` answers null to the first and
-    // trims the second; either way, continue to the stored extent rather than
-    // flying to invalid coordinates.
-    const box = horizontalBbox(bbox(layer.geojson));
+    // has no extent, and one that carries its own 3D `bbox` member holds six
+    // values. `antimeridianAwareBbox` answers null to the first and trims the
+    // second; either way, continue to the stored extent rather than flying to
+    // invalid coordinates.
+    //
+    // The extent takes the short way round the antimeridian: a layer with
+    // features on both sides of it (Alaska's Aleutians, Fiji, Pacific
+    // earthquakes) reads as the narrow band across it, unwrapped to `east > 180`
+    // the way MapLibre's own bounds are, rather than as the whole globe
+    // (GeoLibre#3469). A consumer that needs RFC 7946 longitudes converts with
+    // `toRfc7946Bbox`.
+    const box = antimeridianAwareBbox(layer.geojson);
     if (box) return box;
   }
+  return storedLayerBounds(layer);
+}
+
+/** The layer's advertised `source.bounds` or `metadata.bounds`, if well-formed. */
+function storedLayerBounds(layer: GeoLibreLayer): [number, number, number, number] | null {
   for (const value of [layer.source.bounds, layer.metadata.bounds]) {
     if (
       Array.isArray(value) &&

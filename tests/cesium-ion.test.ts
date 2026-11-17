@@ -12,7 +12,8 @@ import {
   isCesiumOnlyLayer,
   parseCesiumIonAssetId,
 } from "../packages/core/src/cesium-ion";
-import type { GeoLibreLayer } from "../packages/core/src/types";
+import { createEmptyProject, parseProject, serializeProject } from "../packages/core/src/project";
+import { DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "../packages/core/src/types";
 import { CesiumLayerSync, isCesiumSupportedLayerType } from "../packages/map/src/cesium-layer-sync";
 
 // Cesium Ion assets (issue #2290). The layer builder and the id parser are
@@ -72,7 +73,7 @@ describe("cesium-ion layer builder", () => {
       source: { type: "3d-tiles", url: "https://a/tileset.json", ionAssetId: 5 },
       visible: true,
       opacity: 1,
-      style: {},
+      style: { ...DEFAULT_LAYER_STYLE },
       metadata: { sourceKind: "3d-tiles-url" },
     };
     assert.equal(cesiumIonAssetId(plain), null, "the source kind is the contract, not the field");
@@ -120,6 +121,8 @@ function makeGlobe() {
     imagery: [] as Array<{ provider: unknown; show: boolean; alpha: number }>,
   };
   const Cesium = {
+    // The viewer below has no `scene.mode`, so it never reads as mid-morph.
+    SceneMode: { MORPHING: 0 },
     IonResource: {
       fromAssetId: async (assetId: number, options?: { accessToken?: string }) => {
         calls.ionResources.push({ assetId, token: options?.accessToken });
@@ -181,7 +184,7 @@ function makeGlobe() {
         calls.imagery.push(layer);
         return layer;
       },
-      remove: (layer: { provider: unknown }) =>
+      remove: (layer: (typeof calls.imagery)[number]) =>
         calls.imagery.splice(calls.imagery.indexOf(layer), 1),
       raiseToTop: () => {},
     },
@@ -298,6 +301,50 @@ describe("CesiumLayerSync with Ion assets", () => {
     sync.destroy();
   });
 
+  it("reports an imagery provider that rejects, once, and leaves nothing on the globe", async () => {
+    const g = makeGlobe();
+    g.Cesium.IonImageryProvider.fromAssetId = async () => {
+      throw new Error("401 token revoked");
+    };
+    const errors: Array<{ layerId: string; message: string }> = [];
+    const sync = new CesiumLayerSync(g.Cesium as never, g.viewer as never, () => 10, {
+      ionToken: () => "tok",
+      onLayerError: ({ layerId, message }) => errors.push({ layerId, message }),
+    });
+    const layer = createCesiumIonLayer({ id: "i", name: "Aerial", assetId: 2, kind: "imagery" });
+    sync.sync([layer]);
+    for (let i = 0; i < 4; i++) await flush();
+    assert.deepEqual(errors, [{ layerId: "i", message: "401 token revoked" }]);
+    assert.equal(g.calls.imagery.length, 0, "a failed provider is never added to the globe");
+
+    // An unrelated pass (an opacity drag) neither retries nor re-reports.
+    sync.sync([{ ...layer, opacity: 0.5 }]);
+    for (let i = 0; i < 4; i++) await flush();
+    assert.equal(errors.length, 1);
+    sync.destroy();
+  });
+
+  it("does not report an imagery load that fails after its layer was removed", async () => {
+    const g = makeGlobe();
+    let reject: (error: Error) => void = () => {};
+    g.Cesium.IonImageryProvider.fromAssetId = () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      });
+    const errors: unknown[] = [];
+    const sync = new CesiumLayerSync(g.Cesium as never, g.viewer as never, () => 10, {
+      ionToken: () => "tok",
+      onLayerError: (error) => errors.push(error),
+    });
+    sync.sync([createCesiumIonLayer({ id: "i", name: "Aerial", assetId: 2, kind: "imagery" })]);
+    sync.sync([]);
+    reject(new Error("aborted"));
+    for (let i = 0; i < 4; i++) await flush();
+    assert.deepEqual(errors, [], "a cancelled load is not a failure");
+    assert.equal(g.calls.imagery.length, 0);
+    sync.destroy();
+  });
+
   it("drops a pending fit when its layer is removed before it loads", async () => {
     const g = makeGlobe();
     const sync = new CesiumLayerSync(g.Cesium as never, g.viewer as never, () => 10, {
@@ -309,5 +356,40 @@ describe("CesiumLayerSync with Ion assets", () => {
     for (let i = 0; i < 4; i++) await flush();
     assert.deepEqual(g.calls.flights, [], "the layer the fit targeted is gone");
     sync.destroy();
+  });
+});
+
+describe("Cesium Ion terrain asset project persistence", () => {
+  it("normalizes and preserves terrainIonAssetId in project preferences", () => {
+    const project = createEmptyProject();
+    project.preferences.map.terrainIonAssetId = 2767062;
+    project.preferences.map.terrainEnabled = true;
+
+    const serialized = serializeProject(project);
+    const parsed = parseProject(serialized);
+
+    assert.equal(parsed.preferences.map.terrainIonAssetId, 2767062);
+    assert.equal(parsed.preferences.map.terrainEnabled, true);
+  });
+
+  it("normalizes invalid or missing terrainIonAssetId safely", () => {
+    const project = createEmptyProject();
+    // String number should coerce
+    (project.preferences.map as unknown as Record<string, unknown>).terrainIonAssetId = "2767062";
+    let parsed = parseProject(serializeProject(project));
+    assert.equal(parsed.preferences.map.terrainIonAssetId, 2767062);
+
+    // Negative, 0, float, or invalid text should normalize to undefined
+    (project.preferences.map as unknown as Record<string, unknown>).terrainIonAssetId = -5;
+    parsed = parseProject(serializeProject(project));
+    assert.equal(parsed.preferences.map.terrainIonAssetId, undefined);
+
+    (project.preferences.map as unknown as Record<string, unknown>).terrainIonAssetId = 0;
+    parsed = parseProject(serializeProject(project));
+    assert.equal(parsed.preferences.map.terrainIonAssetId, undefined);
+
+    (project.preferences.map as unknown as Record<string, unknown>).terrainIonAssetId = "invalid";
+    parsed = parseProject(serializeProject(project));
+    assert.equal(parsed.preferences.map.terrainIonAssetId, undefined);
   });
 });

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./test";
 import { createEmptyProject, DEFAULT_LAYER_STYLE } from "@geolibre/core";
 import { readFixture } from "./helpers";
 
@@ -30,7 +30,7 @@ project.layers = [
 
 async function openProject(page: Page, waitUntilReady = true) {
   await page.getByTestId("desktop-shell").waitFor();
-  await expect(page.getByRole("button", { name: "Add Data", exact: true })).toBeEnabled({
+  await expect(page.getByRole("button", { name: "Add data", exact: true })).toBeEnabled({
     timeout: 60_000,
   });
   await page.evaluate((text) => {

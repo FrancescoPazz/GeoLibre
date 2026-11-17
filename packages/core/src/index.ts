@@ -1,27 +1,39 @@
 export * from "./types";
+export * from "./tile-address";
 export * from "./diagram";
 export * from "./marker-shape";
 export * from "./hyperlink";
 export * from "./photo";
 export * from "./ellipsoids";
+export * from "./geodesic";
 export * from "./regional-basemaps";
 export * from "./cesium-imagery";
+export * from "./arcgis-projection";
+export * from "./map-crs";
 export * from "./geojson-z";
+export * from "./antimeridian";
 export * from "./color-ramp";
 export * from "./paths";
 export * from "./routing";
 export * from "./polyline";
 export * from "./vector-color";
 export * from "./expressions";
+export * from "./style-layer-evaluator";
 export * from "./document-locale";
 export * from "./label-number-format";
 export * from "./external-native-paint";
 export * from "./attribute-form";
+export * from "./qgis-expression";
+export * from "./layer-descriptive-metadata";
+export * from "./map-click-claims";
 export * from "./popup";
 export * from "./joins";
 export * from "./virtual-fields";
 export * from "./quick-filters";
 export * from "./layer-filters";
+export * from "./level-filter";
+export * from "./zip-directory";
+export * from "./imdf-detect";
 export * from "./capabilities";
 export * from "./deployment-capabilities";
 export * from "./selection";
@@ -30,19 +42,26 @@ export * from "./scale-units";
 export * from "./elevation";
 export * from "./camera-altitude";
 export * from "./project";
+export * from "./i3s-building-state";
+export * from "./project-diff";
 export * from "./style-library";
 export * from "./layer-library";
 export * from "./layer-defaults";
 export * from "./layer-style-clipboard";
+export * from "./layer-style-file";
+export * from "./layers-file";
 export * from "./layer-groups";
 export * from "./layer-names";
 export * from "./pixel-format";
+export * from "./s3";
 export * from "./print-layout-config";
 export { createSampleStoryMap } from "./storymap-sample";
+export * from "./storymap-duration";
 export {
   applyStoryLayerOpacity,
   isStoryHiddenLayer,
   storyLayerOpacityFactor,
+  storyLocationView,
   storyVisibleLayers,
 } from "./storymap-playback";
 export {
@@ -58,15 +77,21 @@ export {
 } from "./storymap-io";
 export {
   clearHistory,
+  withoutHistory,
   canRedoProjectRestore,
   canUndoProjectRestore,
   DEFAULT_COLLABORATION_STATE,
   IDENTIFY_ALL_LAYERS_ID,
+  type IdentifyState,
+  identifyAllIncludes,
+  identifyStateWithoutLayers,
+  resolveIdentifyTarget,
   projectPathLabel,
   registerProjectRestoreHistory,
   subscribeProjectRestoreHistory,
   redo,
   undo,
+  shouldZoomToNewLayers,
   useAppStore,
   useAppCapability,
   type AppState,
@@ -110,6 +135,7 @@ export {
   GEOCODE_SCORE_KEY,
   GEOCODE_PROVIDER_KEY,
   GEOCODE_STATUS_KEY,
+  GEOCODE_ATTRIBUTE_PREFIX,
   DEFAULT_GEOCODING_PROVIDER_ID,
   GEOCODING_PROVIDERS,
   getGeocoderConfig,
@@ -129,13 +155,31 @@ export {
   nominatimReverseResultToDisplay,
   csvRowsToGeocodeRequests,
   geocodeForward,
+  geocodeSuggest,
+  parseArcGISSuggestions,
+  arcgisLocatorInputField,
   geocodeReverse,
   setGeocodingFetch,
+  setGeocodingTokenProvider,
+  geocoderSupportsReverse,
+  geocoderSupportsSuggest,
+  selectedGeocodingLocator,
+  normalizeArcGISLocatorUrl,
+  normalizeGeocodingLocator,
+  parseArcGISLocatorInfo,
+  fetchArcGISLocatorInfo,
+  GeocoderServiceError,
+  GeocoderUnsupportedError,
+  type ArcGISLocatorCapabilities,
+  type GeocodingTokenProvider,
   type GeocoderConfig,
   type GeocodingProvider,
   type GeocodingProviderId,
   type GeocodingPreferenceInput,
+  normalizeGeocodeBbox,
+  type GeocodeBbox,
   type GeocodeMatch,
+  type GeocodeSuggestion,
   type GeocodeStatus,
   type NominatimForwardResult,
   type NominatimReverseResult,
@@ -269,13 +313,36 @@ export {
   stripGoogleMapsApiKeyHeader,
 } from "./three-d-tiles";
 export {
+  changedPreferenceCredentials,
+  environmentVariableAccount,
+  geocodingApiKeyAccount,
+  isSecretEnvironmentVariable,
+  lookupProjectCredential,
+  overlayStoredEnvironmentVariables,
+  overlayStoredGeocodingApiKeys,
+  overlayStoredPreferenceCredentials,
+  resolveProjectHeaderReferences,
+  setProjectCredentialLookup,
+  splitProjectCredentials,
+  type ProjectCredentialLookup,
+} from "./project-credential-refs";
+export {
+  allowsCredentialHeaders,
+  hasHeaderReferences,
+  isHeaderReferenceOnly,
+  resolveHeaderReferences,
+} from "./header-references";
+export {
   isCredentialFieldName,
+  isCredentialUrlParam,
   MAX_REDACT_DEPTH,
   PROJECT_CREDENTIAL_FIELDS,
   PUBLISHABLE_PLUGIN_SETTINGS,
+  redactConfigurationCredentials,
   redactCredentials,
   redactProjectCredentials,
   redactUrlCredentials,
+  setRegistryPublishableSettings,
   type CredentialRedactionResult,
 } from "./credentials";
 export { excludeHiddenFieldsFromGeojson, excludeHiddenFieldsFromProject } from "./visibility";
@@ -293,3 +360,19 @@ export {
   type CesiumKmlLayerOptions,
 } from "./cesium-kml";
 export { localFileName, uniqueImportedLayerName } from "./file-name";
+export {
+  datumShiftFor,
+  installCogTilerDatumShift,
+  withDatumShift,
+  withGeoKeysDatumShift,
+  withWktDatumShift,
+} from "./datum-shift";
+
+export {
+  convertTiffYCbCrToRgb,
+  isAbbreviatedJpegCompression,
+  patchJpegCogSource,
+  withJpegTablesPatch,
+} from "./cog-jpeg-tables";
+
+export * from "./geoarrow";

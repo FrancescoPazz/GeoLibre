@@ -28,12 +28,15 @@ const RESERVED_PARAMS: ReadonlySet<string> = new Set([
   "panels",
   "hidePanels",
   "maponly",
+  "draw",
   "theme",
   "welcome",
   // i18n + collaboration.
   "locale",
   "lang",
   "collab",
+  // Plugin deep link (`plugin-deep-link.ts`).
+  "plugin",
 ]);
 
 /**

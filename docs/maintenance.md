@@ -15,15 +15,32 @@ error** — the feature just stops working. After bumping any of the packages
 below (**including Dependabot PRs**), do the listed check and run the frontend
 suite.
 
+`tests/upstream-contracts.test.ts` checks the **installed** package for the
+exact shape each mirror below relies on — a class name in the published files,
+a private field on a real instance, a constant, a snippet of a method body — and
+its failure message names the section here to read. Mirrors with a dedicated
+real-package test of their own (named in their section) are not repeated there.
+Packages that touch the DOM or WebGL at import are checked against their
+published files' text rather than imported. A test there passing is not the
+whole check: semantics the shape cannot show (ordering, pixels, network
+behaviour) still need the manual steps listed. When you add a mirror, add its
+contract there too.
+
 ### Patched packages (`patches/`)
 
 `postinstall` applies the `patch-package` patches in `patches/`, and each patch
-file names the exact version it was made against. `@carbonplan/zarr-layer` is
-declared with an exact version (no `^`) in both `apps/geolibre-desktop` and
-`packages/plugins` so a routine install can never move it past the patched
-version. To bump it, regenerate the patch against the new version (or drop it if
-upstream fixed the bug), rename the patch file, and update both declarations and
-`package-lock.json` in the same PR.
+file names the exact version it was made against. A bump that moves a patched
+package past that version fails `npm install` in CI. Regenerate the patch
+against the new version (or drop it if upstream fixed the bug), rename the patch
+file, and update `package-lock.json` in the same PR.
+
+`@carbonplan/zarr-layer` is declared with an exact version (no `^`) in both
+`apps/geolibre-desktop` and `packages/plugins`. It carried a patch until 0.10.0,
+which shipped the same non-throwing uniform lookups upstream (the layer vanished
+at zoom >= 12 on Mesa GPUs without them). Before bumping it, confirm
+`createShaderProgram` in its `dist/index.js` still looks up `shift_x`,
+`shift_y` and `u_worldXOffset` with `gl.getUniformLocation`, not
+`mustGetUniformLocation` (`tests/upstream-contracts.test.ts` checks this).
 
 ### `geolibre-wasm` (`packages/processing/package.json`)
 
@@ -57,6 +74,18 @@ upstream fixed the bug), rename the patch file, and update both declarations and
   ratio, angle or weight, and add it to `NON_DISTANCE_NAMES`. If one is missed,
   that tool's field offers metres and silently converts a dimensionless number as
   if it were a distance.
+
+### `geotiff` (`packages/processing/package.json`) — private `actualizedFields`
+
+`readRasterData` (`packages/processing/src/raster-client.ts`) pads a
+`SampleFormat` tag shorter than `SamplesPerPixel` so geotiff.js can decode
+band 2+ of such files (older geolibre-wasm COGs carry one). geotiff.js reads
+the tag from several places, so the pad replaces the parsed value in the
+image's private `fileDirectory.actualizedFields` map (keyed by tag number, 339).
+If a bump renames or reshapes that map, the pad stops working and those files
+fail again with "Unsupported data format/bitsPerSample";
+`readRasterData` warns when the map is missing, and
+`tests/upstream-contracts.test.ts` checks the map and key on a real image.
 
 ### `maplibre-gl`
 
@@ -94,8 +123,49 @@ upstream fixed the bug), rename the patch file, and update both declarations and
   `apps/geolibre-desktop/src/lib/field-collection-map.ts`) positions that pin by
   hand on every engine (Mapbox, Cesium, ArcGIS, and MapLibre alike), so if a bump changes the default pin's
   anchor or offset, story markers drift off their coordinate with no error.
-  Compare with `defaultMarker.ts`/`marker.ts` upstream and play a story on a
-  non-MapLibre renderer.
+  `tests/upstream-contracts.test.ts` reads the default offset out of the
+  published bundle and fails if it moves; still play a story on a non-MapLibre
+  renderer if the pin's anchor changed.
+- **Map CRS** (`packages/map/src/map-crs.ts`, issue #1128) uses
+  `addProjection`, `importScriptInWorkers` and the workers'
+  `setProjectionHandler`, all `@experimental` upstream, so a minor release may
+  change them. The handler script is proj4's UMD build (`proj4/dist/proj4.js`,
+  read with `?raw`) followed by one `setProjectionHandler` call: MapLibre
+  fetches it from a `blob:` URL and evaluates it with `eval`, which both CSPs
+  allow (`connect-src blob:`, `'unsafe-eval'`). If upstream starts loading
+  worker scripts as modules or by `importScripts`, or proj4 drops its UMD build,
+  GeoJSON on a custom CRS map silently draws in the wrong place (MapLibre only
+  warns). After a bump, run `tests/map-crs.test.ts` and pick a preset under
+  **Settings → Map** with a GeoJSON layer on the map.
+
+### `mapbox-gl`
+
+Mapbox GL JS v2+ is proprietary, so it must never enter a build: the app loads
+it from Mapbox's CDN (`packages/map/src/mapbox-gl-loader.ts`) and the npm package
+is there only for types. A bump must update `MAPBOX_GL_VERSION` and both
+`*_INTEGRITY` hashes in that file; `tests/mapbox-gl-loader.test.ts` computes the
+expected values from the installed package and fails until they match. A
+runtime import of `mapbox-gl`, direct or transitive, fails the build
+(`thirdPartyLicensePlugin` in `apps/geolibre-desktop/vite.config.ts`). The
+script runs under `script-src`, which lists the CDN path; the stylesheet is
+fetched and inlined because `style-src` lists no external host. Playwright's
+`vite preview` sends no CSP, so the e2e suite cannot catch a policy mismatch. A
+`GEOLIBRE_NO_EXTERNAL_CDN=1` build refuses to load the renderer.
+
+MapLibre and Mapbox both use a `_classRegistryKey` property, and MapLibre sets it
+permanently on the global `Set` and `Error`, which stops every Mapbox tile from
+loading. `apps/geolibre-desktop/vite-plugins/isolate-maplibre-registry.ts` renames
+MapLibre's copy at build time. A CI run can't see this failure without a real
+Mapbox token, so after a bump of either package, load a Mapbox style with one.
+
+The Mapbox engine's plugin-layer mirror (`mirrorPluginLayerState` in
+`packages/map/src/mapbox-engine.ts`) identifies a plugin's native layer by the
+style's own layer object, `style.getOwnLayer(id)`, an internal, because
+`map.getLayer` returns a fresh `serialize()` copy on every call.
+`OwnedPaintResets` keys what GeoLibre wrote on that object, so a cleared dash
+or blur resets only GeoLibre's own value. Without `getOwnLayer` nothing is
+owned and dashes on plugin layers stop resetting to solid, silently;
+`tests/upstream-contracts.test.ts` checks both halves in the bundle.
 
 ### `@deck.gl/mapbox` and `@deck.gl/maplibre`
 
@@ -118,6 +188,23 @@ down once that cache fills. After bumping deck.gl or loaders.gl, run
 is renamed or no longer starts at 32 MB. If upstream starts honouring the
 option, the helper can go.
 
+### `@deck.gl/geo-layers` — I3S mesh layer replaced
+
+deck.gl's `Tile3DLayer` draws ArcGIS I3S nodes with its own `MeshLayer`, which
+shades them through luma.gl's PBR material module. From deck.gl 9.4 / luma.gl
+9.4 that draws nothing on WebGL (every fragment transparent, no error), so no
+I3S scene layer rendered from the 9.3 → 9.4 bump (#2395) until GeoLibre
+replaced the layer. `packages/plugins/src/plugins/i3s-mesh-layer.ts` is deck.gl
+9.3's I3S mesh layer without the PBR module, passed to `Tile3DLayer` as
+`_subLayerProps.mesh.type` in `arcgis-i3s-tiles.ts`.
+
+After bumping deck.gl or luma.gl, load **Add data → 3D Tiles layer → Load sample
+data → San Francisco Buildings (ArcGIS I3S)** on the Positron background (Liberty
+draws its own 3D buildings, which look like I3S ones) and check the textured
+buildings draw. To see whether upstream fixed its layer, drop the
+`_subLayerProps` override and check again; if it draws, delete
+`i3s-mesh-layer.ts`.
+
 ### `@maplibre/maplibre-gl-style-spec`
 
 `propertySpecFor` (`packages/core/src/expressions.ts`) fabricates the
@@ -127,7 +214,7 @@ color checks). The cast hides any contract change from the compiler, so run the
 frontend suite — the "enforces an expected result type" test in
 `tests/expressions.test.ts` fails if the shape stops being honored.
 
-`cssColor` (`packages/map/src/cesium-feature-style.ts`) turns the `Color`
+`cssColor` (`packages/map/src/feature-style.ts`) turns the `Color`
 object a compiled colour expression evaluates to into CSS by reading its
 `toString()` and accepting an `rgba(` or `#` prefix. That format is how the
 spec's `Color` happens to print, not a documented contract: if a bump changes
@@ -166,10 +253,20 @@ black — it declines the stack.
   appends to the map container into GeoLibre's native right-panel host. Vantor
   returns a wrapper instead, so the bridge selects its `.vantor-panel`
   descendant. The scoped CSS in `index.css` mirrors each package's panel,
-  header, toggle, close, and resize-handle class names. After bumping any of
-  these packages, activate every migrated Web Services plugin and verify that
+  header, toggle, close, and resize-handle class names;
+  `tests/upstream-contracts.test.ts` lists them per package and fails when a
+  package stops rendering one (or `index.css` stops styling it). After bumping
+  any of these packages, activate every migrated Web Services plugin and verify that
   its catalog renders, resizing the GeoLibre dock preserves the content, and
   no vendor panel remains under the map container.
+- **NASA Earthdata panel Add date fallback.** `nasa-earthdata-date-fallback.ts`
+  replaces the control instance's `addLayer` (`addAtAvailableDefaultDate`), so a
+  panel Add of a time-enabled layer probes the zoom-0 tile at its default date
+  and adds the newest earlier date with imagery. It depends on the panel Add
+  calling `this.addLayer(layer.id)` through the instance, and on `addLayer`
+  reading `options.date` and `options.key`. `tests/upstream-contracts.test.ts`
+  checks both. The probe URL shape (`{z}/{y}/{x}` from `buildTileUrl`) is covered
+  by `tests/nasa-earthdata-date-fallback.test.ts`.
 
 ### `maplibre-gl-components` (`packages/plugins/package.json`)
 
@@ -180,11 +277,12 @@ black — it declines the stack.
   panels" option can rasterize those on-map overlays into the recording. These are
   the display elements, deliberately **not** the `*-gui-control` authoring
   editors. If a class drifts, the option silently stops burning that panel into
-  the video (or the checkbox never appears) with no build error.
+  the video (or the checkbox never appears) with no build error;
+  `tests/upstream-contracts.test.ts` fails instead.
 - **The PMTiles control's layer ids** (`pmtilesControlLayerId` /
   `pmtilesIdsForSourceLayers` / `pmtilesIdNamesSourceLayer`,
   `packages/map/src/pmtiles-layer.ts`, read from `layer-sync.ts` and
-  `packages/plugins/src/plugins/maplibre-components.ts`) mirror an unexported fact
+  `packages/plugins/src/plugins/components/pmtiles.ts`) mirror an unexported fact
   about `PMTilesLayerControl`: it names its MapLibre layers
   `${sourceId}-${name}-${kind}` from the **raw** source-layer name, where
   `pmtilesVectorLayerId` percent-encodes it. The two agree for every name needing
@@ -210,21 +308,63 @@ black — it declines the stack.
   real archive, through the real `layeradd` handler into the store, and fails if
   the id scheme moves or the selection stops reaching the handler.
 
+- **The AddVectorControl's layer id rule** (`upstreamUrlLayerId` /
+  `flatGeobufLayerName`, `packages/plugins/src/plugins/components/flatgeobuf.ts`)
+  mirrors how the FlatGeobuf panel's `AddVectorControl` names a layer: the
+  trimmed Layer Name field, else the URL's last path segment without its
+  extension, else a generated `addvec-*` id. The typed name is not on
+  `AddVectorLayerInfo`, so GeoLibre reads it from the field and, failing that,
+  from an id that is not the URL-derived one. If the rule drifts, a typed name
+  still wins while the field holds it, but a URL-named layer shows its raw id
+  (undecoded) instead of the file name. `tests/flatgeobuf-layer-name.test.ts`
+  uses a fake control, so after a bump add a FlatGeobuf URL with and without a
+  Layer Name and check the Layers panel.
 - **The MeasureControl's `_panel` and `_sourceId`**
   (`packages/plugins/src/plugins/terrain-measure.ts`, via `measurePanelElement`
   and `measureSourceId`) are private members that only the control knows: the
   panel carries GeoLibre's Terrain (3D)/heading sections and the resize styling,
   and the source id is how `lidar-measure-mirror.ts` finds the geometry it
   redraws above a LiDAR point cloud (#2533). Both readers warn and fall back to
-  doing nothing on a rename, so after a bump check the console for
-  "MeasureControl: …not found" and confirm the Terrain section still appears and
-  a measured line still shows inside a point cloud.
+  doing nothing on a rename; `tests/upstream-contracts.test.ts` builds a real
+  `MeasureControl` and fails if either field is gone. After a bump, still
+  confirm the Terrain section appears and a measured line shows inside a point
+  cloud.
+- **The MeasureControl's `_setupMapSources` and `_updateMapGeometry`**
+  (`healMeasureLayersOnStyleSwap`, `packages/plugins/src/plugins/components/measure.ts`)
+  re-add the measured line and polygon after a basemap swap: the control adds
+  its source once in `onAdd`, so a `setStyle` (the celestial body switch, any
+  basemap change) left the line undrawn (#3471). The heal is skipped when
+  either method is gone, and `tests/upstream-contracts.test.ts` checks both.
+  Drop it once the control re-adds its own layers on `style.load`.
 - **The measure paint** (`MEASURE_LINE_COLOR`/`MEASURE_LINE_WIDTH`/
   `MEASURE_FILL_COLOR`, `packages/plugins/src/plugins/lidar-measure-mirror.ts`)
   is passed to the control explicitly rather than left to its defaults, because
   the deck.gl mirror has to repaint the same geometry in the same colour. Change
   one form and change the RGBA twin beside it;
   `tests/lidar-measure-mirror.test.ts` asserts the pair agrees.
+- **Theme defaults for GUI-created overlays** (`themeHtmlControlOutputs`,
+  `themeLegendControlOutputs`, `themeColorbarControlOutputs` in
+  `packages/plugins/src/plugins/components/{html,legend,colorbar}.ts`) wrap the
+  private factories `HtmlGuiControl._createHtmlControl`,
+  `LegendGuiControl._createLegend` and `ColorbarGuiControl._syncPositionControl`
+  (which keeps the per-corner outputs in the private `_positionControls` map),
+  then call each output's public `update({ backgroundColor, fontColor })` with
+  `var(--geolibre-bg)` / `var(--geolibre-fg)`. The GUI constructor's own
+  `backgroundColor`/`fontColor` options only style the editor panel and are not
+  forwarded, so this is the only way the on-map legend/colorbar/HTML surfaces
+  follow the app theme. A rename leaves the wrapper calling an undefined
+  function (the panel throws on Add) or skipping silently (the surface reverts
+  to upstream white). `createComponentsControl` (`maplibre-components.ts`)
+  applies the same wrappers, and adds the standalone `geolibre-*` theme class
+  plus `geolibre-grid-child` in each child's `onAdd`, to the ControlGrid's
+  internally created children. After a bump, toggle the app theme with a
+  legend, colorbar and HTML overlay on the map, from both the Controls menu and
+  the Components grid.
+- **Theme overrides in `index.css`** assume the component/Layer
+  Control/Street View stylesheets may load **after** `index.css` (they arrive
+  with lazily imported chunks), so a same-specificity override loses. Overrides
+  of single-class vendor rules are prefixed with `html` to win regardless of
+  order; keep that when adding new ones.
 
 ### `maplibre-gl-basemap-control` (`packages/plugins/package.json`)
 
@@ -253,12 +393,24 @@ so re-check `src/lib/utils/remote.ts` in that package and update the mirror if i
 moved. If it drifts, the remote-browse panels (Source Cooperative, Hugging Face)
 silently block GeoParquet the engine could now open, or offer an Add that is
 certain to fail. Updating the constant is enough: the limit the user is shown is
-rendered from it, not written into the copy.
+rendered from it, not written into the copy. `tests/upstream-contracts.test.ts`
+reads the constant out of the published chunk and compares.
 
 `remote-file-formats.ts` is the **single** home for this and the other
 format/reader/size rules those panels share — a per-panel copy would miss this
 check, so add new browse panels against that module rather than duplicating it
 (`source-coop-api.ts` re-exports it under its own names for compatibility).
+
+Adoption (`adoptVectorControlLayers` in `vector-layer-sync.ts`, #2715) hands the
+control's small GeoJSON-mode layers to GeoLibre, and leans on three things the
+package does not promise. `getLayerGeoJSON` must return the whole collection for
+a `renderMode: "geojson"`, `ingestMode: "table"` layer. `removeLayer` must drop
+the layer's DuckDB table as well as its map source, or adoption keeps two copies
+of the data. And `KML_ICON_PROPERTY` mirrors the feature property the control's
+KML/KMZ icon layer filters on (`__geolibre_kml_icon_url`); a layer carrying it
+stays with the control, so a rename upstream would adopt KML layers and drop
+their icons. Re-check all three on a bump (the contract test covers only
+`KML_ICON_PROPERTY`).
 
 ### `maplibre-gl-lidar` (`packages/plugins/package.json`) — half checked by the compiler
 
@@ -275,14 +427,16 @@ wrapper goes back to covering the Measure/Colorbar/Legend/HTML/Bookmark panels
 
 `lidar-measure-mirror.ts` draws the Measure tool's line/polygon into that same
 overlay (`LidarControl.getDeckOverlay()`) with `depthTest: false`, the trick the
-plugin's own cross-section line uses to sit above the points. Two things there
-are not compiler checked: deck paints its layers in insertion order, so the
-mirror re-appends itself on any frame where it is no longer the overlay's last
-layer (streaming adds a chunk layer whenever the viewport pulls in new nodes),
-and the geometry is read from the MapLibre/Mapbox `geojson` source's `_data`
-field, since neither library exposes a public reader. Losing either costs only
-the mirror — the measured line goes back to being hidden inside the cloud, which
-is what #2533 was.
+plugin's own cross-section line uses to sit above the points. It is added with
+`addLayer(id, layer, { overlay: true })` (0.21+), which draws it after every
+point cloud chunk, including chunks that stream in later; the point cloud
+annotator's highlight, box and vector layers use the same flag. One thing is not
+compiler checked: the geometry is read from the MapLibre/Mapbox `geojson`
+source's `_data` field, since neither library exposes a public reader. Losing it
+costs only the mirror — the measured line goes back to being hidden inside the
+cloud, which is what #2533 was. `tests/upstream-contracts.test.ts` checks both
+shapes against the real libraries (a real MapLibre `GeoJSONSource`, and the
+mapbox-gl bundle's `setData`).
 
 The **class** is a hand-kept copy of the package's `DECK_CANVAS_CLASS`, not an
 import: `maplibre-gl-lidar` builds into its own lazy chunk, and importing even
@@ -294,6 +448,27 @@ is not visible to the compiler, so
 resulting DOM order and z-indices — run it on a bump
 (`npx playwright test e2e/lidar-canvas-stacking.spec.ts --project=features`).
 
+The point cloud annotator's **Full detail in view** calls `loadRegion` /
+`clearPinnedRegion` (0.20+) and decides whether a cloud qualifies without an
+upstream flag: a streamed COPC is one whose source contains `.copc.` and whose
+`nodeRanges` carry octree keys rather than `"file"`
+(`canLoadFullDetail` in `point-cloud-annotation/index.ts`). Its saved labels
+also assume a pinned region's nodes keep their octree keys, so a bump that
+changes node keys or pinning semantics must rerun
+`e2e/point-cloud-annotation.spec.ts` ("loads the view at full detail").
+
+The annotator's label encoding (delta-varint point index, then a class byte or a
+varint instance id, raw DEFLATE, base64; `label-store.ts`) is decoded in three
+places the compiler cannot link: `geolibre.project` (Python reader),
+`geolibre.pointcloud` (pre-labels and labelled-file rewrites) and the embedded
+job script in `backend/geolibre_server/geolibre_server/app/pointcloud.py`
+(`/pointcloud/apply-labels`, which runs on the conversion runtime and cannot
+import the Python package). Their tests share app-encoded fixtures
+(`Y2BkWcP0ahHLfyDgBwA=` for instance ids), so a change to the format must update
+all three and the fixtures together. The COPC node order they rebuild from the
+hierarchy (data nodes sorted by chunk offset) must match the order
+maplibre-gl-lidar's `nodeRanges` index points within a node.
+
 The `?data=` LiDAR deep link leans on two more things the compiler cannot see.
 `isStreamedLidarUrl` (`apps/geolibre-desktop/src/lib/data-url.ts`) copies the
 routing at the top of `LidarControl.loadPointCloud` (an `/ept.json` suffix or a
@@ -302,8 +477,183 @@ whole downloads get the size check. If upstream changes that routing, update the
 copy, or a streamed file gets a needless size check and a downloaded one skips
 it. `addLidarLayerFromUrl` also relies on `load` firing, and adding the store
 layer, before `loadPointCloud` resolves; it throws if not.
-`tests/lidar-url-layer.test.ts` pins the GeoLibre side of both. Re-read
-`loadPointCloud` on a bump.
+`tests/lidar-url-layer.test.ts` pins the GeoLibre side of both, and
+`tests/upstream-contracts.test.ts` fails if `loadPointCloud` stops routing on
+those strings. Re-read `loadPointCloud` on a bump.
+
+The point cloud annotator (`packages/plugins/src/plugins/point-cloud-annotation/`)
+edits the control's loaded points through the point-editing API the package
+added in 0.18 (`getPointCloudData`, `refreshPointColors`, `getRenderSettings`,
+`pauseStreaming`/`resumeStreaming`, `isStreamingLoading`,
+`DeckOverlay.getViewport`), all called from `lidar-access.ts`. Two things are not
+compiler checked. Edits write into the arrays `getPointCloudData` returns, which
+relies on them being the buffers the layers render from (for a streamed cloud,
+views of the loader's buffers). Saved labels are keyed by `nodeRanges`
+(`(node key, index - start)`), so a change in how the loaders order a node's
+points would silently re-apply labels to the wrong points. `ASPRS_CLASSES` in
+`classes.ts` hand-mirrors the package's unexported `CLASSIFICATION_COLORS`;
+`tests/point-cloud-annotation.test.ts` reads the real colours back through
+`ColorSchemeProcessor` and fails on drift. Run
+`npx playwright test e2e/point-cloud-annotation.spec.ts --project=features` on
+a bump.
+
+### `maplibre-gl-layer-control` (`packages/map/package.json`) — private internals
+
+`packages/map/src/layer-control-host.ts` drives the on-map layer control
+through its public options and adapter methods (including the layer-group
+methods added in 0.18.0), but it also reaches into private members the
+compiler cannot check; `LayerControlInternalState` in that file lists them:
+
+- `panel` and the `.layer-control-item` / `.layer-control-checkbox` /
+  `.layer-control-opacity` / `.layer-control-name` DOM, to mirror store
+  visibility, opacity, and names into an already-built panel in place.
+- `state.layerStates` (same reason) and `state.collapsed`, read before a
+  rebuild so a control that was open is remounted open.
+- `basemapLayerIds`, seeded when there is no fetchable basemap style URL.
+- `buildLayerItems()`, called to add the Background row on styles with no root
+  basemap layers, and to redraw the rows after a reorder the store refused.
+
+If upstream renames any of these, the panel stops following the store (or a
+rebuild closes the panel) without an error. `tests/upstream-contracts.test.ts`
+builds a real `LayerControl` and checks every member above and the row class
+names; it cannot check how a rebuild uses them, so still drive the control in
+the app on a bump: toggle a grouped layer, reorder
+inside a group, and hide a group. The fix belongs upstream as public API; this
+package is ours (`opengeos/maplibre-gl-layer-control`).
+
+### `maplibre-gl-splat` (`packages/plugins/package.json`) — private internals
+
+`packages/plugins/src/plugins/components/splatting.ts` reaches into
+`GaussianSplatControl`'s private fields, which the compiler cannot check:
+
+- `reserveSplattingIds` replaces the `_layerCounter` / `_modelCounter` instance
+  fields with accessors. Upstream names each asset `splat-${this._layerCounter++}`
+  / `model-${this._modelCounter++}`, and a new control restarts at 0, so without
+  the accessors a fresh load could take a saved layer's id and overwrite it.
+  Restoring a saved layer under its own id also goes through them.
+- `recordSplattingPlacements` wraps `loadSplat` / `loadModel` on the instance and
+  reads `_splatLayers` / `_modelLayers` (per-asset longitude/latitude/altitude),
+  `_state.rotation` / `_state.scale` and `_options.defaultModelRotation`, so the
+  store layer carries the placement a restore needs. The restore turns
+  `_options.flyTo` off while it runs.
+
+If upstream renames those fields or changes how it assigns ids, id reservation
+and placement restore stop working without an error.
+`tests/splatting-restore.test.ts` drives a fake with the same shape, so it will
+not catch that; `tests/upstream-contracts.test.ts` builds a real control and
+checks each field and the `splat-${counter}` / `model-${counter}` naming and
+placement recording in `loadSplat` / `loadModel`.
+Better still, upstream an id option and a per-asset placement getter and delete
+the patching.
+
+### `@geoman-io/maplibre-geoman-free` (`packages/plugins/package.json`) — change-mode and shape-marker internals
+
+Geoman's change mode removes a vertex on right-click, but only for LineString,
+Polygon and MultiPolygon. `installGeomanActionPatches` in
+`packages/plugins/src/plugins/maplibre-geo-editor.ts` adds MultiLineString
+(discussion #2750). It hooks `geoman.actionInstances` and wraps the
+`edit__change` action's `cutVertex`, reading the `featureData` / `markerData`
+payload and calling `fireFeatureUpdatedEvent`. None of that is checked by the
+compiler. `patch-package` is no help here: the app loads the nested copies
+under `packages/plugins` and `apps/geolibre-desktop`, not the root one.
+
+If a bump renames the action key or those members, the wrapper silently stops
+applying and MultiLineString vertices go back to logging
+`EditChange.cutVertex: feature not updated`. `tests/upstream-contracts.test.ts`
+checks the hook points in both nested copies' `dist/maplibre-geoman.es.js`
+(text only: Geoman cannot be built without a live map). On a bump, still
+right-click a MultiLineString vertex in Edit mode. If upstream adds MultiLineString support, delete the
+wrapper.
+
+The same hook fixes edge-marker placement (#3382). Geoman's shape-markers
+helper (`helper__shape_markers`) puts each edge's "add a vertex" marker at
+`getSegmentMiddlePosition`, which unprojects the midpoint of the two ends'
+screen positions once, at the camera an edit starts with. On a zoomed-out
+globe that strews the markers away from their edges. The hook overrides
+`getSegmentMiddlePosition` on the helper instance with
+`mercatorSegmentMidpoint` (`geo-editor-geometry.ts`) and must return
+`{ coordinate, path }` with the path built as Geoman builds it (the start's
+path ending in `-1`), since `insertVertex` splices at the edge end's path. The
+helper has to be registered before `startAction()` builds the markers, or the
+first set keeps Geoman's placement. `tests/upstream-contracts.test.ts` checks
+these hook points too. On a bump, still open Edit geometry on a world layer
+(the countries Parquet sample) zoomed out on the globe, zoom in, and check the
+small midpoint markers sit on their edges. If upstream computes the midpoint
+from coordinates, delete the override.
+
+### `@carbonplan/zarr-layer` — private `minZoom`
+
+The Dynamical plugin draws its regional datasets (analyses and ensembles, which
+pack long time series into each chunk) only from a minimum zoom, so a zoomed-out
+view cannot read gigabytes. MapLibre's layer zoom range covers every render, but
+zarr-layer also fetches once while it initializes, gated on its own private
+`minZoom` field (set from the constructor's `minzoom`, read by
+`isZoomInRange`). The Zarr control does not forward `minzoom`, so
+`applyRegionalZoomRange` in `packages/plugins/src/plugins/maplibre-dynamical.ts`
+writes the field on the live layer, guarded by a type check. If upstream renames
+it the write silently stops, and only that first fetch loses its gate (the panel
+also jumps the map to the minimum zoom before adding, which covers the common
+case). `tests/upstream-contracts.test.ts` checks the field and its use; on a
+bump, check whether the Zarr control now forwards `minzoom` so the write can go.
+
+### `zarr-cesium` (`packages/map/package.json`) — private internals
+
+`packages/map/src/cesium-zarr-imagery.ts` draws Zarr layers on the globe and
+relies on two things zarr-cesium does not export as API:
+
+- `ZarrLayerProvider` only honours named matplotlib colormaps (its documented
+  `colorScale` option is still not forwarded in 0.4.4), so GeoLibre writes the layer's
+  ramp to the provider's private `source.colorScale.colors` and calls
+  `source.updateColormapTexture()`. If those move, the globe draws the default
+  ramp and logs one warning.
+- `ZARR_DIMENSION_ALIASES` mirrors zarr-maps-tiling's `DIMENSION_ALIASES_DEFAULT`
+  (the names it files under `time` / `elevation`). Drift sends a selector to the
+  wrong key, so the Time Slider steps nothing.
+
+`tests/cesium-zarr-imagery.test.ts` constructs the real provider and imports
+the real alias table, so both fail CI on a bump; run it, and check whether
+upstream now forwards `colorScale` so the private write can go. zarr-cesium also
+imports the `cesium` wrapper, which `apps/geolibre-desktop/vite.config.ts`
+aliases to `@cesium/engine`: keep that alias if a bump adds more `cesium`
+imports, or the globe loads a second engine.
+
+### `maplibre-gl-planetary-computer` (`packages/plugins/package.json`): client, restore, and sync contract
+
+GeoLibre drives this library through its public API only (0.5.0 and later):
+`maplibre-planetary-computer.ts` hands the control a `STACClient` built from
+`planetaryComputerStacClientOptions()` (`planetary-computer-stac.ts`), restores
+saved layers with `addItemLayer` / `addMosaicLayer` and their `id` option, and
+adds its own buttons through `customActions` (`planetary-computer-actions.ts`).
+Nothing reaches into a private field anymore, but four behaviors are still
+relied on without a type to enforce them:
+
+- **Search is a `GET /search`.** The Planetary Computer API has rejected the
+  CORS preflight a JSON `POST /search` needs, so a POST fails with "Failed to
+  fetch" in the browser and the Tauri webview. GET is the library default; if
+  that default changes, every search in the panel and the AI Assistant breaks.
+- **The collection list falls back to the bundled snapshot.**
+  `planetary-computer-collections.json` is used when the live `/collections`
+  request cannot be read. `.github/workflows/refresh-planetary-computer-collections.yml`
+  regenerates it monthly and opens a pull request; run
+  `npm run gen:planetary-computer-collections` to refresh it by hand, then format
+  the file (`npx oxfmt --write packages/plugins/src/plugins/planetary-computer-collections.json`,
+  or let the pre-commit hook do it): the script writes it minified, and the
+  committed copy is the formatted output.
+- **`updateLayer` stores `visible` and `opacity` verbatim** before emitting
+  `layer:update`. The store-to-control and control-to-store sync both compare
+  with `===`; a library that rounded or coerced the values would make toggling
+  visibility or opacity in the Layers panel loop forever.
+- **`addMosaicLayer` with `mosaicId` adds the layer synchronously.** The restore
+  path registers the mosaic's search itself, then adds the layer while the store
+  sync is suspended. If the add became asynchronous, its `layer:add` event would
+  fire unsuspended and drop the saved layers not yet restored.
+
+`tests/upstream-contracts.test.ts` checks all four against the installed
+package, and `tests/planetary-computer-stac.test.ts` runs the real client with
+GeoLibre's options. Run both on a bump. The render presets live upstream too:
+the Python API and the MCP server name them in docstrings
+(`python/src/geolibre/mcp/server.py`, `skills/geolibre/references/mcp-tools.md`),
+so update those lists when a preset is added or renamed.
 
 ### `maplibre-gl-raster` — stretch and gamma curves
 
@@ -330,6 +680,31 @@ typed, and only under a non-default stretch or gamma. On a bump, re-read that
 package's `pushAdjustments` for the forward curves and their order (its own
 `inverseStretch` helper, used for the histogram ticks, is a second copy of the
 two stretch inverses above) and run `tests/raster-symbology.test.ts`.
+`tests/upstream-contracts.test.ts` reads `pushAdjustments` and the three shader
+curves out of the published chunk and fails if the order, a curve or the
+strength changes.
+
+### `maplibre-gl-raster` — pixel inspector click guard
+
+`guardRasterInspectorClicks` (`packages/plugins/src/plugins/maplibre-raster.ts`)
+wraps the private `RasterControl._inspector._onClick` once after mount, so the
+pixel inspector ignores a click that a drawing map tool (Measure, the Geo
+Editor) has claimed through `isMapClickClaimed` (#3237). It works only because
+the inspector's `enable()` and `disable()` both read `this._onClick` at call
+time; if upstream binds a copy instead, the guard is skipped (the inspector
+opens on measure clicks again) or, worse, `disable()` stops unbinding it.
+`tests/upstream-contracts.test.ts` reads the published chunk and fails if the
+field, the arrow property or either binding moves. Better still, upstream a
+click-filter option and delete the wrap.
+
+### `maplibre-gl-raster` — rasters stay out of the depth buffer
+
+The package draws deck.gl rasters with `depthWriteEnabled: false`. Each grid
+gets different mesh triangles, so with depth writes on, a raster under another
+one on a different grid punches stable holes in it (#3285). Nothing errors, so
+`tests/upstream-contracts.test.ts` checks the published bundle for the flag. If
+that test fails, confirm the new version still keeps rasters from fighting
+before changing it.
 
 ### `maplibre-gl-raster` — checked by the compiler
 
@@ -345,6 +720,55 @@ assignability against the real imported type, so a renamed or dropped engine
 identifier fails `npm run typecheck`. Nothing extra to do on a bump beyond letting
 the build run.
 
+### `maplibre-gl-raster` — picker data copied to keep it off startup
+
+`apps/geolibre-desktop/src/lib/raster-picker-mirror.ts` is a hand-kept copy of
+the package's `COLORMAP_OPTIONS`, `NORMALIZED_DIFFERENCE_INDICES`,
+`CUSTOM_NORMALIZED_DIFFERENCE`, `indexById` and `guessBandForRole`. The Style
+panel's colormap and spectral index pickers need them as soon as they render,
+and the package ships as one shared chunk, so importing even one constant put
+the whole ~0.35 MB library on the startup path. Everything else GeoLibre takes
+from the package is async and dynamic-imports it instead; keep new value
+imports that way.
+`tests/raster-picker-mirror.test.ts` compares every value and both helpers with
+the package export, so a colormap added or renamed upstream fails
+`npm run test:frontend`. Regenerate the copy from the package when it does.
+
+### Datum shifts (`geotiff-geokeys-to-proj4`, `cog-tiler-wasm`, `maplibre-gl-raster`)
+
+The EPSG tables in `geotiff-geokeys-to-proj4` leave the datum shift
+(`+towgs84`) out for many national grids, and epsg.io's PROJJSON (the default
+resolver of the raster control's deck.gl engine) carries none either, so
+without help those rasters land 50 to 300 m off. `packages/core/src/datum-shift.ts`
+holds a small table of shifts and adds them wherever GeoLibre builds a
+projection from an EPSG code or GeoTIFF geokeys:
+
+- `cog-tiler-wasm` (the raster control's default engine) through its
+  `setSourceCrsResolver` hook (0.5.0 and later), installed by
+  `installCogTilerDatumShift` wherever GeoLibre imports the tiler and before
+  the raster control loads;
+- the deck.gl engine through the control's `epsgResolver` option
+  (`packages/plugins/src/plugins/epsg-datum-resolver.ts`);
+- `epsg-proj4.ts`, the OBIA `toPixel`, `polygonizeLabels` (which traces pixels
+  on a stand-in grid and places the vertices through the same definition),
+  the spectral profile, samgeo, point clouds and ArcGIS Zarr.
+
+`withDatumShift` leaves a definition that already names a transformation, so
+a `geotiff-geokeys-to-proj4` bump that adds shifts to its tables needs no
+change here. On a bump of any of the three packages, run
+`tests/datum-shift.test.ts`; it checks the British National Grid against a
+PROJ-computed point. Every entry in the table was checked against PROJ's best
+transformation for that code (within 2 m; 15 m for the NAD27 mean). Re-check
+any entry you add the same way.
+
+One definition is replaced whole, not only shifted: EPSG:31300 (Belge Lambert
+72) uses Lambert Conic Conformal (2SP Belgium), which proj4 lacks and the tables
+give as a plain LCC 2SP, about 745 m off. `REPLACED` in `datum-shift.ts` gives it
+the parameters of EPSG:31370, the same grid as a plain LCC 2SP. PROJ has the same
+gap (it uses the plain LCC 2SP formulas for that method), so check it against the
+worked example in EPSG Guidance Note 7-2, not against PROJ, as the test does. If
+a bump of `geotiff-geokeys-to-proj4` fixes the code, drop the entry.
+
 ### `tauri-plugin-persisted-scope` — private on-disk format
 
 `PersistedScopeState` (`apps/geolibre-desktop/src-tauri/src/lib.rs`) mirrors the
@@ -353,7 +777,8 @@ per-photo grants before the plugin synchronously replays them at startup. On a
 `tauri-plugin-persisted-scope` bump, compare the upstream struct's field order
 and types against this mirror and run the Rust scope-cleanup tests. Bincode
 encodes fields positionally, so an upstream layout change is not compiler
-checked.
+checked. This mirror is Rust-side, so `tests/upstream-contracts.test.ts` does
+not cover it.
 
 The `bincode` dependency itself is pinned to the **1.x** line and Dependabot is
 configured (`.github/dependabot.yml`) to skip its major bumps: the plugin writes
@@ -473,8 +898,11 @@ so it catches a broken `CESIUM_BASE_URL` or a dead chunk.
 `e2e/cesium-primary-renderer.spec.ts` adds the toolbar: it asserts the three
 buttons mount, carry translated tooltips, and share a right edge, which catches a
 renamed view-model observable and the 0x0-button case of a missing stylesheet.
-Neither catches the rest of the CSS regression or the bundle-size one — check
-those by eye and in the build output.
+`tests/upstream-contracts.test.ts` adds the static half: `Build/Cesium`'s
+directories must equal `RUNTIME_DIRS`, every `CESIUM_CSS_PATHS` file must exist
+and define each `.cesium-*` class `index.css` restyles, and the view models
+must still carry the tooltip observables. None of these catches the bundle-size
+regression — check that in the build output.
 
 ### ArcGIS Maps SDK for JavaScript — loaded from Esri's CDN
 
@@ -502,6 +930,12 @@ manual check, not a Dependabot event:
   replacement is the `@arcgis/map-components` CDN build. Attribution already
   uses the 5.x path: the view draws it while `view.attributionVisible` is on,
   so the deprecated `Attribution` widget is not loaded.
+- **The Compass widget's `viewModel.reset`.** The engine overwrites it so a
+  click levels the pitch as well as the heading, as MapLibre's compass does.
+  That member is not part of the typed surface, and a missing `viewModel` is
+  skipped quietly, so a release that restructures it silently reverts the
+  compass to heading-only. After a bump, tilt a scene and click the compass:
+  both heading and tilt must return to 0.
 - **The ESM CDN notice.** The SDK logs "Only use ES modules from ArcGIS CDN for
   testing" on load; Esri's documented production path is an npm build, which
   this renderer deliberately avoids (see the size argument in issue #2421). The
@@ -515,6 +949,174 @@ manual check, not a Dependabot event:
   and `font-src` in `tauri.conf.json` and `docker/nginx.conf`, and cached by
   the `geolibre-arcgis-sdk` service-worker rule in `vite.config.ts`. The
   version is in every URL, so a bump mints new cache entries.
+
+### JAXA Earth API for JavaScript — loaded from JAXA's server
+
+The JAXA Earth plugin draws its tiles with JAXA's "JAXA Earth API for
+JavaScript", which is not published to npm.
+`packages/plugins/src/plugins/jaxa-earth-api.ts` fetches the release named by
+`JAXA_EARTH_API_VERSION` from `data.earth.jaxa.jp`, refuses it unless its
+SHA-256 equals `JAXA_EARTH_MODULE_SHA256`, and imports it from a `blob:` URL.
+The module has no imports of its own, so no CSP change is needed (`blob:` is in
+`script-src` and the fetch runs under `connect-src`). The surface it uses
+(`ImageCollection`, `TileGenerator`, `image.ColorMap`, `Resampling`) is typed
+by hand, so the compiler does not check it against JAXA's `jaxa.earth.esm.d.ts`.
+
+The checksum is the only trust boundary: once imported, the module runs with
+the app's full privileges, including the Tauri IPC bridge on desktop. To move to
+a new release, bump the version, compute the checksum from the exact bytes JAXA
+serves (`curl -s <module url> | sha256sum`), review the module and the
+new `.d.ts` diff against the members above before committing the hash, and add a
+dataset from the panel in a browser. If JAXA republishes the
+pinned file in place, every JAXA layer fails with a "module changed" error
+until the checksum is updated.
+
+### Desktop CSP `script-src` allowlist
+
+The desktop CSP (`apps/geolibre-desktop/src-tauri/tauri.conf.json`) does not
+allow all of `https://cdn.jsdelivr.net/npm/`. It lists one version-pinned path
+per package the app executes from jsDelivr. That blocks scripts from any other
+package or version on the CDN; it does not verify what is served at an allowed
+path, so a compromised release at a pinned path still runs, and CSP stops
+checking paths once a request is redirected. Each version is owned by
+something else, so a bump can move the URL the app requests while the CSP keeps
+the old one. The packaged app then hits a CSP block that `tauri dev` never
+shows, because `tauri dev` does not apply the CSP. `tests/tauri-csp.test.ts`
+re-derives every path from its owner and fails when they disagree:
+
+| `script-src` path | Owner (bump this, then update the CSP) | Loaded by |
+| --- | --- | --- |
+| `pyodide/v<ver>/full/` | `PYODIDE_VERSION` in `pyodide-config.ts` | Pyodide's `import()` of `pyodide.asm.js` (Python Console) |
+| `npm/@electric-sql/pglite@<ver>/`, `npm/@electric-sql/pglite-postgis@<ver>/` | lockfile | `pglite-loader.cdn.ts` (SQL Workspace → PostGIS) |
+| `npm/onnxruntime-web@<ver>/dist/` | `ORT_VERSION` in `packages/processing/src/ort.ts` | onnxruntime's `import()` of its wasm glue (object detection, SAM) |
+| `npm/@duckdb/duckdb-wasm@<ver>/dist/` | lockfile (`apps/geolibre-desktop`) | `maplibre-gl-components`' DuckDB converter: a blob worker that calls `importScripts()` on the worker URL from `getJsDelivrBundles()` |
+| `npm/@duckdb/duckdb-wasm@1.31.0/`, `npm/sql.js@1.13.0/dist/`, `npm/geojson-vt@4.0.2/`, `npm/vt-pbf@3.1.3/` | URLs hard-coded in `maplibre-gl-vector` | Add Data → Vector Layer (DuckDB, the GeoPackage patch, the MVT fallback) |
+| `npm/apache-arrow@…`, `npm/tslib@…`, `npm/flatbuffers@…`, `npm/pbf@…`, `npm/ieee754@…`, `npm/@mapbox/point-geometry@…`, `npm/@mapbox/vector-tile@…` | jsDelivr's `/+esm` builds of the `maplibre-gl-vector` URLs above | the `import` statements inside those bundles |
+
+Blob workers inherit the page's CSP, so `importScripts()` in one is checked
+against `script-src`. Workers started from the app's own files
+(`pyodide-worker.js`, the DuckDB and Whitebox workers) carry no CSP at all:
+Tauri only attaches the policy header to HTML responses. Wasm, wheels, PGlite
+data and the CereusDB/gdal3.js binaries are `fetch`ed, so `connect-src`
+covers them.
+
+When `maplibre-gl-vector` changes a CDN URL, the test's
+`MAPLIBRE_GL_VECTOR_URLS` assertion fails. Re-derive the transitive `/+esm`
+paths by listing each new bundle's imports, for example
+`curl -s https://cdn.jsdelivr.net/npm/vt-pbf@3.1.3/+esm | grep -o '/npm/[^"]*'`,
+recursing into each result, then update `ESM_TRANSITIVE_PATHS` and the CSP
+together.
+
+The web build's CSP (the app `location /` in `docker/nginx.conf`) lists exactly
+the same pinned paths, and the test fails when the two lists disagree, so update
+both files in the same change. There too the app's own worker files carry no
+CSP: nginx serves `.js` files from the static-asset location, which sends none.
+The JupyterLite location allows only `pyodide/` from jsDelivr, unpinned: the
+site's Pyodide comes from whichever `jupyterlite-pyodide-kernel` release pip
+resolves when the image is built.
+
+A self-hosted `VITE_PYODIDE_INDEX_URL` mirror needs no CSP change in either
+build: `pyodide-console.ts` fetches the mirror's entry scripts and runs them
+from `blob:` URLs, and the vector-tools worker is not under the CSP. A rebuilt
+app that loads scripts from any other host needs that host's path added to
+`script-src` in both files.
+
+**`'unsafe-eval'` stays.** `maplibre-gl-vector` builds its CDN loader with
+`new Function("url", "return import(url)")` at module scope, and that module is
+in the startup graph. Without `'unsafe-eval'` the packaged app throws an
+`EvalError` while booting and shows a blank window (verified on the Linux
+WebKitGTK build). Other features compile strings at runtime as well: the
+attribute field calculator (`attribute-expression.ts`), the raster calculator
+(`raster-client.ts`), the AI Assistant's JavaScript tool, the Earth Engine code
+editor, Emscripten embind glue (`maplibre-gl-lidar`, `maplibre-gl-splat`), and
+`ndarray`, Ajv and Mapillary's filter compiler. `'wasm-unsafe-eval'` alone is
+not enough for any of these. Dropping `'unsafe-eval'` starts with an upstream
+`maplibre-gl-vector` change, and then each of these consumers needs a
+replacement.
+
+**`connect-src` keeps `https:` and `http:`.** Users add tile, COG, vector and
+service URLs from arbitrary hosts (XYZ, WMS/WMTS, ArcGIS, STAC, PMTiles), and
+some of those hosts are plain-HTTP servers on a LAN, so no fixed host list can
+cover them. `img-src` keeps `https:` for the same reason.
+
+**`style-src` is exempt from Tauri's asset CSP rewrite.** At build time Tauri
+hashes every inline `<style>` in `index.html` into `style-src` and adds a
+nonce. A hash or nonce makes the browser ignore `'unsafe-inline'`, so the
+`<style>` elements that external plugins and several libraries inject at
+runtime are blocked, and only in the packaged app (#3210, after the startup
+placeholder style landed in `index.html`). `"dangerousDisableAssetCspModification":
+["style-src"]` keeps the policy as written. That deliberately lets
+`'unsafe-inline'` cover every inline style again, which is how 3.4.0 and earlier
+behaved; `script-src` still gets Tauri's nonces and hashes.
+`tests/tauri-csp.test.ts` fails if the exemption is dropped or widened.
+
+### `httpx` (`backend/geolibre_server_api/pyproject.toml`) — private transport pool
+
+The projects server's protection against identity-provider requests to internal
+addresses (`geolibre_server_api/egress.py`) needs an httpcore network backend,
+which `httpx.HTTPTransport` does not accept. `GuardedTransport` therefore
+replaces the private `HTTPTransport._pool` with an `httpcore.ConnectionPool`
+built on `GuardedBackend`. If `_pool` is renamed, building the transport raises
+`RuntimeError` at startup. If httpx keeps `_pool` but stops sending requests
+through it, the guard is bypassed with no error. After a bump, check that
+`HTTPTransport.handle_request` still sends requests through `self._pool`, and
+run `python -m pytest backend/geolibre_server_api/tests/test_egress.py`
+(`test_identity_provider_client_refuses_loopback` makes a real connection
+through the transport).
+
+## Shared dependency ranges
+
+`apps/geolibre-desktop` and `packages/plugins` declare many of the same
+upstream packages. If a bump moves the range in only one of them, npm can no
+longer hoist one copy and nests a second under the workspace that disagrees:
+the app bundles two versions, and the contract tests above check one copy while
+the other runs. Dependabot opens one PR per manifest, so this is easy to merge
+by accident. `npm run check:shared-deps` (`scripts/check-shared-deps.mjs`, run
+in the CI "Lint and type check" job) fails when a package declared in both
+manifests, in any dependency section, carries different ranges. Fix it by
+giving both the same range and refreshing `package-lock.json` in the same PR.
+
+### One shared `three`
+
+The app and its three-based plugins (`maplibre-gl-3d-tiles`, `maplibre-gl-splat`,
+`maplibre-gl-components`, deck.gl mesh layers) share one copy of three. Two things
+keep it that way:
+
+- The upstream opengeos packages keep three out of their ES `dist` and declare it as
+  a peer (`maplibre-gl-splat` >= 0.2.9, `maplibre-gl-3d-tiles` >= 0.5.11,
+  `maplibre-gl-components` >= 0.31.2). An older release inlines its own three again.
+- The root `package.json` `overrides` pins `three` to the app's range, because
+  `@dvt3d/maplibre-three-plugin` declares `three: ^0.178.0` (0.178.x only) and would
+  otherwise pull in a second, older copy. `mapillary-js` also declares an old three,
+  but its `dist` bundles its own copy and never imports it, so the override is
+  harmless there. Opening the Mapillary viewer still loads that bundled 0.134 copy,
+  the only remaining "Multiple instances of Three.js" warning.
+
+When bumping `three`, move the override with the app's range, then run
+`npm ls three`: it should list one version. If npm keeps a stale nested copy,
+follow the lockfile clean-up in
+[Dependency updates and the audit allowlist](#dependency-updates-and-the-audit-allowlist).
+Spark's `dist` embeds three inside its sort worker's source string. That copy runs in
+a Web Worker and never registers as a second main-thread instance.
+
+### One `a5-js`, on the A5 v1 index
+
+A5 v1 (`a5-js` 1.0) renumbered every cell: the cells are the same, but their
+IDs are not compatible with v0 (`a5-js` <= 0.10). GeoLibre speaks v1 everywhere
+(the A5 grid plugin and the DGGS tools in `@geolibre/processing`). Two
+dependencies still lag:
+
+- `@deck.gl/geo-layers` 9.4 declares `a5-js: ^0.10.0` for `A5Layer`, which
+  plugins reach through the plugin API. The root `package.json` `overrides`
+  forces it onto the app's `a5-js` (A5Layer only calls `cellToBoundary` and
+  `hexToU64`, unchanged in v1). Drop the override once a deck.gl release depends
+  on `a5-js` 1.x, and check `npm ls a5-js` lists one version.
+- The DuckDB `a5` community extension built for the bundled DuckDB-WASM (DuckDB
+  v1.5.1) is still on the v0 index; only DuckDB >= 1.5.6 gets the v1 build.
+  `packages/processing/src/a5-tools.ts` passes every ID the extension returns
+  through `migrate()`, and DGGS Compact runs A5 client-side on `a5-js`. When a
+  `@duckdb/duckdb-wasm` bump moves to DuckDB >= 1.5.6, remove the migration
+  (DGGS Generator/Binning would otherwise migrate v1 IDs a second time).
 
 ## Adding a blend mode
 
@@ -568,7 +1170,8 @@ the whole built-in plugin registry, 39 files, dropping function coverage 72.90% 
 to lower the floor (GeoLibre#1888 extracted `lib/plugin-layer-queries.ts`;
 `geo-editor-geometry.ts` in `@geolibre/plugins` is the same pattern). Check what a
 new test _transitively_ imports before assuming a coverage drop means the code got
-worse.
+worse. The [untested module ratchet](#untested-module-ratchet) below
+keeps the large modules that no test loads from staying out of sight.
 
 `test:frontend:coverage` runs through `scripts/coverage-check.mjs` rather than
 calling `node --test` directly. Node still enforces all three floors; the wrapper
@@ -588,6 +1191,44 @@ run the _full_ backend suite — without the optional engines
 (geopandas/rasterio/sedona/httpx) the vector/raster/SQL/ML tests skip themselves
 and CI is green but hollow: `pip install -e "backend/geolibre_server[test]"`.
 
+### Untested module ratchet
+
+Because the report only counts imported files, a large module that no test
+loads is invisible to the floors. `npm run check:untested-modules`
+(`scripts/check-untested-modules.mjs`) makes those visible. It reads the lcov
+report `test:frontend:coverage` writes to `coverage/frontend.lcov`, which lists
+every file the suite loaded directly or transitively, and compares it with every
+source file under `apps/*/src` and `packages/*/src`. Declaration files, `index.*`
+barrels, locale catalogs, and generated files (an `AUTO-GENERATED`,
+`@generated`, or `DO NOT EDIT` header, plus the Whitebox menu catalog) do not
+count. It runs right after the coverage step in `ci:frontend`, so in CI's "Build
+and test" job and in `npm run ci`; `ci:web` skips it because it does not measure
+coverage. Run it locally after `npm run test:frontend:coverage`.
+
+Every untested source file over 500 lines must be listed in
+`scripts/untested-modules-baseline.json` with its line count, and the check
+fails when:
+
+- **A new file over 500 lines appears that no test loads.** Add a test that
+  imports it, or a leaf module extracted from it (see above for why testing the
+  leaf keeps the coverage floors steady). A renamed baseline file shows up as
+  new: move its entry to the new path.
+- **A baseline file grows more than 50 lines past its recorded count** with
+  still no test loading it. Add a test, or put the new code in a tested module.
+
+The baseline only shrinks. When an entry gains a test, drops to 500 lines or
+fewer, or is deleted, the check prints a hint;
+`npm run check:untested-modules -- --prune` removes those entries and lowers the
+counts of entries that shrank, and never adds one. Do that in the same PR so the
+gain is kept. `--write-baseline` rewrites the file from scratch and exists only
+to bootstrap it; do not use it to absorb a new untested module.
+
+The same command also prints, without gating, the backend sidecar modules that
+have no `test_<module>.py` or `test_<module>_*.py` in
+`backend/geolibre_server/tests`. Some are exercised through other test files
+(the route tests drive `app/main.py`), so treat the list as a prompt to check,
+not a count of untested code.
+
 ## Lint warning ratchet
 
 `npm run lint` passes `--max-warnings` (in the root `package.json`) set to the
@@ -597,7 +1238,16 @@ count can only go down. The warnings come from `react-hooks/exhaustive-deps`,
 `@typescript-eslint/no-floating-promises` (app, package and worker `src/`
 only, checked against each file's nearest `tsconfig.json`), and
 `local/no-physical-tailwind` (`eslint-rules/no-physical-tailwind.mjs`, the
-right-to-left rule from [Internationalization](i18n.md#right-to-left-languages)).
+right-to-left rule from [Internationalization](i18n.md#right-to-left-languages)),
+and two `eslint-plugin-jsx-a11y` rules (`control-has-associated-label`,
+`no-static-element-interactions`) on app and package `.tsx`.
+
+`eslint-plugin-jsx-a11y` 6.10 declares ESLint up to 9 as a peer. It runs under
+ESLint 10, and the `overrides` entry for it in the root `package.json` points its
+peer at the installed ESLint. When the plugin publishes ESLint 10 support, drop
+that override. If a future ESLint breaks the plugin, `npm run lint` fails
+loudly; pin ESLint or disable the two rules rather than reaching for
+`--legacy-peer-deps`.
 
 - **A PR adds a warning:** fix it. For a floating promise that is a deliberate
   fire-and-forget, prefix the call with `void` and make sure it handles its own
@@ -606,13 +1256,99 @@ right-to-left rule from [Internationalization](i18n.md#right-to-left-languages))
   not raise the limit.
 - **A PR fixes warnings:** lower the limit to the new total that ESLint prints,
   in the same PR, so the gain is kept.
+- **A PR turns on a new rule:** the one time the limit goes up. Raise it by
+  exactly the new rule's count on the code as it is, say so in the PR, and fix
+  those warnings over time like the rest.
+
+## Test type-check ratchet
+
+The frontend tests run under `node --import tsx --test`, and tsx strips types
+without checking them, so a test fake that drifts from the interface it stands
+in for (a renamed property, a new required member, a changed argument) still
+runs and still passes. `npm run typecheck:tests` closes that gap: it runs
+`tsc --noEmit` over three projects in `tests/` and fails when the number of
+errors in test files rises above `--max-errors` (in the root `package.json`).
+It runs in CI's "Lint and type check" job and in `npm run ci` / `ci:web`.
+
+- `tests/tsconfig.json` checks every test against the DOM lib with the Node,
+  React and Vite types and the ambient `.d.ts` files the app and packages
+  compile with. `allowJs` lets tests import the `scripts/*.mjs` they cover with
+  inferred types.
+- `tests/tsconfig.workers.json` checks the tests that import `workers/tiles` or
+  `workers/viewer` against `@cloudflare/workers-types`, and
+  `tests/tsconfig.ai-proxy.json` the ones that import `workers/ai-proxy`
+  against that worker's generated `worker-configuration.d.ts`. The Workers
+  runtime types redeclare the DOM globals, so these tests cannot share the main
+  program. A new test that imports worker source goes in the main project's
+  `exclude` **and** one worker project's list; the script fails if an excluded
+  test is in neither worker project.
+
+Only errors in `tests/` count. A test's imports pull product source into the
+program, and that source is checked by its own workspace's tsconfig; an error
+it reports under the tests' settings (DOM-using `@geolibre/core` code under the
+Workers types, say) is printed for information and not counted.
+
+The limit works like the [lint warning ratchet](#lint-warning-ratchet):
+
+- **A PR adds a type error in a test:** fix it. Build fakes against the real
+  type: spread `DEFAULT_LAYER_STYLE` for a partial `LayerStyle`, use
+  `tests/helpers/layer-fixtures.ts` for a layer, and cast a deliberately partial
+  fake of a large interface (a MapLibre `Map`, a Cesium viewer) once through
+  `unknown` in a small typed helper rather than at every call. Do not raise the
+  limit.
+- **A PR fixes type errors:** lower the limit to the new total the script
+  prints, in the same PR.
+
+Run `node scripts/check-test-typecheck.mjs --max-errors 0 --verbose` to list
+every counted error, or `npx tsc --noEmit -p tests/tsconfig.json` for tsc's own
+output.
+
+## Boot bundle budget
+
+`npm run build` fails when the JS the app entry imports statically (what
+`index.html` modulepreloads before the shell mounts) grows past either budget
+in `apps/geolibre-desktop/boot-budget.json`, or when it contains Cesium. The
+check is `bootBundleBudgetPlugin` in `apps/geolibre-desktop/vite.config.ts`.
+
+| Budget      | Limit                     | Measured when set |
+| ----------- | ------------------------- | ----------------- |
+| `rawBytes`  | 3 MiB, minified           | ~2.2 MB           |
+| `gzipBytes` | 900 KiB, gzip level 9     | ~680 kB           |
+
+Gzip is the closer proxy for what a browser downloads; raw is what it parses.
+Most regressions trip both, because they come from a chunk-grouping change
+that drags a whole lazy package (Cesium, DuckDB, a `maplibre-gl-*` plugin) onto
+the boot path. The error lists the largest boot chunks. Fix the grouping in
+`CODE_SPLITTING_GROUPS` / `manualChunks` rather than raising a budget; raise
+one only after confirming the new eager code belongs at boot, and say so in the
+PR.
+
+`npm run bundle:report` (after a build) writes `bundle-report/bundle-report.md`
+and `.json`: every JS/WASM asset in `dist/assets` with raw and gzip sizes, the
+boot set read from the built `index.html` against both budgets, and the size of
+each top-level `dist` entry. CI's build job uploads it as the `bundle-report`
+artifact and appends the Markdown to the job summary, so two runs can be
+compared without rebuilding.
+
+### Workers do not share chunks with the main build
+
+Vite bundles each `new Worker(new URL(...))` as a separate build, so anything a
+worker imports is emitted again even when the main thread has the same module.
+That once shipped h5wasm (libhdf5, ~4.8 MB) twice, once for the local NetCDF
+reader and once inside `netcdf-remote.worker.ts`. The main build now emits h5wasm
+as an explicit chunk and the worker imports it by URL
+(`apps/geolibre-desktop/vite-plugins/shared-h5wasm.ts`), and the build fails if
+anything but exactly one `hdf5_hl-*.js` is emitted. A new worker that
+imports a large library should do the same, or accept the duplicate knowingly;
+the bundle report makes a second copy easy to spot.
 
 ## Dependency updates and the audit allowlist
 
 Dependencies are watched two ways: **Dependabot** (`.github/dependabot.yml`) opens
 grouped weekly update PRs for npm, pip (backend + `python/`), cargo, and Actions,
-and the CI **`audit` job** runs `npm run audit:ci` (blocking) plus a non-blocking
-`pip-audit` of the resolved backend environment.
+and CI runs `npm run audit:ci` (blocking, in the "Lint and type check" job) plus a
+non-blocking `pip-audit` of the resolved backend environment (in the "Backend
+tests" job).
 
 `audit:ci` is `scripts/audit-check.mjs`, a thin wrapper over `npm audit
 --omit=dev` that still fails on every high/critical advisory _except_ the ones
@@ -691,6 +1427,17 @@ So: any edit to that `pyproject.toml`'s dependencies must land with a refreshed
 lock (`uv lock --project backend/geolibre_server`). CI's "Check the bundled sidecar
 lockfile is in sync" step (`uv lock --check`) fails if they drift.
 
+The launch also passes `--python 3.12` (`SIDECAR_PYTHON_VERSION`), the default
+version of the Whitebox and conversion runtimes and the one CI tests. Without it uv
+picks the newest Python available, and `--frozen` then fails outright if a locked
+package has no compatible wheel or usable source distribution for it
+(`psycopg-binary` on 3.15 did). Moving the pin rebuilds users'
+`sidecar-server` and `jupyter-server` environments, dropping anything they
+`%pip install`ed, and that first launch needs network access unless the
+interpreter and packages are already present, so mention it in the release notes
+and check the lock has wheels for the new version on every
+platform first.
+
 ## Credentials must never reach a redistributable build
 
 Anything we hand to someone else — the Jupyter wheel above all — must carry no
@@ -708,10 +1455,11 @@ and every guard below blocks one of them.
    the one we cannot fix is `@clerk/shared`'s `getEnvVariable.mjs`, which does
    `import.meta.env[name]` with a computed name, so the inlined record lands in
    the `ClerkGate-*.js` chunk.
-3. `python/hatch_build.py` skips the JS build when `static/app` already exists
-   and `GEOLIBRE_FORCE_JS_BUILD` is unset. A local `python -m build` therefore
-   packages whatever an earlier `npm run build:embed` left staged, with no
-   JavaScript running at all.
+3. `python/hatch_build.py` skips each frontend build when its staged output
+   (`static/app/index.html` or `static/mcp/show-map.html`) already exists and
+   `GEOLIBRE_FORCE_JS_BUILD` is unset. A local `python -m build` can therefore
+   package assets left by earlier `npm run build:embed` / `npm run build:mcp-app`
+   runs, with no JavaScript running at all.
 
 ### The rules now
 
@@ -784,6 +1532,43 @@ output when a build actually runs. Rebuild, or delete the stale directory.
 
 ## Generated files and cross-file sync
 
+- **The network endpoints page.** [`network-endpoints.md`](network-endpoints.md)
+  lists every external host the app contacts, by hand. A change that adds one
+  (a basemap, plugin, relay route in `workers/tiles`, CDN asset, or default
+  service), including a `maplibre-gl-*` bump that brings a new host, updates
+  that page in the same PR and marks the host default or opt-in.
+
+- **Native PostGIS tile concurrency.** `MAX_TILES_IN_FLIGHT` in
+  `apps/geolibre-desktop/src/lib/postgis-tiles-url.ts` caps tile requests per
+  connection at the Rust pool size, `POOL_SIZE` in
+  `src-tauri/src/postgis_tiles.rs`, so surplus tiles wait where MapLibre can
+  still cancel them. Change both together; `tests/postgis-tiles-url.test.ts`
+  reads the Rust constant and fails on drift.
+
+- **The open data gallery.** [`gallery.md`](gallery.md) and the "Open data
+  showcase" teaser on [`demos.md`](demos.md) (between the
+  `<!-- demo-gallery-teaser -->` markers) are generated from
+  `scripts/demo-gallery.json`: the themes, the featured demos, and one entry per
+  demo (slug, title, theme tag, caption, data credit). Edit the JSON, run
+  `npm run gallery`, and commit both files; `npm run gallery:check` (part of
+  `npm run ci`) fails on drift. Each entry's screenshot must already be at
+  `https://assets.geolibre.app/images/<slug>.webp` (opengeos/geolibre-assets),
+  and its `theme` should match the tag on its share.geolibre.app project.
+- **The built-in plugin reference.** The table on
+  [`user-guide/plugins.md`](user-guide/plugins.md) (between the
+  `<!-- plugin-reference:start/end -->` markers) is generated by
+  `scripts/gen-plugin-reference.mjs`. It reads the plugin list and order from
+  `BUILT_IN_PLUGINS` in `usePlugins.ts`, each plugin's `id` and `name` from its
+  definition in `packages/plugins/src`, the display name from `en.json`'s
+  `toolbar.plugin`, the menu location from `PluginsMenu.tsx` and the
+  `WEB_SERVICE_PLUGIN_IDS`/`DGGS_PLUGIN_IDS` groups, and the `?plugin=` link
+  name from the `plugin-deep-link.ts` rules. Only the one-line description (and
+  a `menu` for a plugin `PluginsMenu` hides) is hand-written, in
+  `scripts/plugin-reference.json`. After registering, renaming, or regrouping a
+  built-in plugin, add its entry, run `npm run plugins:docs`, and commit both
+  files. `tests/plugin-reference-docs.test.ts` and `npm run plugins:docs:check`
+  (part of `npm run ci`) fail on drift, and the generator itself fails on a
+  registered plugin with no description.
 - **Processing tool metadata.** Names, descriptions, group labels, parameter
   labels/help and select options live in registries with no i18n access, so the
   dialogs resolve them through

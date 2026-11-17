@@ -8,8 +8,10 @@ import {
 } from "@geolibre/core";
 import {
   buildStoryMapHtml,
+  scaleStoryOpacity,
   storyExportCandidates,
 } from "../apps/geolibre-desktop/src/lib/storymap-export";
+import { resolveTextFontFromStyleLayers } from "../packages/map/src/text-font";
 
 function story(overrides: Partial<StoryMap> = {}): StoryMap {
   return {
@@ -109,6 +111,80 @@ describe("buildStoryMapHtml raster sources", () => {
     assert.ok(html.includes("scene-a-source"));
     assert.ok(html.includes("https://tiles.example.com/{z}/{x}/{y}.png"));
     assert.ok(!html.includes(JSON.stringify(TILEJSON_URL)), "does not also embed the TileJSON url");
+  });
+
+  it("rewrites a {-y} XYZ template into the row MapLibre can request", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [
+        rasterLayer(
+          "scene-a",
+          { type: "raster", tiles: ["https://tiles.example.com/{z}/{x}/{-y}.png"] },
+          { type: "xyz" },
+        ),
+      ],
+    });
+    assert.ok(html.includes("https://tiles.example.com/{z}/{x}/{y}.png"));
+    assert.ok(!html.includes("{-y}"));
+    assert.ok(html.includes('"scheme":"tms"'));
+  });
+
+  it("cancels scheme tms and {-y} to an XYZ row in the export", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [
+        rasterLayer(
+          "scene-a",
+          {
+            type: "raster",
+            scheme: "tms",
+            tiles: ["https://tiles.example.com/{z}/{x}/{-y}.png"],
+          },
+          { type: "xyz" },
+        ),
+      ],
+    });
+    assert.ok(html.includes("https://tiles.example.com/{z}/{x}/{y}.png"));
+    assert.ok(!html.includes("{-y}"));
+    assert.ok(!html.includes('"scheme"'));
+  });
+
+  it("keeps scheme tms when the XYZ template uses {y}", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [
+        rasterLayer(
+          "scene-a",
+          {
+            type: "raster",
+            scheme: "tms",
+            tiles: ["https://tiles.example.com/{z}/{x}/{y}.png"],
+          },
+          { type: "xyz" },
+        ),
+      ],
+    });
+    assert.ok(html.includes("https://tiles.example.com/{z}/{x}/{y}.png"));
+    assert.ok(html.includes('"scheme":"tms"'));
+  });
+
+  it("omits an XYZ layer whose template names both row tokens", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [
+        rasterLayer(
+          "scene-a",
+          { type: "raster", tiles: ["https://tiles.example.com/{z}/{x}/{y}/{-y}.png"] },
+          { type: "xyz" },
+        ),
+      ],
+    });
+    assert.ok(!html.includes("scene-a-source"));
+    assert.ok(!html.includes("{-y}"));
   });
 
   it("drops raster layers whose url is not http(s)", () => {
@@ -368,5 +444,253 @@ describe("buildStoryMapHtml popup expressions (#2597)", () => {
     });
     const popups = exportedConfig(html).popups as Record<string, Array<{ t: string }>>;
     assert.equal(popups.markers[0].t, "12");
+  });
+});
+
+/** A categorized polygon layer, labelled by a field when `labels` is set. */
+function categorizedPolygons(patch: Partial<GeoLibreLayer["style"]> = {}): GeoLibreLayer {
+  return {
+    id: "zones",
+    name: "Zones",
+    type: "geojson",
+    source: { type: "geojson" },
+    visible: true,
+    opacity: 0.5,
+    style: {
+      ...DEFAULT_LAYER_STYLE,
+      vectorStyleMode: "categorized",
+      vectorStyleProperty: "kind",
+      vectorStyleStops: [
+        { value: "park", color: "#00ff00" },
+        { value: "lake", color: "#0000ff" },
+      ],
+      ...patch,
+    },
+    metadata: {},
+    geojson: {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          geometry: {
+            type: "Polygon",
+            coordinates: [
+              [
+                [0, 0],
+                [1, 0],
+                [1, 1],
+                [0, 0],
+              ],
+            ],
+          },
+          properties: { kind: "park", name: "Central" },
+        },
+      ],
+    },
+  };
+}
+
+/** The spec the page passes to `map.addLayer`/`addLabelLayer` for `id`. */
+function exportedLayerSpec(html: string, call: string, id: string): Record<string, unknown> {
+  for (const line of html.split("\n")) {
+    const match = new RegExp(`^\\s*${call}\\((\\{.*\\})\\);$`).exec(line);
+    if (!match) continue;
+    const spec = JSON.parse(match[1]) as Record<string, unknown>;
+    if (spec.id === id) return spec;
+  }
+  throw new Error(`no ${call} for ${id}`);
+}
+
+describe("buildStoryMapHtml symbology and labels (#3033)", () => {
+  it("exports a categorized renderer as its data-driven color expression", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [categorizedPolygons()],
+    });
+    const spec = exportedLayerSpec(html, "map.addLayer", "zones");
+    const paint = spec.paint as Record<string, unknown>;
+    const color = JSON.stringify(paint["fill-color"]);
+    assert.match(color, /"match"/);
+    assert.match(color, /"park","#00ff00"/);
+    assert.match(color, /"lake","#0000ff"/);
+    assert.equal(paint["fill-opacity"], DEFAULT_LAYER_STYLE.fillOpacity * 0.5);
+  });
+
+  it("adds a label layer that fades with its layer", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [
+        categorizedPolygons({
+          labels: { ...DEFAULT_LAYER_STYLE.labels, enabled: true, field: "name", size: 16 },
+        }),
+      ],
+    });
+    const label = exportedLayerSpec(html, "addLabelLayer", "zones::label");
+    assert.equal(label.type, "symbol");
+    assert.equal(label.source, "zones-source");
+    const layout = label.layout as Record<string, unknown>;
+    assert.match(JSON.stringify(layout["text-field"]), /"name"/);
+    assert.equal(layout["text-size"], 16);
+    // The page resolves the font against the basemap at load time.
+    assert.equal(layout["text-font"], undefined);
+    assert.equal((label.paint as Record<string, unknown>)["text-opacity"], 0.5);
+    const config = exportedConfig(html);
+    assert.equal(config.labelLayerSuffix, "::label");
+    assert.match(String(config.labelGlyphs), /^https:\/\/.*\{fontstack\}\/\{range\}\.pbf$/);
+    assert.match(html, /fadeLayer\(layer\.layer \+ config\.labelLayerSuffix/);
+  });
+
+  it("adds no label layer when labels are off", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [categorizedPolygons()],
+    });
+    assert.doesNotMatch(html, /addLabelLayer\(\{/);
+  });
+
+  it("seeds the label from chapter 0's opacity", () => {
+    const html = buildStoryMapHtml({
+      storymap: story({
+        chapters: story().chapters.map((chapter, index) =>
+          index === 0
+            ? { ...chapter, onChapterEnter: [{ layerId: "zones", opacity: 0 }] }
+            : chapter,
+        ),
+      }),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [
+        categorizedPolygons({
+          labels: { ...DEFAULT_LAYER_STYLE.labels, enabled: true, field: "name" },
+        }),
+      ],
+    });
+    const label = exportedLayerSpec(html, "addLabelLayer", "zones::label");
+    assert.equal((label.paint as Record<string, unknown>)["text-opacity"], 0);
+  });
+});
+
+describe("buildStoryMapHtml chapter fades keep the layer style", () => {
+  it("seeds chapter 0's opacity in place of the layer opacity, keeping the fill style", () => {
+    const html = buildStoryMapHtml({
+      storymap: story({
+        chapters: story().chapters.map((chapter, index) =>
+          index === 0
+            ? { ...chapter, onChapterEnter: [{ layerId: "zones", opacity: 1 }] }
+            : chapter,
+        ),
+      }),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [categorizedPolygons({ fillOpacity: 0.45 })],
+    });
+    const spec = exportedLayerSpec(html, "map.addLayer", "zones");
+    // Opacity 1 is the layer at full opacity, not a solid fill.
+    assert.equal((spec.paint as Record<string, unknown>)["fill-opacity"], 0.45);
+  });
+
+  it("hands the page each layer's opacity paint to scale on a fade", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [categorizedPolygons({ fillOpacity: 0.45 })],
+    });
+    const fadeBase = exportedConfig(html).fadeBase as Record<string, Record<string, unknown>>;
+    assert.equal(fadeBase.zones["fill-opacity"], 0.45);
+    assert.match(html, /scaleOpacity\(base\[prop\], opacity\)/);
+  });
+
+  it("scales numbers, unset values, and zoom-stepped expressions", () => {
+    assert.equal(scaleStoryOpacity(0.45, 0.2), 0.45 * 0.2);
+    assert.equal(scaleStoryOpacity(undefined, 0.3), 0.3);
+    const expr = ["get", "o"];
+    assert.equal(scaleStoryOpacity(expr, 1), expr);
+    assert.deepEqual(scaleStoryOpacity(expr, 0.5), ["*", expr, 0.5]);
+    assert.deepEqual(scaleStoryOpacity(["step", ["zoom"], 0.2, 10, 0.8], 0.5), [
+      "step",
+      ["zoom"],
+      0.1,
+      10,
+      0.4,
+    ]);
+  });
+});
+
+describe("buildStoryMapHtml label font resolution (#3033)", () => {
+  it("resolves fonts exactly as the live map's resolver does", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [],
+    });
+    const source = /function resolveLabelFont\(layers\) \{[\s\S]*?\n {8}\}/.exec(html);
+    assert.ok(source, "page defines resolveLabelFont");
+    const pageResolve = new Function(`${source[0]}; return resolveLabelFont;`)() as (
+      layers: unknown,
+    ) => string[] | null;
+    const fixtures: Array<Array<{ type: string; layout?: Record<string, unknown> }>> = [
+      [],
+      [{ type: "fill" }],
+      [{ type: "symbol", layout: { "icon-image": "x", "text-font": ["Icon Font"] } }],
+      [{ type: "symbol", layout: { "text-field": "{name}", "text-font": ["Noto Sans Bold"] } }],
+      [
+        {
+          type: "symbol",
+          layout: { "text-field": "{name}", "text-font": ["literal", ["Open Sans", "Arial"]] },
+        },
+      ],
+      [
+        { type: "symbol", layout: { "text-field": "{name}", "text-font": ["get", "font"] } },
+        { type: "symbol", layout: { "text-field": "{ref}", "text-font": ["Roboto Regular"] } },
+      ],
+      [{ type: "symbol", layout: { "text-field": "{name}" } }],
+    ];
+    const fallback = ["Fallback"];
+    for (const layers of fixtures) {
+      assert.deepEqual(
+        pageResolve(layers) ?? fallback,
+        resolveTextFontFromStyleLayers(layers, fallback),
+        JSON.stringify(layers),
+      );
+    }
+  });
+
+  it("exports a categorized point layer's circle color expression", () => {
+    const layer = markerLayer({
+      style: {
+        ...DEFAULT_LAYER_STYLE,
+        vectorStyleMode: "categorized",
+        vectorStyleProperty: "name",
+        vectorStyleStops: [{ value: "Ypres", color: "#ff8800" }],
+      },
+    });
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [layer],
+    });
+    const spec = exportedLayerSpec(html, "map.addLayer", "markers");
+    assert.equal(spec.type, "circle");
+    assert.match(
+      JSON.stringify((spec.paint as Record<string, unknown>)["circle-color"]),
+      /"Ypres","#ff8800"/,
+    );
+  });
+});
+
+describe("buildStoryMapHtml chapter list (#3477)", () => {
+  it("moves left and full-width cards clear of the open chapter list", () => {
+    const html = buildStoryMapHtml({
+      storymap: story(),
+      basemapStyleUrl: "https://tiles.example.com/style.json",
+      layers: [],
+    });
+    assert.match(html, /body\.sm-nav-open \.lefty \{ margin-left: max\(5vw, 244px\); \}/);
+    assert.match(html, /body\.sm-nav-open \.fully \{ margin-left: 244px;/);
+    // The class follows the list: on at load unless the story hides it, and
+    // flipped with the toggle button.
+    assert.match(html, /else document\.body\.classList\.add\('sm-nav-open'\);/);
+    assert.match(html, /document\.body\.classList\.toggle\('sm-nav-open', !nowHidden\);/);
   });
 });

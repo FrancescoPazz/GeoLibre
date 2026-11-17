@@ -11,7 +11,9 @@ export const HDX_CKAN_SEARCH_UPSTREAM = "https://data.humdata.org/api/3/action/p
 // Prefer the reachable `z` backend instead of the round-robin hostname:
 // requests from Cloudflare's edge currently receive a synthetic 521 from the
 // latter. A second explicitly allowlisted public instance handles transient
-// overloads without turning the route into an open proxy.
+// overloads without turning the route into an open proxy. Each instance sees
+// the queried area, so add one only after reviewing who operates it, and
+// record its operator in the network endpoints docs page.
 export const OVERPASS_API_UPSTREAM = "https://z.overpass-api.de/api/interpreter";
 export const OVERPASS_API_FALLBACK_UPSTREAM = "https://overpass.private.coffee/api/interpreter";
 export const OPEN_SKY_STATES_UPSTREAM = "https://opensky-network.org/api/states/all";
@@ -49,6 +51,15 @@ export const FIRMS_UPSTREAMS = {
     "https://firms.modaps.eosdis.nasa.gov/data/active_fire/suomi-npp-viirs-c2/csv/SUOMI_VIIRS_C2_Global_24h.csv",
 } as const;
 
+/**
+ * HUB Ocean's Ocean Data Platform. Its vector tile and OGC API Features
+ * endpoints only send CORS headers for `app.hubocean.earth`, so every GeoLibre
+ * host reads them through `/odp/...`. The STAC catalog is CORS-open and is read
+ * directly, never through the Worker.
+ */
+export const ODP_TILE_UPSTREAM = "https://api.hubocean.earth/api/table/v2/tile/";
+export const ODP_FEATURES_UPSTREAM = "https://api.hubocean.earth/api/features/collections/";
+
 export const TILES_ALLOWED_URL_PREFIXES = [
   "https://s3-eu-west-1.amazonaws.com/whereonmars.cartodb.net/",
   "https://s3.us-east-2.amazonaws.com/opmmarstiles/",
@@ -75,11 +86,12 @@ export const TILES_ALLOWED_URL_PREFIXES = [
   "https://data.texas.gov/api/views/",
   "https://source.coop/",
   "https://build.protomaps.com/",
-  "https://planetarymaps.usgs.gov/",
   "https://celestrak.org/NORAD/elements/gp.php",
   "https://celestrak.org/NORAD/elements/supplemental/sup-gp.php",
   "https://ll.thespacedevs.com/2.3.0/launches/",
   "https://raw.githubusercontent.com/",
+  ODP_TILE_UPSTREAM,
+  ODP_FEATURES_UPSTREAM,
 ] as const;
 
 /** @deprecated Prefer {@link TILES_ALLOWED_URL_PREFIXES}; kept for tests/docs. */

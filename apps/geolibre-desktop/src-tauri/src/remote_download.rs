@@ -1,0 +1,1235 @@
+//! Streamed downloads of large remote files, such as NASA Earthdata granules.
+//!
+//! The plugin HTTP transport (`plugin_http.rs`) buffers a whole response and
+//! hands it to JavaScript as base64, capped at 64 MiB. A GEDI L2A granule is
+//! 1-2 GB and the DAACs send no CORS headers, so neither that transport nor the
+//! webview can fetch one. This streams the body to disk instead, reporting
+//! progress over a channel, and either saves it where the user picks in a
+//! native dialog or parks it in the app cache until `take_cached_download`
+//! reads it back once. JavaScript never names a path to write, so the command
+//! cannot be turned into an arbitrary file writer.
+//!
+//! A bearer token goes to the first host only: reqwest drops its sensitive
+//! headers (`Authorization`, `Cookie`, `Proxy-Authorization`) when a redirect
+//! changes host, which is what the DAACs expect, since they answer with a
+//! presigned CloudFront URL. Other headers would follow every hop, so a request
+//! that carries headers must start on HTTPS and may only carry those sensitive
+//! ones plus `Accept`.
+
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    time::Duration,
+};
+
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    redirect::Policy,
+    Url,
+};
+use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
+use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
+
+use super::{
+    guarded_async_client_builder, plugin_http::redirect_target_allowed, url_is_fetchable,
+    MAX_HTTP_REDIRECTS,
+};
+
+/// A stalled transfer fails after this long without a byte, however large the
+/// file. There is no overall deadline: a multi-gigabyte granule can take hours.
+const READ_TIMEOUT_SECS: u64 = 60;
+/// Progress is reported at most once per this many bytes.
+const PROGRESS_STEP_BYTES: u64 = 1024 * 1024;
+const MAX_FILE_NAME_CHARS: usize = 120;
+const CACHE_SUBDIR: &str = "remote-downloads";
+
+/// Request headers the transport sets itself.
+const MANAGED_REQUEST_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "connection",
+    "transfer-encoding",
+    "keep-alive",
+    "upgrade",
+    "range",
+    "accept-encoding",
+];
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteDownloadRequest {
+    url: String,
+    #[serde(default)]
+    headers: Vec<(String, String)>,
+    /// Suggested file name; sanitized before it touches the filesystem.
+    file_name: String,
+    /// `true` asks where to save the file; `false` keeps it in the app cache
+    /// for `take_cached_download`.
+    save: bool,
+    /// A folder picked earlier with `pick_download_folder`, by its id: the file
+    /// is written there under its sanitized name, without a dialog. JavaScript
+    /// only ever holds the id, never a path it could point elsewhere.
+    #[serde(default)]
+    folder_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PickedDownloadFolder {
+    id: String,
+    path: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteDownloadProgress {
+    received: u64,
+    total: Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteDownloadResult {
+    /// Where a saved file landed; `None` for a cached download.
+    path: Option<String>,
+    size: u64,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WriteFileResult {
+    /// Where the written file landed.
+    path: String,
+    size: u64,
+}
+
+type CancelDownload = Box<dyn Fn() + Send + Sync>;
+
+/// In-flight downloads (for cancellation) and finished cache downloads waiting
+/// to be read, both keyed by the caller's request id.
+#[derive(Default, Clone)]
+pub(crate) struct RemoteDownloads {
+    active: Arc<Mutex<HashMap<String, CancelDownload>>>,
+    cached: Arc<Mutex<HashMap<String, PathBuf>>>,
+    /// Folders the user picked for multi-file downloads, by id.
+    folders: Arc<Mutex<HashMap<String, PathBuf>>>,
+}
+
+impl RemoteDownloads {
+    fn cancel(&self, id: &str) {
+        if let Some(cancel) = self.active.lock().unwrap().remove(id) {
+            cancel();
+        }
+    }
+}
+
+struct ActiveGuard {
+    downloads: RemoteDownloads,
+    id: String,
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.downloads.cancel(&self.id);
+    }
+}
+
+/// A `.part` file that is removed unless the download completes, so a failed
+/// or cancelled transfer (whose future is simply dropped) leaves nothing behind.
+struct PartFile {
+    path: PathBuf,
+    done: bool,
+}
+
+impl Drop for PartFile {
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Reserve `folder/name`, or `folder/stem (n).ext` when that is taken, by
+/// creating it empty with `create_new`, so a folder download never replaces a
+/// file already there, and two downloads of the same name running at once
+/// never pick the same destination (the save dialog asks the user itself).
+fn reserve_unique_path(folder: &Path, name: &str) -> Result<PathBuf, String> {
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (name, String::new()),
+    };
+    for n in 0..10_000u32 {
+        let candidate = if n == 0 {
+            folder.join(name)
+        } else {
+            folder.join(format!("{stem} ({n}){extension}"))
+        };
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(_) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Could not create the download file: {error}")),
+        }
+    }
+    Err("Could not find a free file name in the chosen folder.".into())
+}
+
+/// Reduce a suggested name to a safe single path component.
+fn sanitize_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(MAX_FILE_NAME_CHARS)
+        .collect();
+    let trimmed = cleaned.trim_start_matches('.');
+    if trimmed.is_empty() {
+        "download".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Headers a download may carry: credentials reqwest strips on a cross-host
+/// redirect, and `Accept`. Anything else would be replayed to every hop.
+const FORWARDABLE_REQUEST_HEADERS: &[&str] = &["authorization", "cookie", "accept"];
+
+/// Credentials never travel over plain HTTP.
+fn check_scheme(url: &Url, headers: &HeaderMap) -> Result<(), String> {
+    if url.scheme() != "https" && !headers.is_empty() {
+        return Err("Refusing to send credentials over a non-HTTPS URL.".into());
+    }
+    Ok(())
+}
+
+fn request_headers(headers: Vec<(String, String)>) -> Result<HeaderMap, String> {
+    let mut map = HeaderMap::new();
+    for (name, value) in headers {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| format!("Invalid request header name: {name}"))?;
+        if MANAGED_REQUEST_HEADERS.contains(&name.as_str()) {
+            continue;
+        }
+        if !FORWARDABLE_REQUEST_HEADERS.contains(&name.as_str()) {
+            return Err(format!("Unsupported download header: {name}"));
+        }
+        let value = HeaderValue::from_str(&value)
+            .map_err(|_| format!("Invalid value for request header {name}."))?;
+        map.append(name, value);
+    }
+    Ok(map)
+}
+
+/// The download client. A request that carries credentials gets one whose
+/// redirects must stay on HTTPS: reqwest strips credentials only when the host
+/// changes, so a same-host `https` to `http` hop would otherwise resend them in
+/// clear text.
+fn client(credentialed: bool) -> Result<reqwest::Client, String> {
+    static PLAIN: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    static CREDENTIALED: OnceLock<Result<reqwest::Client, String>> = OnceLock::new();
+    let build = move || {
+        guarded_async_client_builder(Policy::custom(move |attempt| {
+            if attempt.previous().len() >= MAX_HTTP_REDIRECTS {
+                return attempt.error("Too many redirects.");
+            }
+            if credentialed && attempt.url().scheme() != "https" {
+                return attempt.error("Refusing a redirect from HTTPS to plain HTTP.");
+            }
+            match redirect_target_allowed(attempt.url()) {
+                Ok(()) => attempt.follow(),
+                Err(error) => attempt.error(error),
+            }
+        }))?
+        .read_timeout(Duration::from_secs(READ_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| format!("Could not create the download client: {error}"))
+    };
+    if credentialed {
+        CREDENTIALED.get_or_init(build).clone()
+    } else {
+        PLAIN.get_or_init(build).clone()
+    }
+}
+
+/// The cache directory for downloads, emptied once per app session so files
+/// from a crashed or closed session do not pile up.
+fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    static CLEARED: OnceLock<()> = OnceLock::new();
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("Could not resolve the app cache directory: {error}"))?
+        .join(CACHE_SUBDIR);
+    CLEARED.get_or_init(|| {
+        let _ = fs::remove_dir_all(&dir);
+    });
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Could not create the download cache: {error}"))?;
+    Ok(dir)
+}
+
+/// A user-facing message for an unsuccessful status.
+fn status_error(status: reqwest::StatusCode) -> String {
+    match status.as_u16() {
+        401 | 403 => format!(
+            "The server refused the download ({status}). Check that your Earthdata Login token is valid and that you have accepted the dataset's EULA, if it has one."
+        ),
+        _ => format!("Download failed with status {status}."),
+    }
+}
+
+/// Stream `url` into `destination`. `part_tag` makes the partial file unique to
+/// the request; `placeholder` guards the empty file a folder download reserved
+/// at `destination`, removing it if the download fails or is dropped (it is
+/// created before the task is spawned, so an abort before the first poll still
+/// cleans up).
+async fn transfer(
+    url: Url,
+    headers: HeaderMap,
+    destination: PathBuf,
+    part_tag: String,
+    mut placeholder: Option<PartFile>,
+    progress: tauri::ipc::Channel<RemoteDownloadProgress>,
+) -> Result<u64, String> {
+    let response = client(!headers.is_empty())?
+        .get(url)
+        .headers(headers)
+        // The length check below compares against Content-Length, which is the
+        // encoded size; ask for the bytes as stored so the two always agree.
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await
+        .map_err(|error| format!("Download failed: {}", error.without_url()))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(status_error(status));
+    }
+    let total = response.content_length();
+    let part_name = format!(
+        "{}.{part_tag}.part",
+        destination
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    );
+    let mut part = PartFile {
+        path: destination.with_file_name(part_name),
+        done: false,
+    };
+    let mut file = fs::File::create(&part.path)
+        .map_err(|error| format!("Could not create the download file: {error}"))?;
+    let mut response = response;
+    let mut received: u64 = 0;
+    let mut reported: u64 = 0;
+    let _ = progress.send(RemoteDownloadProgress { received, total });
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("Download interrupted: {}", error.without_url()))?
+    {
+        file.write_all(&chunk)
+            .map_err(|error| format!("Could not write the download: {error}"))?;
+        received += chunk.len() as u64;
+        if received - reported >= PROGRESS_STEP_BYTES {
+            reported = received;
+            let _ = progress.send(RemoteDownloadProgress { received, total });
+        }
+    }
+    if total.is_some_and(|total| total != received) {
+        return Err("The download ended early.".into());
+    }
+    file.flush()
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("Could not write the download: {error}"))?;
+    drop(file);
+    fs::rename(&part.path, &destination)
+        .map_err(|error| format!("Could not finish the download: {error}"))?;
+    part.done = true;
+    if let Some(placeholder) = placeholder.as_mut() {
+        placeholder.done = true;
+    }
+    let _ = progress.send(RemoteDownloadProgress { received, total });
+    Ok(received)
+}
+
+/// Ask where to save `file_name`; `None` when the user cancels.
+async fn pick_save_path(
+    app: &tauri::AppHandle,
+    file_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    let dialog_app = app.clone();
+    let name = file_name.to_string();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app
+            .dialog()
+            .file()
+            .set_file_name(&name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|error| format!("Could not open the save dialog: {error}"))?;
+    picked
+        .map(|path| {
+            path.into_path()
+                .map_err(|error| format!("Could not resolve the save path: {error}"))
+        })
+        .transpose()
+}
+
+/// Download a remote file to disk, natively and without CORS. Returns `None`
+/// when the user cancels the save dialog.
+#[tauri::command]
+pub(crate) async fn download_remote_file(
+    app: tauri::AppHandle,
+    request: RemoteDownloadRequest,
+    request_id: String,
+    progress: tauri::ipc::Channel<RemoteDownloadProgress>,
+    downloads: tauri::State<'_, RemoteDownloads>,
+) -> Result<Option<RemoteDownloadResult>, String> {
+    let url = Url::parse(&request.url).map_err(|_| "Invalid download URL.".to_string())?;
+    let headers = request_headers(request.headers)?;
+    check_scheme(&url, &headers)?;
+    let checked = url.clone();
+    tauri::async_runtime::spawn_blocking(move || url_is_fetchable(&checked))
+        .await
+        .map_err(|error| format!("URL validation failed: {error}"))??;
+    // Reject a reused ID before the save dialog opens, and never let a new
+    // cache entry orphan an earlier one's file.
+    if downloads.active.lock().unwrap().contains_key(&request_id)
+        || downloads.cached.lock().unwrap().contains_key(&request_id)
+    {
+        return Err("Duplicate request ID.".into());
+    }
+    let file_name = sanitize_file_name(&request.file_name);
+    let folder = match &request.folder_id {
+        Some(id) => Some(
+            downloads
+                .folders
+                .lock()
+                .unwrap()
+                .get(id)
+                .cloned()
+                .ok_or_else(|| "Unknown download folder.".to_string())?,
+        ),
+        None => None,
+    };
+    let is_folder = folder.is_some();
+    let saves_to_disk = request.save || is_folder;
+    let mut placeholder = None;
+    let destination = if let Some(folder) = folder {
+        let reserved = reserve_unique_path(&folder, &file_name)?;
+        placeholder = Some(PartFile {
+            path: reserved.clone(),
+            done: false,
+        });
+        reserved
+    } else if request.save {
+        match pick_save_path(&app, &file_name).await? {
+            Some(path) => path,
+            None => return Ok(None),
+        }
+    } else {
+        cache_dir(&app)?.join(format!("{}-{file_name}", sanitize_file_name(&request_id)))
+    };
+
+    let task = {
+        let mut active = downloads.active.lock().unwrap();
+        if active.contains_key(&request_id) {
+            return Err("Duplicate request ID.".into());
+        }
+        let task = tauri::async_runtime::spawn(transfer(
+            url,
+            headers,
+            destination.clone(),
+            sanitize_file_name(&request_id),
+            placeholder,
+            progress,
+        ));
+        let abort = task.inner().abort_handle();
+        active.insert(request_id.clone(), Box::new(move || abort.abort()));
+        task
+    };
+    let _guard = ActiveGuard {
+        downloads: downloads.inner().clone(),
+        id: request_id.clone(),
+    };
+    let size = task.await.map_err(|error| match error {
+        tauri::Error::JoinError(join) if join.is_cancelled() => "Download cancelled.".to_string(),
+        other => format!("The download task failed: {other}"),
+    })??;
+    if saves_to_disk {
+        Ok(Some(RemoteDownloadResult {
+            path: Some(destination.to_string_lossy().into_owned()),
+            size,
+        }))
+    } else {
+        downloads
+            .cached
+            .lock()
+            .unwrap()
+            .insert(request_id, destination);
+        Ok(Some(RemoteDownloadResult { path: None, size }))
+    }
+}
+
+/// Ask for a folder to save several downloads into; `None` when the user
+/// cancels. The folder is remembered for the app session under the returned id,
+/// which [`download_remote_file`] accepts as `folderId`.
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn pick_download_folder(
+    app: tauri::AppHandle,
+    downloads: tauri::State<'_, RemoteDownloads>,
+) -> Result<Option<PickedDownloadFolder>, String> {
+    let dialog_app = app.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        dialog_app.dialog().file().blocking_pick_folder()
+    })
+    .await
+    .map_err(|error| format!("Could not open the folder picker: {error}"))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|error| format!("Could not resolve the folder: {error}"))?;
+    if !path.is_dir() {
+        return Err("The chosen folder does not exist.".into());
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_FOLDER_ID: AtomicU64 = AtomicU64::new(1);
+    let id = format!("folder-{}", NEXT_FOLDER_ID.fetch_add(1, Ordering::Relaxed));
+    let shown = path.to_string_lossy().into_owned();
+    downloads.folders.lock().unwrap().insert(id.clone(), path);
+    Ok(Some(PickedDownloadFolder { id, path: shown }))
+}
+
+/// Mobile stand-in for [`pick_download_folder`]: the dialog plugin has no
+/// folder picker on Android or iOS.
+#[cfg(mobile)]
+#[tauri::command]
+pub(crate) async fn pick_download_folder() -> Result<Option<PickedDownloadFolder>, String> {
+    Err("Choosing a download folder is not supported on this platform.".into())
+}
+
+fn encode_reserved_filename_chars(name: &str) -> String {
+    let mut encoded = String::with_capacity(name.len());
+    for c in name.chars() {
+        match c {
+            '<' => encoded.push_str("%3C"),
+            '>' => encoded.push_str("%3E"),
+            ':' => encoded.push_str("%3A"),
+            '"' => encoded.push_str("%22"),
+            '|' => encoded.push_str("%7C"),
+            '?' => encoded.push_str("%3F"),
+            '*' => encoded.push_str("%2A"),
+            '%' => encoded.push_str("%25"),
+            _ => encoded.push(c),
+        }
+    }
+    encoded
+}
+
+static WRITE_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// A file or folder name that is safe to create inside a picked folder.
+fn checked_name(file_name: &str) -> Result<String, String> {
+    let raw = file_name.rsplit(['/', '\\']).next().unwrap_or("");
+    let stripped = raw.trim().trim_start_matches('.');
+    if stripped.is_empty() {
+        return Err("Refusing to write: file name cannot be empty.".to_string());
+    }
+    if stripped
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '/' | '\\' | '\0'))
+    {
+        return Err("Refusing to write: invalid characters in file name.".to_string());
+    }
+    let stem = stripped.split('.').next().unwrap_or(stripped);
+    let is_reserved_device = matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+            | "COM¹"
+            | "COM²"
+            | "COM³"
+            | "LPT¹"
+            | "LPT²"
+            | "LPT³"
+    );
+    // Trailing spaces are checked on the raw name: Windows drops them, so
+    // `report.json ` would otherwise land on an existing `report.json`.
+    if is_reserved_device || stripped.ends_with('.') || raw.ends_with(char::is_whitespace) {
+        return Err("Refusing to write: reserved or invalid file name on Windows.".to_string());
+    }
+    let sanitized = encode_reserved_filename_chars(stripped);
+    if sanitized.chars().count() > MAX_FILE_NAME_CHARS {
+        return Err("Refusing to write: file name exceeds maximum length.".to_string());
+    }
+    Ok(sanitized)
+}
+
+/// The folder `name` directly inside `folder`, made if needed. A symlink or a
+/// file already at that name is refused rather than followed or replaced.
+fn subfolder_in(folder: &Path, name: &str) -> Result<PathBuf, String> {
+    if !folder.is_dir() {
+        return Err("The chosen folder does not exist or is no longer accessible.".to_string());
+    }
+    if name.contains(['/', '\\']) {
+        return Err("Refusing to write: a subfolder must be a single name.".to_string());
+    }
+    if name.trim().is_empty() {
+        return Err("Refusing to write: a subfolder needs a name.".to_string());
+    }
+    let dir = folder.join(checked_name(name)?);
+    // Make it first and look after, so nothing can appear between a check and the making.
+    if let Err(error) = fs::create_dir(&dir) {
+        let is_real_folder = dir.symlink_metadata().is_ok_and(|meta| meta.is_dir());
+        if error.kind() != std::io::ErrorKind::AlreadyExists || !is_real_folder {
+            return Err(format!("Refusing to write: could not use the subfolder: {error}"));
+        }
+    }
+    Ok(dir)
+}
+
+/// The file's bytes: the raw request body, or the JSON list Tauri's postMessage
+/// fallback turns it into when the webview blocks the custom protocol.
+fn body_bytes(body: &tauri::ipc::InvokeBody) -> Result<Vec<u8>, String> {
+    match body {
+        tauri::ipc::InvokeBody::Raw(data) => Ok(data.clone()),
+        tauri::ipc::InvokeBody::Json(list) => Vec::<u8>::deserialize(list)
+            .map_err(|_| "write_file_to_folder expects a list of bytes.".to_string()),
+    }
+}
+
+fn write_file_to_folder_in_dir(
+    folder: &Path,
+    file_name: &str,
+    data: &[u8],
+) -> Result<WriteFileResult, String> {
+    if !folder.is_dir() {
+        return Err("The chosen folder does not exist or is no longer accessible.".to_string());
+    }
+    let sanitized = checked_name(file_name)?;
+    let destination = folder.join(&sanitized);
+    if destination.parent() != Some(folder) {
+        return Err("Refusing to write: file name resolves outside the picked folder.".into());
+    }
+    if let Ok(meta) = destination.symlink_metadata() {
+        if meta.file_type().is_symlink() {
+            return Err("Refusing to write: destination is a symlink.".into());
+        }
+    }
+    let size = data.len() as u64;
+
+    let mut temp = None;
+    let mut file = None;
+
+    for _ in 0..10 {
+        let mut rand_bytes = [0u8; 8];
+        let rand_suffix = if getrandom::fill(&mut rand_bytes).is_ok() {
+            rand_bytes
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        } else {
+            format!(
+                "{}-{}",
+                std::process::id(),
+                WRITE_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+            )
+        };
+        let candidate = folder.join(format!(".geolibre-write-tmp-{rand_suffix}"));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+
+        match options.open(&candidate) {
+            Ok(f) => {
+                temp = Some(candidate);
+                file = Some(f);
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("Could not create temporary file in folder: {err}")),
+        }
+    }
+
+    let (temp_path, mut temp_file) = match (temp, file) {
+        (Some(p), Some(f)) => (p, f),
+        _ => return Err("Could not allocate a unique temporary file in the chosen folder.".into()),
+    };
+
+    let write_result = (|| -> Result<(), std::io::Error> {
+        temp_file.write_all(data)?;
+        temp_file.sync_all()?;
+        fs::rename(&temp_path, &destination)?;
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!("Could not write file to folder: {error}"));
+    }
+
+    Ok(WriteFileResult {
+        path: destination.to_string_lossy().into_owned(),
+        size,
+    })
+}
+
+/// A header the frontend percent-encoded with `encodeURIComponent`, decoded.
+fn decoded_header(headers: &HeaderMap, name: &str) -> Result<String, String> {
+    let value = headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| format!("Missing {name} header."))?;
+    percent_decode_str(value)
+        .decode_utf8()
+        .map(|decoded| decoded.into_owned())
+        .map_err(|_| format!("The {name} header is not valid UTF-8."))
+}
+
+#[cfg(test)]
+fn write_file_to_folder_core(
+    folder_id: &str,
+    file_name: &str,
+    data: &[u8],
+    downloads: &RemoteDownloads,
+) -> Result<WriteFileResult, String> {
+    let folder = {
+        let folders = downloads.folders.lock().unwrap();
+        folders
+            .get(folder_id)
+            .cloned()
+            .ok_or_else(|| "Unknown download folder id; call pick_download_folder first.".to_string())?
+    };
+    write_file_to_folder_in_dir(&folder, file_name, data)
+}
+
+/// Write data directly into a folder picked earlier with [`pick_download_folder`].
+///
+/// Path separators are stripped from the file name, and the destination must sit
+/// directly inside the picked folder. A symlink already at the destination is
+/// refused rather than followed. Existing files with the same name are
+/// atomically replaced, allowing plugins to checkpoint or update saved progress.
+/// Blocking file I/O runs on a worker thread via
+/// [`tauri::async_runtime::spawn_blocking`].
+///
+/// The file arrives as the raw request body and its folder and name as the
+/// `x-folder-id` and `x-file-name` headers, so a large file never passes through
+/// JSON on the main thread. An `x-subfolder` header writes into that folder
+/// inside the picked one instead, made if needed.
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn write_file_to_folder(
+    request: tauri::ipc::Request<'_>,
+    downloads: tauri::State<'_, RemoteDownloads>,
+) -> Result<WriteFileResult, String> {
+    let folder_id = decoded_header(request.headers(), "x-folder-id")?;
+    let file_name = decoded_header(request.headers(), "x-file-name")?;
+    let subfolder = request
+        .headers()
+        .contains_key("x-subfolder")
+        .then(|| decoded_header(request.headers(), "x-subfolder"))
+        .transpose()?;
+    let data = body_bytes(request.body())?;
+    let folder = {
+        let folders = downloads.folders.lock().unwrap();
+        folders
+            .get(&folder_id)
+            .cloned()
+            .ok_or_else(|| "Unknown download folder id; call pick_download_folder first.".to_string())?
+    };
+    tauri::async_runtime::spawn_blocking(move || -> Result<WriteFileResult, String> {
+        checked_name(&file_name)?; // first, so a refused name leaves no empty subfolder behind
+        let target = match subfolder {
+            Some(name) => subfolder_in(&folder, &name)?,
+            None => folder,
+        };
+        write_file_to_folder_in_dir(&target, &file_name, &data)
+    })
+    .await
+    .map_err(|error| format!("Write task failed: {error}"))?
+}
+
+/// Mobile stand-in for [`write_file_to_folder`]: writing to a picked folder is
+/// desktop-only.
+#[cfg(mobile)]
+#[tauri::command]
+pub(crate) async fn write_file_to_folder() -> Result<WriteFileResult, String> {
+    Err("Writing files to a chosen folder is not supported on this platform.".into())
+}
+
+/// Abort an in-flight [`download_remote_file`].
+#[tauri::command]
+pub(crate) fn cancel_remote_download(
+    request_id: String,
+    downloads: tauri::State<'_, RemoteDownloads>,
+) {
+    downloads.cancel(&request_id);
+}
+
+/// Read a cached download's bytes once, then delete the file.
+#[tauri::command]
+pub(crate) fn take_cached_download(
+    request_id: String,
+    downloads: tauri::State<'_, RemoteDownloads>,
+) -> Result<tauri::ipc::Response, String> {
+    let path = downloads
+        .cached
+        .lock()
+        .unwrap()
+        .remove(&request_id)
+        .ok_or_else(|| "No cached download with that ID.".to_string())?;
+    let bytes = read_and_remove(&path);
+    bytes.map(tauri::ipc::Response::new)
+}
+
+fn read_and_remove(path: &Path) -> Result<Vec<u8>, String> {
+    let bytes = fs::read(path).map_err(|error| format!("Could not read the download: {error}"));
+    let _ = fs::remove_file(path);
+    bytes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoded_header_undoes_encode_uri_component() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-file-name", HeaderValue::from_static("%E6%98%A5%20map.geojson"));
+        assert_eq!(decoded_header(&headers, "x-file-name").unwrap(), "\u{6625} map.geojson");
+        assert!(decoded_header(&headers, "x-folder-id").is_err());
+    }
+
+    #[test]
+    fn body_bytes_takes_raw_bytes_and_the_postmessage_list() {
+        use tauri::ipc::InvokeBody;
+        assert_eq!(body_bytes(&InvokeBody::Raw(vec![1, 2])).unwrap(), vec![1, 2]);
+        let list = InvokeBody::Json(serde_json::json!([1, 255]));
+        assert_eq!(body_bytes(&list).unwrap(), vec![1, 255]);
+        assert!(body_bytes(&InvokeBody::Json(serde_json::json!([256]))).is_err());
+        assert!(body_bytes(&InvokeBody::Json(serde_json::json!({"a": 1}))).is_err());
+    }
+
+    #[test]
+    fn subfolder_is_one_level_down_and_reused() {
+        let dir = std::env::temp_dir().join(format!("geolibre-sub-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let sub = subfolder_in(&dir, "run-1").unwrap();
+        assert_eq!(sub, dir.join("run-1"));
+        assert_eq!(subfolder_in(&dir, "run-1").unwrap(), sub);
+        write_file_to_folder_in_dir(&sub, "a.part", b"x").unwrap();
+        assert_eq!(fs::read(sub.join("a.part")).unwrap(), b"x");
+        assert_eq!(
+            subfolder_in(&dir, " ").unwrap_err(),
+            "Refusing to write: a subfolder needs a name."
+        );
+        assert!(subfolder_in(&dir, "..").is_err());
+        assert!(subfolder_in(&dir, "a/b").is_err());
+        assert!(subfolder_in(&dir, "a\\b").is_err());
+        assert!(subfolder_in(&dir, "CON").is_err());
+        fs::write(dir.join("taken"), b"x").unwrap();
+        assert!(subfolder_in(&dir, "taken").is_err());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn decoded_header_refuses_bytes_that_are_not_utf8() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-file-name", HeaderValue::from_static("%FF"));
+        assert!(decoded_header(&headers, "x-file-name").is_err());
+    }
+
+    #[test]
+    fn sanitizes_file_names_to_one_component() {
+        assert_eq!(
+            sanitize_file_name("ATL08_20230629230240_01492006_007_01.h5"),
+            "ATL08_20230629230240_01492006_007_01.h5"
+        );
+        assert_eq!(sanitize_file_name("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_file_name("C:\\dir\\a b.h5"), "a_b.h5");
+        assert_eq!(sanitize_file_name("..."), "download");
+        assert_eq!(sanitize_file_name(".hidden"), "hidden");
+        assert_eq!(sanitize_file_name(""), "download");
+        assert_eq!(
+            sanitize_file_name(&"x".repeat(500)).len(),
+            MAX_FILE_NAME_CHARS
+        );
+    }
+
+    #[test]
+    fn drops_transport_managed_headers() {
+        let headers = request_headers(vec![
+            ("Authorization".into(), "Bearer abc".into()),
+            ("Host".into(), "evil.example".into()),
+            ("Range".into(), "bytes=0-1".into()),
+        ])
+        .unwrap();
+        assert_eq!(headers.len(), 1);
+        assert_eq!(headers["authorization"], "Bearer abc");
+        assert!(request_headers(vec![("bad name".into(), "x".into())]).is_err());
+        assert!(request_headers(vec![("X-Api-Key".into(), "k".into())]).is_err());
+    }
+
+    #[test]
+    fn credentials_require_https() {
+        let auth = request_headers(vec![("Authorization".into(), "Bearer t".into())]).unwrap();
+        let http = Url::parse("http://example.com/a.h5").unwrap();
+        let https = Url::parse("https://example.com/a.h5").unwrap();
+        assert!(check_scheme(&http, &auth).is_err());
+        assert!(check_scheme(&https, &auth).is_ok());
+        assert!(check_scheme(&http, &HeaderMap::new()).is_ok());
+    }
+
+    #[test]
+    fn folder_downloads_reserve_distinct_names() {
+        let dir = std::env::temp_dir().join(format!("geolibre-unique-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        // Each reservation creates its file, so back-to-back (or concurrent)
+        // downloads of one name get distinct destinations.
+        assert_eq!(
+            reserve_unique_path(&dir, "B04.tif").unwrap(),
+            dir.join("B04.tif")
+        );
+        assert_eq!(
+            reserve_unique_path(&dir, "B04.tif").unwrap(),
+            dir.join("B04 (1).tif")
+        );
+        assert_eq!(
+            reserve_unique_path(&dir, "B04.tif").unwrap(),
+            dir.join("B04 (2).tif")
+        );
+        fs::write(dir.join("README"), b"keep").unwrap();
+        assert_eq!(
+            reserve_unique_path(&dir, "README").unwrap(),
+            dir.join("README (1)")
+        );
+        assert_eq!(fs::read(dir.join("README")).unwrap(), b"keep");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn part_file_is_removed_unless_done() {
+        let dir = std::env::temp_dir().join(format!("geolibre-part-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.h5.part");
+        fs::write(&path, b"x").unwrap();
+        drop(PartFile {
+            path: path.clone(),
+            done: false,
+        });
+        assert!(!path.exists());
+        fs::write(&path, b"x").unwrap();
+        drop(PartFile {
+            path: path.clone(),
+            done: true,
+        });
+        assert!(path.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn writes_file_into_picked_folder() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-write-folder-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        let res = write_file_to_folder_core(
+            "folder-1",
+            "test.geojson",
+            b"{\"type\":\"FeatureCollection\"}",
+            &downloads,
+        )
+        .unwrap();
+
+        assert_eq!(res.size, 28);
+        assert_eq!(res.path, dir.join("test.geojson").to_string_lossy());
+        assert_eq!(
+            fs::read(dir.join("test.geojson")).unwrap(),
+            b"{\"type\":\"FeatureCollection\"}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_overwrites_existing_file() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-overwrite-folder-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("checkpoint.json"), b"{\"v\":1}").unwrap();
+
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        let res = write_file_to_folder_core(
+            "folder-1",
+            "checkpoint.json",
+            b"{\"v\":2,\"checkpoint\":\"done\"}",
+            &downloads,
+        )
+        .unwrap();
+
+        assert_eq!(res.size, 27);
+        assert_eq!(res.path, dir.join("checkpoint.json").to_string_lossy());
+        assert_eq!(
+            fs::read(dir.join("checkpoint.json")).unwrap(),
+            b"{\"v\":2,\"checkpoint\":\"done\"}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_preserves_distinct_unicode_filenames() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-unicode-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        write_file_to_folder_core("folder-1", "春.geojson", b"spring", &downloads).unwrap();
+        write_file_to_folder_core("folder-1", "秋.geojson", b"autumn", &downloads).unwrap();
+
+        assert_eq!(fs::read(dir.join("春.geojson")).unwrap(), b"spring");
+        assert_eq!(fs::read(dir.join("秋.geojson")).unwrap(), b"autumn");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_encodes_reserved_filename_characters() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-reserved-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        let res = write_file_to_folder_core(
+            "folder-1",
+            "checkpoint:12.json",
+            b"content",
+            &downloads,
+        )
+        .unwrap();
+
+        assert_eq!(res.size, 7);
+        assert!(res.path.ends_with("checkpoint%3A12.json"));
+        assert_eq!(
+            fs::read(dir.join("checkpoint%3A12.json")).unwrap(),
+            b"content"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_rejects_windows_reserved_device_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-device-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        assert!(write_file_to_folder_core("folder-1", "con.txt", b"x", &downloads).is_err());
+        assert!(write_file_to_folder_core("folder-1", "NUL.json", b"x", &downloads).is_err());
+        assert!(write_file_to_folder_core("folder-1", "bad.", b"x", &downloads).is_err());
+        assert!(write_file_to_folder_core("folder-1", "COM¹.txt", b"x", &downloads).is_err());
+        assert!(write_file_to_folder_core("folder-1", "lpt³.log", b"x", &downloads).is_err());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_rejects_trailing_space_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-trailing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("report.json"), b"keep").unwrap();
+
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        assert!(write_file_to_folder_core("folder-1", "report.json ", b"x", &downloads).is_err());
+        assert_eq!(fs::read(dir.join("report.json")).unwrap(), b"keep");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_file_refuses_symlink_at_destination() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-symlink-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let folder = dir.join("folder");
+        fs::create_dir_all(&folder).unwrap();
+        let target = dir.join("target.json");
+        fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, folder.join("link.json")).unwrap();
+
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), folder.clone());
+
+        assert!(write_file_to_folder_core("folder-1", "link.json", b"x", &downloads).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"keep");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_file_rejects_unknown_folder() {
+        let downloads = RemoteDownloads::default();
+        let err = write_file_to_folder_core("folder-missing", "a.txt", b"data", &downloads)
+            .unwrap_err();
+        assert!(err.contains("Unknown download folder id"));
+    }
+
+    #[test]
+    fn write_file_sanitizes_filename_and_prevents_escape() {
+        let dir = std::env::temp_dir().join(format!(
+            "geolibre-escape-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let downloads = RemoteDownloads::default();
+        downloads
+            .folders
+            .lock()
+            .unwrap()
+            .insert("folder-1".into(), dir.clone());
+
+        let res = write_file_to_folder_core(
+            "folder-1",
+            "../../nested/escape.txt",
+            b"safe",
+            &downloads,
+        )
+        .unwrap();
+
+        assert_eq!(res.path, dir.join("escape.txt").to_string_lossy());
+        assert_eq!(fs::read(dir.join("escape.txt")).unwrap(), b"safe");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

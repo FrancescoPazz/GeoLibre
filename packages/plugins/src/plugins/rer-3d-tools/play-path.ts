@@ -1,4 +1,4 @@
-import type { Cartesian3 } from "@cesium/engine";
+import type { Cartesian3 } from "@cesium/core";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { GeoLibreAppAPI } from "../../types";
 import { geodesicMeters } from "./draw-geometry";

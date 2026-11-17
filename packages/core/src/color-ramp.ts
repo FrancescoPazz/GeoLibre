@@ -300,7 +300,12 @@ function quantileAtPosition(sorted: number[], position: number): number {
 }
 
 /** The classification schemes the graduated vector renderer offers. */
-export type GraduatedClassificationScheme = "equal-interval" | "quantile" | "natural-breaks";
+export type GraduatedClassificationScheme =
+  | "equal-interval"
+  | "quantile"
+  | "natural-breaks"
+  | "standard-deviation"
+  | "geometric-interval";
 
 /**
  * Builds the class *lower bounds* for a graduated vector renderer.
@@ -320,6 +325,12 @@ export type GraduatedClassificationScheme = "equal-interval" | "quantile" | "nat
  * MapLibre rejects a `step` expression whose inputs are not strictly ascending,
  * so this de-duplication is load-bearing, not cosmetic.
  *
+ * Standard deviation and geometric interval derive their breaks from the data,
+ * so `count` is a ceiling there: a standard-deviation break that falls outside
+ * the sample range is dropped rather than producing an empty class. See
+ * {@link standardDeviationClassBreaks} and {@link geometricIntervalClassBreaks}
+ * for how each treats its edge cases.
+ *
  * @param values - The finite numeric values of the classified property.
  * @param count - Number of classes requested.
  * @param scheme - The classification scheme.
@@ -331,20 +342,143 @@ export function createGraduatedClassBreaks(
   scheme: GraduatedClassificationScheme,
 ): number[] {
   if (count <= 0 || values.length === 0) return [];
-  if (scheme === "natural-breaks") return ascendingUnique(naturalClassBreaks(values, count));
+  const breaks = rawGraduatedClassBreaks(values, count, scheme);
+  // Natural breaks are data values already, so rounding would only move
+  // features between classes.
+  return ascendingUnique(scheme === "natural-breaks" ? breaks : roundClassBreaks(breaks, values));
+}
+
+/** The unrounded lower bounds behind {@link createGraduatedClassBreaks}. */
+function rawGraduatedClassBreaks(
+  values: number[],
+  count: number,
+  scheme: GraduatedClassificationScheme,
+): number[] {
+  if (scheme === "natural-breaks") return naturalClassBreaks(values, count);
   const sorted = [...values].sort((a, b) => a - b);
   if (scheme === "quantile") {
-    return ascendingUnique(
-      Array.from({ length: count }, (_, index) =>
-        quantileAtPosition(sorted, (index / count) * (sorted.length - 1)),
-      ),
+    return Array.from({ length: count }, (_, index) =>
+      quantileAtPosition(sorted, (index / count) * (sorted.length - 1)),
     );
   }
+  if (scheme === "standard-deviation") return standardDeviationClassBreaks(sorted, count);
+  if (scheme === "geometric-interval") {
+    const breaks = geometricIntervalClassBreaks(sorted, count);
+    if (breaks) return breaks;
+  }
+  return equalIntervalClassBreaks(sorted, count);
+}
+
+/**
+ * Round interior class breaks to a precision that suits the data's range.
+ *
+ * Interpolated quantiles, equal intervals, and the standard-deviation and
+ * geometric schemes produce values such as `66399.59999999999` or
+ * `40750.34578910171` that the Style panel would show verbatim
+ * (GeoLibre#3471). Each break keeps the decimals that four significant digits
+ * of the range call for (never coarser than whole units), which moves a class
+ * edge by at most 0.05% of the range, and at least four significant digits of
+ * its own, so a geometric series spanning many orders of magnitude keeps its
+ * small breaks. Natural breaks are data values and are not rounded. The first
+ * break is the sample minimum and stays exact, so the lowest feature is never
+ * pushed below the first class, and a break whose rounding would reach the one
+ * before it or the raw one after it (or move it further than that bound) keeps
+ * its raw value, so rounding never drops a class.
+ */
+function roundClassBreaks(breaks: number[], values: number[]): number[] {
+  let min = Infinity;
+  let max = -Infinity;
+  for (const value of values) {
+    if (!Number.isFinite(value)) continue;
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  const range = max - min;
+  if (!(range > 0) || !Number.isFinite(range)) return breaks;
+  const decimals = Math.max(0, 3 - Math.floor(Math.log10(range)));
+  // A rounded break must still move by at most 0.05% of the range and stay
+  // above the break before it; otherwise the raw value is kept, so rounding
+  // never merges two classes (a cluster at the minimum, or a large offset
+  // range past the 15-digit precision cap).
+  const tolerance = range * 5e-4;
+  let previous = -Infinity;
+  return breaks.map((value, index) => {
+    if (!Number.isFinite(value)) return value;
+    let next = value;
+    if (index > 0 && value !== 0) {
+      const digits = Math.floor(Math.log10(Math.abs(value))) + 1 + decimals;
+      const rounded = Number(value.toPrecision(Math.min(15, Math.max(4, digits))));
+      const following = breaks[index + 1];
+      if (
+        Math.abs(rounded - value) <= tolerance &&
+        rounded > previous &&
+        !(Number.isFinite(following) && rounded >= following)
+      ) {
+        next = rounded;
+      }
+    }
+    previous = next;
+    return next;
+  });
+}
+
+/** Equal-interval lower bounds over the range of an ascending sample. */
+function equalIntervalClassBreaks(sorted: number[], count: number): number[] {
   const min = sorted[0];
   const max = sorted[sorted.length - 1];
-  return ascendingUnique(
-    Array.from({ length: count }, (_, index) => min + ((max - min) * index) / count),
-  );
+  return Array.from({ length: count }, (_, index) => min + ((max - min) * index) / count);
+}
+
+/**
+ * Standard-deviation lower bounds: classes one standard deviation wide,
+ * centered on the mean. An even `count` puts a break on the mean (classes
+ * `[mean - σ, mean)` and `[mean, mean + σ)` meet there); an odd `count` makes
+ * the middle class straddle it (`[mean - σ/2, mean + σ/2)`). The first break is
+ * the sample minimum, and interior breaks outside `(min, max]` are dropped, so
+ * the open-ended bottom and top classes absorb the tails and no class is empty.
+ * A constant sample (σ = 0) yields the minimum alone.
+ *
+ * Uses the population standard deviation, as QGIS and ArcGIS do.
+ */
+function standardDeviationClassBreaks(sorted: number[], count: number): number[] {
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const mean = sorted.reduce((sum, value) => sum + value, 0) / sorted.length;
+  const variance =
+    sorted.reduce((sum, value) => sum + (value - mean) * (value - mean), 0) / sorted.length;
+  const deviation = Math.sqrt(variance);
+  if (!(deviation > 0)) return [min];
+  const interior: number[] = [];
+  for (let index = 1; index < count; index += 1) {
+    const value = mean + (index - count / 2) * deviation;
+    if (value > min && value <= max) interior.push(value);
+  }
+  return [min, ...interior];
+}
+
+/**
+ * Geometric-interval lower bounds: class edges growing by a constant ratio
+ * from the smallest positive value to the maximum, so each class spans the
+ * same multiple of its lower bound. Suits skewed data spanning orders of
+ * magnitude (population, income, concentrations).
+ *
+ * A geometric series cannot start at or below zero, so it starts at the
+ * smallest positive value and the first break stays the sample minimum: zero
+ * and negative values all fall into the first class. When no value is
+ * positive, the result is `null` and the caller falls back to equal interval.
+ */
+function geometricIntervalClassBreaks(sorted: number[], count: number): number[] | null {
+  const max = sorted[sorted.length - 1];
+  const lowest = sorted.find((value) => value > 0);
+  if (lowest === undefined) return null;
+  // Step in log space: `max / lowest` overflows to Infinity for samples
+  // spanning more than ~308 orders of magnitude, while the logs stay finite.
+  const logLowest = Math.log(lowest);
+  const logStep = (Math.log(max) - logLowest) / count;
+  return [
+    sorted[0],
+    ...Array.from({ length: count - 1 }, (_, index) => Math.exp(logLowest + logStep * (index + 1))),
+  ];
 }
 
 /** Drops non-finite breaks and collapses repeats, keeping ascending order. */

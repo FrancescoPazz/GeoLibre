@@ -51,8 +51,19 @@ import {
   tesseraTilesForBbox,
   tesseraTileUrls,
 } from "./satellite-embeddings-grids";
-import { getRasterRenderEngine } from "./maplibre-raster";
-import { getStyleMap } from "./style-map";
+import {
+  TESSERA_BAND_COUNT,
+  TESSERA_CHUNK_BYTES,
+  TESSERA_DEFAULT_RGB_BANDS,
+  TESSERA_MAX_READ_CHUNKS,
+  TesseraTooLargeError,
+  TesseraYearMissingError,
+  readTesseraBands,
+  percentileRange,
+} from "./satellite-embeddings-tessera";
+import { addRasterToMap, getRasterRenderEngine } from "./maplibre-raster";
+import { getControlMap } from "./style-map";
+import { createPluginTranslator } from "../plugin-i18n";
 
 export const SATELLITE_EMBEDDINGS_PLUGIN_ID = "geolibre-satellite-embeddings";
 const PANEL_ID = SATELLITE_EMBEDDINGS_PLUGIN_ID;
@@ -177,7 +188,7 @@ interface ResultRow {
   ring: [number, number][];
   bbox: LonLatBbox;
   aef?: AefTile;
-  tessera?: { embeddings: string; scales: string };
+  tessera?: { embeddings: string; scales: string; year: number };
   earthIndex?: { url: string; tileId: string };
 }
 
@@ -198,6 +209,8 @@ interface PanelState {
   status: { text: string; error: boolean } | null;
   busy: boolean;
   rgbBands: [number, number, number];
+  /** Tessera's RGB bands (its 128 dimensions differ from AlphaEarth's 64). */
+  tesseraBands: [number, number, number];
   stretch: number;
   downloadFloat: boolean;
   /** Whether the dataset info card is expanded (collapsed by default). */
@@ -222,6 +235,7 @@ function initialState(): PanelState {
     status: null,
     busy: false,
     rgbBands: [...AEF_DEFAULT_RGB_BANDS],
+    tesseraBands: [...TESSERA_DEFAULT_RGB_BANDS],
     stretch: AEF_DEFAULT_STRETCH,
     downloadFloat: true,
     infoExpanded: false,
@@ -241,12 +255,7 @@ let onFootprintClick: ((ids: string[]) => void) | null = null;
 const readerCache = new Map<string, Promise<AefTileReader>>();
 
 /** Resolves a plugin-namespaced translation key, falling back to English text. */
-function tr(key: string, fallback: string, params?: Record<string, string | number>): string {
-  return (
-    appRef?.translate?.(`plugin.${SATELLITE_EMBEDDINGS_PLUGIN_ID}.${key}`, fallback, params) ??
-    fallback.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(params?.[name] ?? ""))
-  );
-}
+const tr = createPluginTranslator(() => appRef, SATELLITE_EMBEDDINGS_PLUGIN_ID);
 
 /** Creates an element with inline CSS. */
 function element<K extends keyof HTMLElementTagNameMap>(
@@ -294,7 +303,7 @@ function normalizeLon(lon: number): number {
 
 /** The current map view as a [w, s, e, n] box (whole longitude range if it wraps). */
 function viewBbox(): LonLatBbox | null {
-  const map = getStyleMap(appRef);
+  const map = getControlMap(appRef);
   if (!map) return null;
   const bounds = map.getBounds();
   const clampLat = (value: number): number => Math.max(-90, Math.min(90, value));
@@ -659,7 +668,7 @@ async function searchTessera(bbox: LonLatBbox, signal: AbortSignal): Promise<Res
         subtitle: `${year} · ${formatBytes(size)}`,
         ring: bboxRing(tile.bbox),
         bbox: tile.bbox,
-        tessera: tesseraTileUrls(tile.name, year),
+        tessera: { ...tesseraTileUrls(tile.name, year), year },
       },
     ];
   });
@@ -798,6 +807,99 @@ async function visualizeAlphaEarth(
       ? `${done} ${tr("overviewNote", "Rendered from a 1/{{factor}} overview; search a smaller area for full 10 m detail.", { factor: 2 ** plan.level })}`
       : done,
   );
+}
+
+/**
+ * Visualizes a Tessera tile's RGB composite from the v1.1 store (the release
+ * on AWS Open Data), read at full 10 m over the search area clipped to the
+ * tile. The store has no overviews, so the read is capped by area rather than
+ * downsampled.
+ */
+async function visualizeTessera(
+  row: ResultRow,
+  setStatus: (text: string) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const { year } = row.tessera!;
+  // Read settings once: the user may change them while the chunks load.
+  const bands: [number, number, number] = [...state.tesseraBands];
+  const bandLabel = bands.join(", ");
+  setStatus(tr("opening", "Opening {{name}}…", { name: row.title }));
+  let result;
+  try {
+    result = await readTesseraBands(readRegion(row), year, bands, signal, (done, total) => {
+      setStatus(
+        tr("readingChunks", "Reading chunk {{done}} of {{total}} (up to {{size}})…", {
+          done,
+          total,
+          size: formatBytes(total * TESSERA_CHUNK_BYTES),
+        }),
+      );
+    });
+  } catch (error) {
+    if (error instanceof TesseraTooLargeError) {
+      throw new Error(
+        tr(
+          "tesseraTooLarge",
+          "The area needs {{count}} chunks (about {{size}}); the limit is {{limit}}. Zoom in or draw a smaller box.",
+          {
+            count: error.chunkCount,
+            size: formatBytes(error.chunkCount * TESSERA_CHUNK_BYTES),
+            limit: TESSERA_MAX_READ_CHUNKS,
+          },
+        ),
+        { cause: error },
+      );
+    }
+    if (error instanceof TesseraYearMissingError) {
+      throw new Error(
+        tr("tesseraYearMissing", "Tessera {{year}} is not complete for this area yet.", { year }),
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  if (!result) throw new Error(tr("outsideTile", "The search area does not overlap this tile."));
+  signal.throwIfAborted();
+  const { plan } = result;
+  if (!result.bands[0].some((value) => Number.isFinite(value))) {
+    setStatus(tr("tesseraEmpty", "No embeddings in this area for {{year}}.", { year }));
+    return;
+  }
+  // A real raster layer rather than a PNG: the three de-quantized bands as a
+  // float32 GeoTIFF in the zone's grid, so the Style panel can re-stretch or
+  // reorder them and Identify reads the embedding values.
+  const { zone, pixelSize } = result;
+  const [minX, , , maxY] = plan.bounds;
+  const parts = encodeGeoTiff({
+    width: plan.width,
+    height: plan.height,
+    bands: result.bands,
+    sampleType: "float32",
+    epsg: 32600 + zone,
+    originX: minX,
+    originY: maxY,
+    pixelSizeX: pixelSize[0],
+    pixelSizeY: pixelSize[1],
+    nodata: "nan",
+    bandNames: bands.map((band) => `Band ${band}`),
+    tileSize: 256,
+  });
+  const name = tr("tesseraLayerName", "Tessera {{year}} ({{bands}})", { year, bands: bandLabel });
+  const stem = row.title.replace(/[^\w.-]+/g, "_");
+  const file = new File(parts, `tessera_${year}_${stem}_${bands.join("-")}.tif`, {
+    type: "image/tiff",
+  });
+  const rescale = result.bands.map(
+    (band) => percentileRange(band) ?? ([-1, 1] as [number, number]),
+  );
+  signal.throwIfAborted();
+  if (!appRef) return;
+  await addRasterToMap(appRef, file, {
+    name,
+    state: { bands: [1, 2, 3], mode: "rgb", rescale },
+  });
+  setStatus(tr("visualized", "Added {{name}}.", { name }));
 }
 
 /** Builds a clipped 64-band GeoTIFF of an AlphaEarth tile and saves it. */
@@ -1100,7 +1202,7 @@ function buildPanel(container: HTMLElement): () => void {
       state.results = rows;
       state.total = total;
       state.selectedIds = [];
-      const map = getStyleMap(appRef);
+      const map = getControlMap(appRef);
       if (map) {
         setFootprints(map, rows);
         setOutline(map, []);
@@ -1166,6 +1268,14 @@ function buildPanel(container: HTMLElement): () => void {
     if (row.tessera) {
       const urls = row.tessera;
       return [
+        taskButton(
+          tr("visualize", "Visualize"),
+          (signal) => visualizeTessera(row, statusSetter, signal),
+          tr(
+            "visualizeTesseraTitle",
+            "Add the selected bands over the search area to the map as an RGB layer",
+          ),
+        ),
         button(tr("downloadEmbeddings", "Embeddings (.npy)"), CSS.action, () =>
           downloadUrl(urls.embeddings),
         ),
@@ -1196,7 +1306,7 @@ function buildPanel(container: HTMLElement): () => void {
   const selectedRings = (): [number, number][][] =>
     state.results.filter((row) => state.selectedIds.includes(row.id)).map((row) => row.ring);
   const showSelection = (): void => {
-    const map = getStyleMap(appRef);
+    const map = getControlMap(appRef);
     if (map) setOutline(map, selectedRings());
   };
 
@@ -1233,7 +1343,7 @@ function buildPanel(container: HTMLElement): () => void {
       state.total = 0;
       state.status = null;
       state.selectedIds = [];
-      const map = getStyleMap(appRef);
+      const map = getControlMap(appRef);
       if (map) {
         removeFootprints(map);
         setOutline(map, []);
@@ -1278,7 +1388,7 @@ function buildPanel(container: HTMLElement): () => void {
         cancelDraw ? tr("drawCancel", "Cancel drawing") : tr("drawStart", "Draw box on map"),
         CSS.secondary,
         () => {
-          const map = getStyleMap(appRef);
+          const map = getControlMap(appRef);
           if (!map) return;
           if (cancelDraw) {
             stopDrawing();
@@ -1330,21 +1440,23 @@ function buildPanel(container: HTMLElement): () => void {
     searchSection.append(searchButton);
     body.append(searchSection);
 
-    // --- AlphaEarth rendering options ---------------------------------------
-    if (dataset.id === "alphaearth") {
-      const options = element("div", CSS.section);
-      options.append(element("div", CSS.sectionTitle, tr("renderOptions", "Visualization")));
+    // Red/green/blue band pickers writing into `selected` (edited in place).
+    const bandPicker = (
+      count: number,
+      name: (band: number) => string,
+      selected: [number, number, number],
+    ): HTMLElement => {
       const bandGrid = element("div", CSS.grid3);
       (["red", "green", "blue"] as const).forEach((channel, channelIndex) => {
         const select = element("select", CSS.input);
-        for (let band = 0; band < AEF_BAND_COUNT; band += 1) {
-          const option = element("option", undefined, aefBandName(band));
+        for (let band = 0; band < count; band += 1) {
+          const option = element("option", undefined, name(band));
           option.value = String(band);
-          option.selected = state.rgbBands[channelIndex] === band;
+          option.selected = selected[channelIndex] === band;
           select.append(option);
         }
         select.addEventListener("change", () => {
-          state.rgbBands[channelIndex] = Number(select.value);
+          selected[channelIndex] = Number(select.value);
         });
         const names = {
           red: tr("red", "Red"),
@@ -1353,6 +1465,32 @@ function buildPanel(container: HTMLElement): () => void {
         };
         bandGrid.append(labeled(names[channel], select));
       });
+      return bandGrid;
+    };
+
+    // --- Tessera rendering options ------------------------------------------
+    if (dataset.id === "tessera") {
+      const options = element("div", CSS.section);
+      options.append(
+        element("div", CSS.sectionTitle, tr("renderOptions", "Visualization")),
+        bandPicker(TESSERA_BAND_COUNT, String, state.tesseraBands),
+        element(
+          "p",
+          CSS.hint,
+          tr(
+            "tesseraRenderHint",
+            "Visualize reads the v1.1 embeddings (AWS Open Data) at full 10 m resolution over the search area, about 1 MB per km², and stretches each band to its 2–98% range.",
+          ),
+        ),
+      );
+      body.append(options);
+    }
+
+    // --- AlphaEarth rendering options ---------------------------------------
+    if (dataset.id === "alphaearth") {
+      const options = element("div", CSS.section);
+      options.append(element("div", CSS.sectionTitle, tr("renderOptions", "Visualization")));
+      const bandGrid = bandPicker(AEF_BAND_COUNT, aefBandName, state.rgbBands);
       const stretch = element("input", CSS.input);
       stretch.type = "number";
       stretch.min = "0.05";
@@ -1405,7 +1543,7 @@ function buildPanel(container: HTMLElement): () => void {
         actions.append(...rowActions(row));
         rowElement.append(actions);
         rowElement.addEventListener("mouseenter", () => {
-          const map = getStyleMap(appRef);
+          const map = getControlMap(appRef);
           if (map) setOutline(map, [row.ring]);
         });
         rowElement.addEventListener("mouseleave", showSelection);
@@ -1431,7 +1569,7 @@ function buildPanel(container: HTMLElement): () => void {
       !store.layers.some((layer) => layer.id === FOOTPRINT_STORE_LAYER_ID)
     ) {
       footprintsRegistered = false;
-      removeFootprints(getStyleMap(appRef));
+      removeFootprints(getControlMap(appRef));
     }
   });
 
@@ -1456,7 +1594,7 @@ function mountPanel(container: HTMLElement): void {
 
 /** Clears every map overlay the plugin owns. */
 function clearOverlays(app: GeoLibreAppAPI): void {
-  const map = getStyleMap(app);
+  const map = getControlMap(app);
   removeFootprints(map);
   removeChrome(map);
 }
@@ -1465,7 +1603,7 @@ function clearOverlays(app: GeoLibreAppAPI): void {
  * Satellite Embeddings plugin: a catalog of popular pre-computed embedding
  * datasets (AlphaEarth/Google Satellite Embedding, Tessera, Earth Index, Clay,
  * Major TOM, Copernicus-Embed) with search by map view or drawn box, on-map
- * visualization (AlphaEarth RGB composites, Earth Index points colored by
+ * visualization (AlphaEarth and Tessera RGB composites, Earth Index points colored by
  * PCA), and downloads (clipped GeoTIFFs, source tiles and files).
  */
 export const maplibreSatelliteEmbeddingsPlugin: GeoLibrePlugin = {
@@ -1473,14 +1611,15 @@ export const maplibreSatelliteEmbeddingsPlugin: GeoLibrePlugin = {
   name: "Satellite Embeddings",
   version: "0.1.0",
   // Footprints, the image composites and the point layers are Style Spec
-  // sources and layers, so both 2D engines host them.
-  engines: ["maplibre", "mapbox"],
+  // sources and layers, so both 2D engines host them, and the host's control
+  // map draws them on ArcGIS.
+  engines: ["maplibre", "mapbox", "arcgis", "cesium"],
   activate: (app) => {
     appRef = app;
     unregisterPanel =
       app.registerRightPanel?.({
         id: PANEL_ID,
-        title: () => tr("title", "Satellite Embeddings"),
+        title: () => tr("title", "Satellite embeddings"),
         dock: "replace-style",
         defaultWidth: 360,
         render: (container) => {

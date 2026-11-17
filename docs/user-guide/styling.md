@@ -9,10 +9,11 @@ The **Style panel** on the right edits the appearance of the layer selected in t
 For vector layers the Style panel covers fill, stroke, points, labels, and 3D extrusion:
 
 - **Fill**: fill color and fill opacity for polygons.
-- **Stroke**: line color and width for lines and polygon outlines.
-- **Points**: circle radius for point layers.
+- **Stroke**: line color and width for lines and polygon outlines, and a **Stroke opacity** that fades the lines, outlines and point outlines without fading the fill. Lines and polygon outlines also take a **Line style** (solid, dashed, dotted, dash-dot, long dash, or a **Custom** pattern of dash and gap lengths in multiples of the stroke width, such as `4 2 1 2`) and a **Line blur** in pixels for soft edges; a wide blurred line under a thin one makes a soft halo. Layers added through **Add data → Vector layer** draw their lines through the vector control, which does not take these three settings yet. In an exported story map, polygon outlines are drawn as a thin line in the stroke color, faded by the stroke opacity when the stroke color is a single color, but without the dash or blur; lines keep all three. A layer whose features carry their own simplestyle colors draws its polygon outlines with the line only, without the fill's thin edge line under it.
+- **Points**: circle radius for point layers, or **Use marker icon** to draw a marker instead: a built-in shape (circle, square, triangle, diamond, star, cross, or pin) with a color and size, or a **Custom image**. **Upload image…** accepts SVG, PNG, JPEG, or GIF; raster images draw as they are, so the marker color and per-class colors apply only to SVG markers.
 - **Labels**: text color, size, halo color, and halo width.
-- **3D extrusion**: turn polygons into extruded blocks, with a height field, height scale, base height, and color. Advanced expressions are available for both height and color.
+- **3D extrusion**: turn polygons into extruded blocks, with a height field, height scale, base height, and color. Advanced expressions are available for height, base, and color.
+    - **Stacking floors**: pick a **Base property** (such as `level`) and a **Base scale** (meters per floor) so each feature starts at *base height + property × scale*. One layer of floor plans then draws as a stacked building. Set a **Floor height** (such as 3 m) to give every feature that thickness on top of its base. With a floor height of 0 the height field is the roof's altitude instead, so it must be above the base. A negative base (a basement level) is clamped to the ground, as on the 2D map. To look at one floor at a time, link the layer to the [floor picker](#floor-picker).
 
 You can also set a per-style minimum and maximum zoom so a style only applies within a zoom range.
 
@@ -44,10 +45,18 @@ Graduated and categorized styles share four more controls, and then list the gen
 
 - **Attribute** — the field the style reads.
 - **Classes** — 2 to 12 classes for a graduated style; 1 to 12 for a categorized one, plus an **All (n)** option that gives every distinct value its own colour.
-- **Scheme** — how the stops are chosen. Graduated offers **Equal interval**, **Quantile**, and **Natural breaks**; categorized offers **Most frequent**, **Alphabetical**, and **First values**.
+- **Scheme** — how the stops are chosen. Graduated offers **Equal interval**, **Quantile**, **Natural breaks**, **Standard deviation**, **Geometric interval**, and **Manual**; categorized offers **Most frequent**, **Alphabetical**, and **First values**.
 - **Colormap** — the named colour ramp the classes are drawn from.
 
 Nothing reaches the map until you click **Apply style type**, so you can adjust the classification and watch the stop list update first.
+
+The graduated schemes differ in where they put the class breaks:
+
+- **Standard deviation** centres classes one standard deviation wide on the mean, so it shows how far each feature is from average. An even class count puts a break on the mean; an odd count gives a middle class that straddles it. Breaks that would fall outside the data's range are dropped, so you can get fewer classes than you asked for. A diverging colormap suits it.
+- **Geometric interval** grows the breaks by a constant ratio from the smallest positive value to the maximum, which suits skewed data spanning orders of magnitude (population, income, concentrations). Zero and negative values fall into the first class; if no value is positive, it classifies by equal interval instead.
+- **Manual** is set for you as soon as you edit a class value, add a class, or remove one, so the method shown never claims to have produced breaks you typed. Choose it yourself to keep the current breaks while you edit them. Changing the class count, colormap, or attribute regenerates the breaks by equal interval.
+
+The map legend names the method under a graduated layer's field, for example "Quantile, 5 classes", so a reader of an exported or shared map can tell how the classes were built. A project saved before the **Manual** scheme existed keeps the method it was classified with even if its breaks were edited by hand afterwards; reapply the classification, or pick **Manual**, to correct the caption.
 
 ### Diagram symbology
 
@@ -108,11 +117,53 @@ narrowed. Switch the point renderer back to **Single symbol** to see the
 filtered features drawn individually, one circle each, with no cluster counts to
 misread.
 
+### Floor picker
+
+Indoor data (rooms, corridors, doors) usually carries the floor each feature is
+on. The **Floor picker** section of the Style panel links a layer to an on-map
+floor picker: choose the **Floor field** that holds the floor, such as `level`
+or `ordinal`, and a **Floor** control appears in the top-right corner of the
+map with one button per floor, highest first.
+
+- Click a floor to draw only that floor. **All** draws every floor again. With
+  the picker focused, the up and down arrow keys step one floor at a time. A
+  tall building's list scrolls and keeps the chosen floor in view. Drag the
+  grip under the list to make it taller or shorter (or focus the grip and use
+  the arrow keys, Home and End); double-click it to go back to the default
+  height. The height is remembered in this browser, not saved in the project.
+- With **All** chosen, click a room (any feature of a linked layer) to go to its
+  floor: the picker switches to that floor and the map centres on the room.
+  Labels follow the floor, so each floor shows only its own room names.
+- **+ below** keeps the floors under the chosen one as well, the cutaway view of
+  a building with the upper storeys lifted off. Combined with a stacked
+  extrusion (see **Stacking floors** above) it shows the building up to the
+  floor you are looking at.
+
+The field may hold numbers, or text as in OpenStreetMap's `level` tag,
+including features that span several floors (`0;1`) or a range (`-1-2`): a room
+spanning floors 0 and 1 is drawn on both. Text floors such as `G` or `B1` are
+listed after the numbered ones and match only themselves.
+
+Link several layers of the same building (rooms, doors, points of interest) and
+the picker lists the floors of all of them and moves them together; a layer
+linked later joins on the floor in view. Set the field back to **Off** to unlink
+a layer. The choice is saved with the project, works with every renderer
+(MapLibre, Mapbox, Cesium and ArcGIS), and narrows the layer together with its
+Quick filters, expression filter, and a Time Slider window. The picker reads the
+floors from the layer's own features, so it is offered for layers whose features
+are loaded into GeoLibre (GeoJSON, GeoPackage, Shapefile and similar), not
+tile-backed ones. Add Data → Vector Layer → **Load sample data** → *Berlin
+Hauptbahnhof indoor (OSM)* is a ready-made example with three floors.
+
 ### Style interchange and URL styles
 
-The selected vector layer's **Layer actions → Styles** submenu imports and exports GeoLibre URL style JSON, Mapbox/MapLibre style JSON, OGC SLD, and QGIS QML. A GeoLibre URL style is a compact MapLibre style whose feature data is supplied separately through the `data` URL parameter. Export one when you want to publish the current symbology beside hosted GeoJSON or a ZIP of GeoJSON files; import it when you want to apply that symbology to a layer already open in GeoLibre.
+The selected vector layer's **Layer actions → Styles** submenu imports and exports GeoLibre URL style JSON, Mapbox/MapLibre style JSON, OGC SLD, and QGIS QML. A GeoLibre URL style is a compact MapLibre style whose feature data is supplied separately through the `data` URL parameter. Use **Export GeoLibre URL style** when you want to publish the current symbology beside hosted GeoJSON or a ZIP of GeoJSON files; import it when you want to apply that symbology to a layer already open in GeoLibre.
+
+GeoLibre URL styles preserve built-in polygon fill patterns and their colors, plus custom SVG fill patterns. Inline SVG markup and SVG data URLs are stored in the style file; HTTP(S) SVG URLs remain external references and must still be reachable when loading the style. Each fill render layer carries a versioned `geolibre:fill-pattern` entry in its `metadata`, so patterns stay associated with the correct source when combining styles for a multi-file ZIP. GeoLibre restores this extension through both URL loading and style import. Other MapLibre/Mapbox clients ignore the extension and use the flat fill. Custom point markers still require generated sprites and are not preserved by this export.
 
 See [Managing Layers](layers.md#importing-and-exporting-styles) for the menu workflow and [Embedding & Sharing](embedding.md#open-remote-data) for the JSON conventions.
+
+To restyle many layers at once, **Project → Export → Export Layer Styles...** writes every layer's style to one file keyed by layer name, and **Project → Import → Import Layer Styles...** applies it to the layers whose names match. See [Projects](projects.md#layer-styles).
 
 !!! tip "Choropleth maps"
 To make a choropleth, select **Graduated**, pick a numeric attribute, choose a colormap, and click **Apply style type**. See the [Your First Map tutorial](../tutorials/first-map.md).
@@ -128,7 +179,7 @@ Further down the Style panel, the **Popup** section designs what a viewer sees w
 - **Value type** formats the value: **Number** (decimals, thousands separator), **Date** (date, date and time, time, ISO 8601, or year), **Link**, **Image**, or plain **Text**. For **Text**, **Number** and **Date** fields, **Prefix** and **Suffix** wrap the result, which is where a currency symbol or a unit goes.
 - **In hover tooltip** puts a field in the tooltip's short subset. Keep it to one or two fields: the tip follows the pointer, so it is a glance, not a table. Image fields are skipped there and stay in the click popup, where there is room to show the picture.
 
-Layers loaded through **Add Vector Layer** are designed here too. That panel has its own **Popup** checkbox per layer, which opens a separate, unstyled attribute table on click; it is off by default so the two do not both answer the same click, and the design above is what a viewer gets. Tick it only if you want the control's raw table back.
+Layers loaded through **Add Vector Layer** are designed here too, once the panel has handed them over to GeoLibre, which it does for every layer it loads in GeoJSON mode with up to 100,000 features (see [Adding data](adding-data.md#files)). A layer the panel keeps, such as a tiled or streamed one, has no features in GeoLibre for the designer to read, so the Popup section does not appear for it. The panel's own **Popup** checkbox opens a separate, unstyled attribute table on click; it is off by default so the two do not both answer the same click. Tick it only if you want the control's raw table back.
 
 Fields you hid or excluded from the [attribute table](attribute-table.md) stay out of the popup: the popup design selects from the visible fields and cannot re-expose a hidden one. A layer with nothing configured behaves exactly as before, and the whole design saves with the project, so it travels to the Python package and the MCP authoring tools as well.
 
@@ -139,9 +190,30 @@ For raster layers the Style panel exposes image adjustments:
 - **Brightness** (minimum and maximum)
 - **Saturation**
 - **Contrast**
-- **Hue rotation** (in degrees)
+- **Hue Rotate** (in degrees)
 
 These let you tune the look of GeoTIFF, COG, and tile-based raster layers without changing the underlying data.
+
+A WMS layer also gets a **Legend** section. **Get legend** shows the service's legend image, from the capabilities `LegendURL` when one is advertised or a `GetLegendGraphic` request otherwise; if the service has none, you can enter a legend image URL instead. **Add to map** places the legend on the map in an HTML control.
+
+### Raster symbology and histogram stretch
+
+GeoTIFF and COG layers add a **Raster symbology** section with a **Render mode**:
+
+- **Single band (pseudocolor)** draws one **Band** through a colormap, which can be reversed or replaced with your own colors, and optionally **Classify into discrete classes** (equal interval, quantile, or manual breaks).
+- **RGB composite** maps three bands to red, green, and blue.
+- **Index (normalized difference)** computes an index such as NDVI from two bands.
+
+**Min** and **Max** set the stretch range (left empty, they show `auto`), and **Stretch** (**Linear**, **Logarithmic**, or **Square root**) and **Gamma** shape it. **No data** reads the nodata value from the file, renders every pixel, or uses a custom value.
+
+Under **Histogram**, a single-band (unclassified) or RGB raster shows the distribution of its pixel values with the active stretch window shaded between two handles:
+
+- **Drag a handle** to set the minimum or maximum; the **Min**/**Max** inputs follow, and typing a value moves the handle.
+- From the keyboard, focus a handle and use the arrow keys, with `Shift` or `Page Up`/`Page Down` for steps ten times larger and `Home`/`End` for the ends.
+- An **RGB composite** shows one histogram per channel, each with its own **Min** and **Max**. Editing one channel pins the others at their current automatic range so they do not jump.
+- With no range set, the automatic window is the 2nd to 98th percentile of the band.
+
+For a single-band or index raster that is not classified, **Viewport stretch** fits the range to the pixels currently on screen instead: **Viewport min / max**, **Viewport 5–95 percentile**, or **Viewport mean ± 2 standard deviations**, then **Apply to viewport**. Tick **Update automatically when the map moves** to keep refitting as you pan and zoom. The stretch is saved with the layer.
 
 ### Spectral profile
 

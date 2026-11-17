@@ -7,9 +7,12 @@
 import { hasPathTraversal } from "@geolibre/core";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readFile, readTextFile } from "@tauri-apps/plugin-fs";
+import { readFile } from "@tauri-apps/plugin-fs";
 import type { FeatureCollection } from "geojson";
 import i18next from "i18next";
+import { isImdfZipBlob, isImdfZipRange } from "@geolibre/core";
+import { readImdfZip } from "../imdf";
+import { imdfLoadedLayers } from "../imdf-layers";
 import { IS_MAS_BUILD } from "../build-flags";
 import {
   confirmLargeDataset,
@@ -21,6 +24,7 @@ import type { DuckDbVectorFile } from "../duckdb-vector-loader";
 import type { FileDialogFilter } from "../file-dialog-filters";
 import { isTauri } from "../is-tauri";
 import { parseKmlText } from "../kml";
+import { resolveKmlFeatureIcons } from "../kml-icons";
 import { SHAPEFILE_COMPANION_EXTENSIONS, shapefileCompanionPathsFromSelection } from "../mas-build";
 import {
   groundOverlaysFromKml,
@@ -34,7 +38,12 @@ import {
   type LoadedLayer,
   type LoadedVectorLayer,
 } from "./loaded-layer";
-import { localFileSizeBytes, readLocalFileBytes, readLocalFileText } from "./local-fs";
+import {
+  localFileSizeBytes,
+  readLocalFileBytes,
+  readLocalFileRange,
+  readLocalFileText,
+} from "./local-fs";
 import {
   browserSafeFileName,
   fileExtension,
@@ -45,6 +54,7 @@ import {
   VECTOR_FILE_DIALOG_EXTENSIONS,
 } from "./paths";
 import { loadShapefileZip } from "./shapefile-zip";
+import { notifyFileReadFailed } from "./notify-read-failure";
 import { toArrayBuffer } from "./shared";
 import {
   isDelimitedTextFileName,
@@ -218,7 +228,10 @@ async function loadBrowserVectorFile(
         data: await parseGeoJsonText(await file.text()),
         path: file.name,
       };
-    } catch {
+    } catch (error) {
+      // A malformed .geojson cannot be repaired by GDAL. Surface its parse
+      // error immediately instead of loading DuckDB and its spatial extension.
+      if (extension === "geojson" && error instanceof SyntaxError) throw error;
       // Some GDAL-backed vector formats use .json but are not GeoJSON
       // FeatureCollections. Let DuckDB Spatial try them before failing.
     }
@@ -241,7 +254,7 @@ async function loadBrowserVectorFile(
   if (!streamViaDuckDb && extension === "kml") {
     try {
       return {
-        data: parseKmlText(await file.text()),
+        data: await resolveKmlFeatureIcons(parseKmlText(await file.text())),
         path: file.name,
       };
     } catch {
@@ -303,41 +316,6 @@ async function loadBrowserVectorFile(
   };
 }
 
-async function openVectorFileBrowser(options?: DuckDbVectorLoadOptions): Promise<{
-  data: FeatureCollection;
-  path: string;
-} | null> {
-  return new Promise((resolve, reject) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.onchange = async () => {
-      try {
-        const file = input.files?.[0];
-        if (!file) {
-          resolve(null);
-          return;
-        }
-
-        resolve(await loadBrowserVectorFile(file, [], options));
-      } catch (error) {
-        reject(error);
-      }
-    };
-    input.click();
-  });
-}
-
-async function openVectorFileTauri(options?: DuckDbVectorLoadOptions): Promise<{
-  data: FeatureCollection;
-  path: string;
-} | null> {
-  const selected = await open({
-    multiple: false,
-  });
-  if (!selected || typeof selected !== "string") return null;
-  return loadTauriVectorFile(selected, options);
-}
-
 /** A vector file picked from the desktop dialog, with any shapefile sidecars. */
 export interface PickedVectorFile {
   /** The main vector file (the `.shp` for a shapefile). */
@@ -397,6 +375,7 @@ export async function pickVectorFilesWithSidecars(): Promise<PickedVectorFile[]>
       });
     } catch (error) {
       console.warn(`Could not read the selected file "${path}".`, error);
+      notifyFileReadFailed(path, error);
     }
   }
   return picked;
@@ -508,7 +487,9 @@ async function loadTauriVectorFile(
         data: await parseGeoJsonText(await readLocalFileText(path)),
         path,
       };
-    } catch {
+    } catch (error) {
+      // Match the browser path: malformed GeoJSON needs no DuckDB fallback.
+      if (extension === "geojson" && error instanceof SyntaxError) throw error;
       // Some GDAL-backed vector formats use .json but are not GeoJSON
       // FeatureCollections. Let DuckDB Spatial try them before failing.
     }
@@ -537,7 +518,7 @@ async function loadTauriVectorFile(
   if (!streamViaDuckDb && extension === "kml") {
     try {
       return {
-        data: parseKmlText(await readLocalFileText(path)),
+        data: await resolveKmlFeatureIcons(parseKmlText(await readLocalFileText(path))),
         path,
       };
     } catch {
@@ -673,65 +654,6 @@ async function readShapefileCompanionFiles(path: string, selectedPaths: string[]
   return files;
 }
 
-export async function openGeoJsonFile(): Promise<{
-  data: FeatureCollection;
-  path: string;
-} | null> {
-  if (!isTauri()) {
-    console.warn("File dialog requires Tauri runtime");
-    return null;
-  }
-  const selected = await open({
-    multiple: false,
-    filters: [{ name: "GeoJSON", extensions: ["geojson", "json"] }],
-  });
-  if (!selected || typeof selected !== "string") return null;
-  const text = await readTextFile(selected);
-  const data = await parseGeoJsonText(text);
-  return { data, path: selected };
-}
-
-/** Browser fallback: pick a local GeoJSON file when not running in Tauri */
-export function openGeoJsonFileBrowser(): Promise<{
-  data: FeatureCollection;
-  path: string;
-} | null> {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".geojson,.json";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) {
-        resolve(null);
-        return;
-      }
-      const text = await file.text();
-      resolve({
-        data: await parseGeoJsonText(text),
-        path: file.name,
-      });
-    };
-    input.click();
-  });
-}
-
-export async function openGeoJsonFileWithFallback(): Promise<{
-  data: FeatureCollection;
-  path: string;
-} | null> {
-  if (isTauri()) return openGeoJsonFile();
-  return openGeoJsonFileBrowser();
-}
-
-export async function openVectorFileWithFallback(options?: DuckDbVectorLoadOptions): Promise<{
-  data: FeatureCollection;
-  path: string;
-} | null> {
-  if (isTauri()) return openVectorFileTauri(options);
-  return openVectorFileBrowser(options);
-}
-
 export async function loadDroppedVectorFiles(
   droppedFiles: FileList | File[],
   options?: DuckDbVectorLoadOptions,
@@ -760,6 +682,20 @@ export async function loadDroppedVectorFiles(
       if (extension === "polyline") {
         layers.push(...parsePolylineFileLayers(await file.text(), file.name));
         continue;
+      }
+
+      if (extension === "zip") {
+        // An IMDF venue is a zip of GeoJSON, not a shapefile: it becomes a
+        // group of stacked, floor-picker-linked layers.
+        // Only the zip's central directory is read to decide, so a shapefile
+        // zip is read once, by the shapefile loader below.
+        if (await isImdfZipBlob(file)) {
+          const imdf = readImdfZip(new Uint8Array(await file.arrayBuffer()));
+          if (imdf) {
+            layers.push(...imdfLoadedLayers(imdf, file.name));
+            continue;
+          }
+        }
       }
 
       if (extension === "kmz") {
@@ -871,6 +807,19 @@ export async function loadDroppedVectorPaths(
           throw new Error(`Could not read this Polyline file. ${detail}`);
         }
         continue;
+      }
+      if (extension === "zip") {
+        const size = await localFileSizeBytes(path);
+        if (
+          size !== undefined &&
+          (await isImdfZipRange(size, (offset, length) => readLocalFileRange(path, offset, length)))
+        ) {
+          const imdf = readImdfZip(await readLocalFileBytes(path));
+          if (imdf) {
+            layers.push(...imdfLoadedLayers(imdf, path));
+            continue;
+          }
+        }
       }
       if (extension === "kmz") {
         try {

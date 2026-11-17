@@ -1,4 +1,4 @@
-import type { Cartographic } from "@cesium/engine";
+import type { Cartographic } from "@cesium/core";
 import type { GeoidHeights } from "./terrain-profile";
 
 /**

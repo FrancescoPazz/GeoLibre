@@ -2,6 +2,8 @@
 /// <reference types="vite-plugin-pwa/client" />
 
 declare const __GEOLIBRE_VERSION__: string;
+/** Version of the installed `geolibre-wasm` tool engine (OBIA provenance). */
+declare const __GEOLIBRE_WASM_VERSION__: string;
 
 // True only in the Microsoft Store MSIX build (GEOLIBRE_STORE_BUILD=1), where the
 // in-app update checker is removed so the app updates solely through the Store
@@ -35,6 +37,7 @@ declare const __NO_EXTERNAL_CDN__: boolean;
 // these (the define values are null there).
 declare const __PGLITE_CDN_URL__: string | null;
 declare const __PGLITE_POSTGIS_CDN_URL__: string | null;
+declare const __PGLITE_POSTGIS_BUNDLE_SHA256__: string | null;
 
 // jsDelivr URL for the CereusDB (Apache Sedona) WASM blob, injected by
 // vite.config.ts and read by cereus-loader.cdn.ts. By default every build

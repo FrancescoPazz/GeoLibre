@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   RER_DEFAULT_SEARCH_EXTENT,
   RER_GEOCODER_ENDPOINT,
+  GeocoderUnsupportedError,
   geocodeForward,
   geocodeReverse,
   getGeocodingProvider,
@@ -330,9 +331,12 @@ describe("search", () => {
     assert.equal(logins, 2, "a rejected login is retried on the next search, not cached");
   });
 
-  it("answers reverse geocoding with null rather than calling the service", async () => {
+  it("refuses reverse geocoding rather than calling the service", async () => {
     const service = mockService([record()]);
-    assert.equal(await geocodeReverse(11.34, 44.49, { config: CONFIG }), null);
+    await assert.rejects(
+      geocodeReverse(11.34, 44.49, { config: CONFIG }),
+      GeocoderUnsupportedError,
+    );
     assert.equal(service.calls.length, 0);
   });
 });

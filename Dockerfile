@@ -54,6 +54,9 @@ ARG VITE_WELCOME_DISABLED=
 # postMessage API. Usually set at RUN time instead (-e GEOLIBRE_EMBED_ORIGINS=…),
 # which the entrypoint writes into the runtime config without a rebuild.
 ARG VITE_GEOLIBRE_EMBED_ORIGINS=
+# Default project storage backend ("local" or "server"). Unset defaults to "local".
+# Also settable at RUN time (-e GEOLIBRE_PROJECT_STORAGE=…).
+ARG VITE_GEOLIBRE_PROJECT_STORAGE=
 # Self-hosted project sharing server (https://…, or "off" to remove Share and the
 # Project Gallery). Unset uses the public hosted service. Like the embed origins,
 # normally set at RUN time instead (-e GEOLIBRE_SHARE_URL=…) so a prebuilt image
@@ -62,6 +65,14 @@ ARG VITE_GEOLIBRE_SHARE_URL=
 # Self-hosted collaboration relay (wss://…). Unset leaves collaboration dark.
 # Also settable at RUN time (-e GEOLIBRE_COLLAB_URL=…).
 ARG VITE_GEOLIBRE_COLLAB_URL=
+# Name shown at the start of the toolbar and in the browser tab, replacing
+# "GeoLibre". Also settable at RUN time (-e GEOLIBRE_APP_NAME=…).
+ARG VITE_GEOLIBRE_APP_NAME=
+# Set to 1 to disable the regional basemaps (Amap, Tencent), whose tiles are
+# served from mainland China: the basemap pickers hide them and a project that
+# names one opens on the default basemap. Also settable at RUN time
+# (-e GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=1).
+ARG VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=
 # GeoLens catalog default. Also settable at RUN time
 # (-e GEOLIBRE_GEOLENS_URL=...).
 ARG VITE_GEOLENS_DEFAULT_URL=same-origin
@@ -75,17 +86,20 @@ ARG GEOLIBRE_NO_EXTERNAL_CDN=
 # (project:edit, data:add, processing:run, export:data, plugins:install,
 # settings:manage), or "none" to grant nothing — for a kiosk or classroom
 # instance. Unset grants everything, so an existing build is unchanged. See
-# docs/deployment-capabilities.md. Build-time only: unlike the embed/share/
-# collab URLs, the entrypoint does not yet publish this into the runtime
-# config, so it cannot be flipped with -e on a prebuilt image (issue #1673).
+# docs/deployment-capabilities.md. Build-time default; at run time
+# -e GEOLIBRE_CAPABILITIES=... overrides it on a prebuilt image through the
+# deployment.json and runtime config the entrypoint writes (issue #2783).
 ARG VITE_GEOLIBRE_CAPABILITIES=
 ENV GEOLIBRE_APP_BASE=${GEOLIBRE_APP_BASE}
 ENV VITE_GEE_OAUTH_CLIENT_ID=${VITE_GEE_OAUTH_CLIENT_ID}
 ENV VITE_MAPILLARY_ACCESS_TOKEN=${VITE_MAPILLARY_ACCESS_TOKEN}
 ENV VITE_WELCOME_DISABLED=${VITE_WELCOME_DISABLED}
 ENV VITE_GEOLIBRE_EMBED_ORIGINS=${VITE_GEOLIBRE_EMBED_ORIGINS}
+ENV VITE_GEOLIBRE_PROJECT_STORAGE=${VITE_GEOLIBRE_PROJECT_STORAGE}
 ENV VITE_GEOLIBRE_SHARE_URL=${VITE_GEOLIBRE_SHARE_URL}
 ENV VITE_GEOLIBRE_COLLAB_URL=${VITE_GEOLIBRE_COLLAB_URL}
+ENV VITE_GEOLIBRE_APP_NAME=${VITE_GEOLIBRE_APP_NAME}
+ENV VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS=${VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS}
 ENV VITE_GEOLENS_DEFAULT_URL=${VITE_GEOLENS_DEFAULT_URL}
 ENV GEOLIBRE_NO_EXTERNAL_CDN=${GEOLIBRE_NO_EXTERNAL_CDN}
 ENV VITE_GEOLIBRE_CAPABILITIES=${VITE_GEOLIBRE_CAPABILITIES}
@@ -155,6 +169,9 @@ RUN mkdir -p /data
 # `host` or `host:port`) — otherwise a same-origin caller could aim them at
 # hosts only this container can reach. Deliberately left unset: set it at
 # `docker run` time to enable PostGIS, or `*` to accept any connection string.
+# SQL Server uses the same destination allowlist via GEOLIBRE_MSSQL_HOSTS; it is
+# intentionally unset in this image. This image also does not install pyodbc or
+# Microsoft ODBC Driver 18: operators must add both in a derived image.
 
 # WARNING: docker/nginx.conf's CSP allows http://localhost:* / http://127.0.0.1:*
 # (and ws:// equivalents) in connect-src for local-dev data sources (PMTiles/COGs
@@ -166,12 +183,16 @@ RUN mkdir -p /data
 # per-launch sidecar token, so a container restart never keeps a stale token.
 COPY docker/nginx.conf /etc/nginx/nginx.conf.template
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY docker/deployment_policy.py /usr/local/lib/geolibre/deployment_policy.py
+COPY docker/sidecar_policy.py /usr/local/lib/geolibre/sidecar_policy.py
 RUN chmod +x /usr/local/bin/entrypoint.sh \
   # Default auth snippet (disabled). entrypoint.sh rewrites it at start based
   # on GEOLIBRE_AUTH_USER/GEOLIBRE_AUTH_PASSWORD; baking a valid default keeps
   # `nginx -t` and non-entrypoint invocations working.
   && printf '# Basic Auth disabled (GEOLIBRE_AUTH_USER/GEOLIBRE_AUTH_PASSWORD not set).\n' > /etc/nginx/geolibre-auth.conf \
-  && printf '# AI proxy disabled (GEOLIBRE_AI_URL not set).\n' > /etc/nginx/geolibre-ai-proxy.conf
+  && printf '# AI proxy disabled (GEOLIBRE_AI_URL not set).\n' > /etc/nginx/geolibre-ai-proxy.conf \
+  && printf '# Sidecar guards generated at boot.\n' > /etc/nginx/geolibre-sidecar-guards.conf \
+  && printf '# Sidecar off switch generated at boot.\n' > /etc/nginx/geolibre-sidecar-off.conf
 COPY --from=build /app/apps/geolibre-desktop/dist /usr/share/nginx/html
 
 EXPOSE 80

@@ -17,10 +17,75 @@ import type { CesiumSceneHandle } from "@geolibre/map";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import type { IControl, Map as MapLibreMap } from "maplibre-gl";
 import type { OvertureTheme } from "maplibre-gl-overture-maps";
+import type * as Proj4 from "proj4";
 import type { TemporalLayerAdapter } from "./plugins/temporal-layers";
 import type { GeoLibreToolbarLabel } from "./toolbar-menu-label";
 
 export type GeoLibreMapControlPosition = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
+/**
+ * The CRS the primary map is drawn in, when it is not the default Web Mercator
+ * map or globe (`preferences.map.mapCrs`, see docs/maplibre-renderer.md).
+ */
+export interface GeoLibreMapCrs {
+  /** The `preferences.map.mapCrs` value: a preset id or `"EPSG:<code>"`. */
+  id: string;
+  /** The authority code the map is registered under, such as `"EPSG:25832"`. */
+  code: string;
+  /**
+   * The label WMS and ArcGIS export layers on the map ask servers for instead
+   * of {@link code}, set only when the two differ (the planetary presets,
+   * whose IAU codes servers do not read). Match a server's capabilities
+   * against `wmsSrs ?? code`.
+   */
+  wmsSrs?: string;
+}
+
+/** Built-in panels shared by plugins and the scripting API. */
+export type GeoLibreControlPanelId = "bookmark" | "search" | "measure" | "minimap" | "print";
+
+/** Options for the host's overview map. */
+export interface GeoLibreMinimapOptions {
+  /** Zoom relative to the main map; negative values show more context. Default -4. */
+  zoomOffset?: number;
+  /** Width in pixels. Must be positive. Default 250. */
+  width?: number;
+  /** Height in pixels. Must be positive. Default 180. */
+  height?: number;
+  /** Open as its on-map button only, with the overview hidden. Default false. */
+  collapsed?: boolean;
+}
+
+/** Distance units the host's Measure panel can report. */
+export type GeoLibreMeasureDistanceUnit =
+  | "meters"
+  | "kilometers"
+  | "miles"
+  | "feet"
+  | "yards"
+  | "nautical-miles";
+
+/** Area units the host's Measure panel can report. */
+export type GeoLibreMeasureAreaUnit =
+  | "square-meters"
+  | "square-kilometers"
+  | "square-miles"
+  | "hectares"
+  | "acres"
+  | "square-feet";
+
+/** Options for the host's Measure panel. */
+export interface GeoLibreMeasureOptions {
+  /**
+   * Open as its on-map ruler button only, with the panel closed and the tool
+   * idle until the viewer clicks it. Default false.
+   */
+  collapsed?: boolean;
+  /** Unit for distances. Default `"kilometers"`. */
+  distanceUnit?: GeoLibreMeasureDistanceUnit;
+  /** Unit for areas. Default `"square-kilometers"`. */
+  areaUnit?: GeoLibreMeasureAreaUnit;
+}
 
 export type GeoLibreBuiltInMapControl =
   | "navigation"
@@ -106,6 +171,50 @@ export interface GeoLibreTileLayerOptions {
   opacity?: number;
   /** Insert the new layer directly beneath the layer with this id. */
   beforeLayerId?: string;
+  /**
+   * Provenance fields merged into the new layer's `metadata`, e.g. the
+   * catalogue record id, a link to its metadata page, the publisher, or the
+   * licence. Shown in the layer's Metadata dialog and saved with the project,
+   * so the layer keeps the trace of where it was found. Must be a plain
+   * JSON-serializable object. Credential-named fields (`token`, `apiKey`, ...)
+   * are stripped when the project is shared or exported.
+   */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Options for {@link GeoLibreAppAPI.addVectorTileLayer}. Vector tiles carry no
+ * styling, so the plugin names the tileset's source layers to draw; GeoLibre
+ * styles them like a vector tile layer added from Add Data.
+ */
+export interface GeoLibreVectorTileLayerOptions {
+  /** The tileset's source layer names to draw (at least one). */
+  sourceLayers: string[];
+  /** Tile extent as `[west, south, east, north]` in WGS84 degrees. */
+  bounds?: [number, number, number, number];
+  /** Minimum zoom at which tiles are requested (0–24). */
+  minzoom?: number;
+  /** Maximum zoom at which tiles are requested (0–24); overzoomed beyond it. */
+  maxzoom?: number;
+  /** Initial visibility (default true). */
+  visible?: boolean;
+  /** Initial opacity in [0, 1] (default 1). */
+  opacity?: number;
+  /** Insert the new layer directly beneath the layer with this id. */
+  beforeLayerId?: string;
+  /**
+   * Provenance fields merged into the new layer's `metadata`, as for
+   * {@link GeoLibreTileLayerOptions.metadata}. GeoLibre's own keys win.
+   */
+  metadata?: Record<string, unknown>;
+  /**
+   * Headers sent with the layer's tile and TileJSON requests, such as
+   * `Authorization` for a service that needs the signed-in user. Held in memory
+   * for the session only: never saved with the project or shared. Replace them
+   * with {@link GeoLibreAppAPI.setLayerRequestHeaders}, e.g. after a token
+   * refresh. MapLibre maps only.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -129,7 +238,64 @@ export interface GeoLibreWmsLayerOptions extends GeoLibreTileLayerOptions {
    * sends `CRS` instead of `SRS`; some servers accept only one version.
    */
   version?: string;
+  /**
+   * CRS the tiles are requested in (default `"EPSG:3857"`), for a server that
+   * does not offer Web Mercator: a geographic CRS (`"EPSG:4326"`,
+   * `"EPSG:4258"`, `"EPSG:6706"`, `"CRS:84"` with version 1.3.0) or any other
+   * `"EPSG:<code>"`, e.g. `"EPSG:25832"`. The desktop app redraws these tiles
+   * into Web Mercator; the web build still sends the Web Mercator BBOX, so
+   * such a layer stays blank there. Any other value throws.
+   */
+  crs?: string;
+  /**
+   * Pass `false` when the service's capabilities mark the requested layers
+   * `queryable="0"`: identify then sends no GetFeatureInfo for this layer and
+   * says the layer provides no feature information. Omitted or `true`, the
+   * layer is queried.
+   */
+  queryable?: boolean;
 }
+
+/** Options for adding a host-managed WFS GetFeature layer. */
+export interface GeoLibreWfsLayerOptions {
+  /** WFS service endpoint. */
+  url: string;
+  /** Feature type name advertised by the WFS service. */
+  typeName: string;
+  /** WFS protocol version (default "2.0.0"). */
+  version?: string;
+  /**
+   * Optional WGS84 extent as [west, south, east, north]. A request extent is a
+   * single rectangle, so it must not cross the antimeridian: `west` greater than
+   * `east` throws instead of being read as a Pacific-spanning box.
+   */
+  bbox?: [number, number, number, number];
+
+  /**
+   * Maximum number of features to request, sent as `count` (WFS 2.x) or
+   * `maxFeatures` (earlier versions). A positive integer; defaults to 1000.
+   * Stored in the layer's request URL, so refresh and reopened projects use it.
+   */
+  maxFeatures?: number;
+
+  /**
+   * Provenance fields merged into the new layer's `metadata`, as for
+   * {@link GeoLibreTileLayerOptions.metadata}. GeoLibre's own WFS request keys
+   * win over a field of the same name.
+   */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * What {@link GeoLibreAppAPI.importLayerStyle} did. `warnings` lists what the
+ * style asked for that GeoLibre could not represent. On failure, `invalid`
+ * means the text is not a style in any format read, `no-match` that it parsed
+ * but describes no symbology the layer can wear, `unsupported-layer` that the
+ * layer is not a vector layer (only GeoJSON and vector-tile layers take one).
+ */
+export type GeoLibreImportLayerStyleResult =
+  | { ok: true; warnings: string[] }
+  | { ok: false; reason: "invalid" | "no-match" | "unsupported-layer"; warnings: string[] };
 
 /** Overture Maps themes available through the host's official PMTiles source. */
 export type GeoLibreOvertureTheme = OvertureTheme;
@@ -214,9 +380,30 @@ export interface GeoLibreCogLayerOptions {
   /** Insert the new layer directly beneath the layer with this id. */
   beforeLayerId?: string;
   /**
-   * Fit the map to the COG once it loads (default true). Pass `false` for a
-   * global layer, where fitting would throw away the user's view.
+   * Fit the map to the COG once it loads (defaults to the project's "Zoom to
+   * newly added layers" map preference). Pass `false` for a global layer,
+   * where fitting would throw away the user's view.
    */
+  zoomTo?: boolean;
+}
+
+/**
+ * Options for {@link GeoLibreAppAPI.addPointCloudLayer}: a LAS/LAZ/COPC file or
+ * an EPT dataset rendered by the host's own LiDAR layer.
+ */
+export interface GeoLibrePointCloudLayerOptions {
+  /**
+   * Name shown in the Layers panel. Defaults to the file name in the URL, or to
+   * {@link fileName} for a `File` or bytes.
+   */
+  name?: string;
+  /**
+   * File name the loader sees for a `File` or bytes source; its extension picks
+   * the loader (`.las`, `.laz`, and `.copc.laz`, which streams by octree node).
+   * Required for bytes. Defaults to the `File`'s own name. Ignored for a URL.
+   */
+  fileName?: string;
+  /** Fly the map to the point cloud once it loads (default `true`). */
   zoomTo?: boolean;
 }
 
@@ -396,6 +583,42 @@ export interface GeoLibreSelection {
   features: Feature<Geometry | null>[];
 }
 
+/** The host tool currently owning map clicks, or null for ordinary map interaction. */
+export type GeoLibreActiveMapTool = "identify" | "feature-selection" | "geo-editor" | null;
+
+/** A GeoEditor session starting or ending, for {@link GeoLibreAppAPI.onEditSessionChange}. */
+export type GeoLibreEditSessionChange =
+  | {
+      /** The layer the session edits. */
+      layerId: string;
+      state: "started";
+    }
+  | {
+      /** The layer the session edited. */
+      layerId: string;
+      state: "ended";
+      /**
+       * True when the edits were saved to the layer; false when the session
+       * was cancelled, or ended because its layer was removed.
+       */
+      saved: boolean;
+    };
+
+/**
+ * Why {@link GeoLibreAppAPI.authorizeInPopup} ended without a code, as the
+ * `reason` of the error it rejects with.
+ */
+export type GeoLibreOAuthFailure =
+  | "invalid-request"
+  | "popup-blocked"
+  | "already-pending"
+  | "access-denied"
+  | "invalid-callback"
+  | "cancelled"
+  | "timeout"
+  | "restart-required"
+  | "launch-failed";
+
 /** A lightweight assistant tool for standalone plugins. No runtime SDK import is needed.
  * JSON Schema describes input to the model but does NOT validate it at runtime.
  * The callback must validate its own input. Return JSON-serializable data;
@@ -405,10 +628,88 @@ export interface AssistantToolSpec {
   name: string;
   description: string;
   inputSchema?: JSONSchema;
-  callback: (input: unknown) => unknown | Promise<unknown>;
+  callback: (input: unknown, context?: AssistantToolCallContext) => unknown | Promise<unknown>;
+}
+
+/** Per-call context handed to an {@link AssistantToolSpec} callback. */
+export interface AssistantToolCallContext {
+  /** Aborts when the user stops the assistant. Pass it to `fetch` or check
+   * `signal.aborted` between steps so a long-running tool returns promptly.
+   */
+  signal: AbortSignal;
+}
+
+/** Options for {@link GeoLibreAppAPI.downloadRemoteFile}. */
+interface GeoLibreRemoteDownloadBaseOptions {
+  /**
+   * Request headers: only `Authorization`, `Cookie` and `Accept`, which are
+   * sent to the first host only, and only over HTTPS. Others are rejected.
+   */
+  headers?: Record<string, string>;
+  /** Suggested file name (sanitized by the host). */
+  fileName: string;
+  signal?: AbortSignal;
+  /** Bytes received so far, and the total when the server sent a length. */
+  onProgress?: (received: number, total: number | null) => void;
+}
+
+/**
+ * Options for {@link GeoLibreAppAPI.downloadRemoteFile}: `"save"` asks where
+ * to save the file, `"memory"` returns its bytes, and `"folder"` writes it into
+ * the folder `folderId` names (see {@link GeoLibreAppAPI.pickDownloadFolder})
+ * without asking, never replacing a file already there.
+ */
+export type GeoLibreRemoteDownloadOptions = GeoLibreRemoteDownloadBaseOptions &
+  ({ target: "save" | "memory"; folderId?: never } | { target: "folder"; folderId: string });
+
+/** A folder picked with {@link GeoLibreAppAPI.pickDownloadFolder}. */
+export interface GeoLibreDownloadFolder {
+  /** Opaque id passed back as `folderId`. */
+  id: string;
+  /** The folder's path, for display. */
+  path: string;
+}
+
+/** What {@link GeoLibreAppAPI.downloadRemoteFile} resolves with. */
+export interface GeoLibreRemoteDownloadResult {
+  /** Where a saved file landed; null for a memory download. */
+  path: string | null;
+  size: number;
+  /** The bytes of a memory download; null for a saved file. */
+  data: ArrayBuffer | null;
+}
+
+/** What {@link GeoLibreAppAPI.writeFileToFolder} resolves with. */
+export interface GeoLibreWriteFileResult {
+  /** Where the file landed on disk. */
+  path: string;
+  /** Size of the written file in bytes. */
+  size: number;
+}
+
+/** Where `app.credentials` keeps values: the OS credential store on desktop, localStorage elsewhere. */
+export type GeoLibreCredentialLocation = "keychain" | "browser";
+
+export interface GeoLibrePluginCredentials {
+  /** The saved value for `name`, or "" when none. Synchronous. */
+  get(name: string): string;
+  /**
+   * Saves `value` under `name`; "" deletes. Returns true when the value is
+   * persisted (desktop: queued for the keychain; web: written to localStorage),
+   * false when it lasts only for this session. Throws TypeError for an invalid name.
+   */
+  set(name: string, value: string): boolean;
+  /** Where values are kept, for storage-accurate UI copy. */
+  location(): GeoLibreCredentialLocation;
 }
 
 export interface GeoLibreAppAPI {
+  /** Replace this plugin's declared URL parameters, removing omitted names.
+   * Other plugins' parameters and host parameters are preserved. Web only;
+   * inactive or stale plugin instances cannot write. Older hosts may omit it.
+   */
+  setUrlParameters?: (params: URLSearchParams) => void;
+
   /** Register an SDK Tool. The host scopes ownership to the calling plugin.
    * Returns a disposer; the host also removes tools on plugin deactivation.
    */
@@ -426,8 +727,45 @@ export interface GeoLibreAppAPI {
 
   setBasemap: (styleUrl: string) => void;
   addGeoJsonLayer: (name: string, data: FeatureCollection, sourcePath?: string) => string;
+  /**
+   * Replace a GeoJSON layer's features, keeping its id, name, place in the
+   * layer order, group, style and visibility, the way saving a GeoEditor
+   * session or refreshing a layer does. For a plugin that shows data held
+   * elsewhere and needs to show its current version, without removing and
+   * re-adding the layer. Returns false, changing nothing, when there is no
+   * GeoJSON layer with that id or the layer is being edited in the GeoEditor.
+   * Typed optional for forward-compatibility with host variants, so call it
+   * with optional chaining.
+   */
+  updateGeoJsonLayer?: (layerId: string, data: FeatureCollection) => boolean;
+  /**
+   * Remove a layer, as the Layers panel's remove action does: references to it
+   * (selection, legend, panes) are cleared, and a GeoEditor session on it is
+   * ended without saving. Does nothing when there is no layer with that id.
+   * Typed optional for forward-compatibility with host variants, so call it
+   * with optional chaining.
+   */
+  removeLayer?: (layerId: string) => void;
   listLayers?: () => GeoLibreLayerSummary[];
   getLayerFeatures?: (layerId: string) => Feature<Geometry | null>[];
+  /**
+   * Apply a style written in another format to a layer, like the Layers
+   * panel's "Import style": an OGC SLD, a QGIS QML or a Mapbox GL style JSON,
+   * detected from the content. The style is merged over the layer's current
+   * one and saved with the project. Only GeoJSON and vector-tile layers take a
+   * style, as in the Layers panel; any other layer is left untouched with
+   * `reason: "unsupported-layer"`. Accepts any such layer id, not only the
+   * plugin's own; throws for an unknown id.
+   *
+   * Lets a plugin that adds features from a web service dress them as the
+   * service does, e.g. with the SLD a GeoServer returns for WMS `GetStyles`.
+   */
+  importLayerStyle?: (layerId: string, text: string) => GeoLibreImportLayerStyleResult;
+  /**
+   * Show or hide a layer, like the Layers panel's eye button: the store is updated,
+   * so the panel and the map stay in step. Throws for an unknown layer id.
+   */
+  setLayerVisibility?: (layerId: string, visible: boolean) => void;
   getSelectedFeatures?: () => Feature<Geometry | null>[];
   getSelectedLayerId?: () => string | null;
   readRasterWindow?: (
@@ -436,6 +774,45 @@ export interface GeoLibreAppAPI {
   ) => Promise<GeoLibreRasterWindowReading | null>;
   getDrawnFeatures?: () => Feature<Geometry | null>[];
   onSelectionChange?: (callback: (selection: GeoLibreSelection) => void) => () => void;
+  /**
+   * Live, renderer-independent click-tool state, not a project snapshot.
+   * Feature selection takes precedence while its gesture owns map clicks, then
+   * Identify, then the GeoEditor (active while its plugin is on). Plugins can
+   * skip their own click/hover handling while a tool is active.
+   */
+  getActiveMapTool?: () => GeoLibreActiveMapTool;
+  /**
+   * Subscribe to changes of the effective tool (not Identify target changes).
+   * Does not call back immediately; read {@link getActiveMapTool} for the
+   * initial value. Call the returned unsubscribe function on deactivation.
+   */
+  onActiveMapToolChange?: (callback: (tool: GeoLibreActiveMapTool) => void) => () => void;
+  /**
+   * The layer open in a GeoEditor session, or null when none is. Typed optional
+   * for forward-compatibility with host variants, so call it with optional
+   * chaining.
+   */
+  getEditSessionLayerId?: () => string | null;
+  /**
+   * Subscribe to GeoEditor sessions starting and ending, for a plugin that acts
+   * when the user finishes editing its layer (offering to sync the changes, for
+   * example). Switching layers reports the old session's end, then the new
+   * one's start. Does not call back immediately; read
+   * {@link getEditSessionLayerId} for the current session. Call the returned
+   * unsubscribe function on deactivation. Typed optional for
+   * forward-compatibility with host variants, so call it with optional chaining.
+   */
+  onEditSessionChange?: (callback: (change: GeoLibreEditSessionChange) => void) => () => void;
+  /**
+   * Open a GeoEditor session on a layer, as the layer's Edit geometry action
+   * does, activating the GeoEditor if it is off. An open session on another
+   * layer is saved first. Resolves true once the session is open (or already
+   * was), or false when it cannot start: an unsupported renderer, a layer that
+   * isn't an editable vector layer, or the GeoEditor failing to activate.
+   * Typed optional for forward-compatibility with host variants, so call it
+   * with optional chaining.
+   */
+  startEditSession?: (layerId: string) => Promise<boolean>;
   /**
    * Add a native XYZ raster tile layer from a tile URL template (with
    * `{x}`/`{y}`/`{z}` placeholders) and return its layer id. Unlike calling
@@ -455,6 +832,46 @@ export interface GeoLibreAppAPI {
    */
   addWmtsLayer?: (name: string, url: string, options?: GeoLibreTileLayerOptions) => string;
   /**
+   * Add a vector tile (MVT) layer and return its layer id. `url` is a tile URL
+   * template with `{z}`/`{x}`/`{y}` placeholders, or a TileJSON URL. The layer
+   * is the same as one added from Add Data → OGC Vector Tiles: it appears in
+   * the Layers panel, takes the Style panel's controls (the attribute list and
+   * geometry type are read from the tiles), and persists with the project.
+   * Throws on a non-HTTP(S) URL, missing source layers, or an invalid extent or
+   * zoom range. Typed optional for forward-compatibility, so call it with
+   * optional chaining.
+   */
+  addVectorTileLayer?: (
+    name: string,
+    url: string,
+    options: GeoLibreVectorTileLayerOptions,
+  ) => string;
+  /**
+   * Send headers with a tile layer's tile and TileJSON requests (any layer with
+   * a tile URL or TileJSON URL, from {@link addVectorTileLayer},
+   * {@link addTileLayer}, or Add Data), replacing those set before; `null`
+   * stops sending them. Use it to refresh a token without reloading the layer:
+   * the next tile request carries the new value. Headers are held in memory,
+   * never saved with the project, and dropped when another project opens.
+   * Only MapLibre maps send them. Returns false when there is no such layer or
+   * it has no tile URL; throws on an invalid header. Typed optional for
+   * forward-compatibility, so call it with optional chaining.
+   */
+  setLayerRequestHeaders?: (layerId: string, headers: Record<string, string> | null) => boolean;
+  /**
+   * Send headers with every tile and TileJSON request whose URL starts with
+   * `urlPrefix`, replacing those set for that prefix before; `null` stops
+   * sending them. For a source the plugin adds to the map itself with
+   * {@link getMap} and does not mirror into the layer store, which has no
+   * layer for {@link setLayerRequestHeaders} to name. `urlPrefix` needs a
+   * fixed host and the start of a path (a tile template is cut at its first
+   * `{`). Headers are held in memory and never saved; they stay until the
+   * plugin clears them, so clear them in `deactivate`. Only MapLibre maps send
+   * them. Throws on an unscoped prefix or an invalid header. Typed optional
+   * for forward-compatibility, so call it with optional chaining.
+   */
+  setUrlRequestHeaders?: (urlPrefix: string, headers: Record<string, string> | null) => void;
+  /**
    * Add a native WMS raster layer and return its layer id. The host builds the
    * GetMap tile URL from {@link GeoLibreWmsLayerOptions.url} and
    * {@link GeoLibreWmsLayerOptions.layers}, so the plugin supplies the request
@@ -463,6 +880,13 @@ export interface GeoLibreAppAPI {
    * forward-compatibility, so call it with optional chaining.
    */
   addWmsLayer?: (name: string, options: GeoLibreWmsLayerOptions) => string;
+  /**
+   * Fetch a WFS feature type through the host's GeoJSON/GML parser and native
+   * HTTP transport where available. The layer persists as a WFS request and
+   * reloads its features when the project is reopened. Rejects on fetch or
+   * parsing failure and when the service returns no features.
+   */
+  addWfsLayer?: (name: string, options: GeoLibreWfsLayerOptions) => Promise<string>;
   /**
    * Add a native Cloud-Optimized GeoTIFF (COG) layer read directly from a URL
    * and rendered client-side, returning a promise for the new layer's id.
@@ -590,9 +1014,141 @@ export interface GeoLibreAppAPI {
   onLayersChanged?: (callback: (layerIds: string[]) => void) => () => void;
   fetchArrayBuffer?: (url: string) => Promise<ArrayBuffer>;
   /**
+   * Turn a data URL into one a plain HTTP reader (`fetch`, an `<img>`, a
+   * loader) can read, the way GeoLibre's own layers do:
+   *
+   * - an `s3://` (or S3 HTTPS) URL in a bucket a configured S3 connection
+   *   covers resolves to a **presigned** HTTPS URL, signed with that
+   *   connection's credentials (access keys; on desktop also AWS profiles
+   *   including SSO, the environment, and instance roles);
+   * - any other `s3://` URL resolves to its public HTTPS object URL (a key
+   *   with a `.` or `..` segment rejects: no URL can address it);
+   * - every other URL is returned unchanged (surrounding whitespace trimmed).
+   *
+   * Credentials never reach the plugin, only the signed URL. Signed URLs
+   * expire (in at most 12 hours, sooner with temporary credentials), so resolve
+   * again when you need the URL rather than storing it, and never persist one:
+   * save the `s3://` URL instead. Rejects when the bucket is covered but its
+   * credentials cannot be resolved (an expired SSO session, say), or `signal`
+   * aborts.
+   *
+   * Typed optional for forward-compatibility, so call it with optional chaining.
+   */
+  resolveReadableUrl?: (url: string, signal?: AbortSignal) => Promise<string>;
+  /**
+   * A `fetch` that runs through the desktop app's native HTTP client: any
+   * method, no CORS, and a cookie jar kept for the app session. Desktop only;
+   * undefined in the browser and Jupyter builds.
+   *
+   * Use it for a service that signs in with a session cookie. The webview runs
+   * at `tauri://localhost`, so a cookie set by the service is third-party and
+   * the webview drops it: the login succeeds and the next request gets a 401.
+   * Cookies stay in the native jar and Set-Cookie headers are not exposed to
+   * JavaScript; the jar is shared by every plugin and cleared on restart.
+   * Requests to link-local and cloud-metadata addresses are refused.
+   */
+  nativeFetch?: typeof globalThis.fetch;
+  /**
+   * Read the UTF-8 text of a local file allowed for this plugin by the
+   * machine-wide deployment policy (`plugins.fileAccess`). The host binds the
+   * calling plugin's id, so a plugin can only read its own allowlist.
+   *
+   * Gated on the Rust side: only literal absolute paths listed for the plugin
+   * match, path traversal and symlink escapes are rejected, reads are capped at
+   * 50 MB, and per-user policy files never grant access. Desktop only.
+   */
+  readAllowedFile?: (path: string) => Promise<string>;
+  /**
+   * Download a large file through the desktop app's native HTTP: no CORS, no
+   * size cap, streamed to disk rather than buffered. `target: "save"` asks the
+   * user where to save it and resolves with the path; `target: "memory"`
+   * resolves with the bytes (the temporary file is deleted once read). Resolves
+   * null when the user cancels the save dialog. Headers go to the first host
+   * only, so a bearer token is not forwarded to a redirect's presigned URL.
+   * Desktop only; undefined in the browser and Jupyter builds.
+   */
+  downloadRemoteFile?: (
+    url: string,
+    options: GeoLibreRemoteDownloadOptions,
+  ) => Promise<GeoLibreRemoteDownloadResult | null>;
+  /**
+   * Open Add Data → ICESat-2 / GEDI with a granule already loaded, so the user
+   * picks beams and fields as for a local file. The buffer is handed to the
+   * reader without a copy; do not reuse it.
+   */
+  openSpaceborneLidarGranule?: (data: ArrayBuffer, fileName: string) => void;
+  /**
+   * Open Add Data → ICESat-2 / GEDI on a granule read lazily from a URL rather
+   * than downloaded: for ATL03 photon granules (1-7 GB), whose photons the
+   * dialog reads for the map view in byte ranges. The URL must serve ranges
+   * with CORS (the Earthdata relay for NASA granules); `headers` go with every
+   * request (an Earthdata Login bearer token).
+   */
+  openSpaceborneLidarUrl?: (
+    url: string,
+    fileName: string,
+    headers?: Record<string, string>,
+  ) => void;
+  /**
+   * Add a point cloud as a GeoLibre LiDAR layer, the way Add Data → LiDAR does:
+   * the host's LiDAR control renders it, it is listed in the Layers panel, and
+   * the user styles it in the LiDAR panel. A URL may be HTTP(S) or `s3://`, and
+   * point at a LAS/LAZ file, a COPC file (streamed by octree node for the
+   * view), or an EPT `ept.json`; a URL layer is saved with the project and
+   * re-streamed when it is reopened. A `File` or bytes source loads in memory
+   * and needs a `fileName` (or the `File`'s name) ending in `.las` or `.laz`.
+   *
+   * Resolves with the new layer's id, which works with {@link removeLayer} and
+   * the other layer methods. Rejects when the source is invalid, or the point
+   * cloud cannot be read (a server without CORS for this origin, say).
+   *
+   * Typed optional for forward-compatibility, so call it with optional chaining.
+   * To draw points the LiDAR layer does not model, render them yourself with
+   * {@link getMaplibreGlLidar} or {@link getDeckGL}.
+   */
+  addPointCloudLayer?: (
+    source: string | File | ArrayBuffer | Uint8Array,
+    options?: GeoLibrePointCloudLayerOptions,
+  ) => Promise<string>;
+  /**
+   * Ask the user for a folder to save several downloads into, for
+   * {@link downloadRemoteFile}'s `"folder"` target. Resolves null when the user
+   * cancels. Desktop only.
+   */
+  pickDownloadFolder?: () => Promise<GeoLibreDownloadFolder | null>;
+  /**
+   * Write data into a folder the user picked earlier with
+   * {@link pickDownloadFolder}.
+   *
+   * The file name is sanitized by the host and cannot leave the picked
+   * folder. If a file with the given name already exists, it is atomically
+   * replaced (supporting checkpointing and incremental updates). Desktop only.
+   *
+   * @param folderId - The opaque id from {@link pickDownloadFolder}.
+   * @param fileName - File name to write inside the folder.
+   * @param data - The file content: a string, Uint8Array, ArrayBuffer, or Blob (up to 50 MiB).
+   * @param options - `subfolder`: write into this folder inside the picked one,
+   *   made if needed. One level only; its name gets the same checks
+   *   and character encoding as `fileName`, and the returned `path` shows the
+   *   name actually used. A host without this option writes to the picked
+   *   folder itself, which the returned `path` also shows.
+   * @returns The written file's path and size.
+   */
+  writeFileToFolder?: (
+    folderId: string,
+    fileName: string,
+    data: string | Uint8Array | ArrayBuffer | Blob,
+    options?: { subfolder?: string },
+  ) => Promise<GeoLibreWriteFileResult>;
+  /**
    * Resolve a fetchable URL for an asset shipped alongside an external
    * plugin's manifest (e.g. sample data bundled in the plugin folder). The
-   * host resolves `relativePath` against the plugin's own directory. Returns
+   * host resolves `relativePath` against the plugin's own directory.
+   * `relativePath` is a raw file path, not a URL: each segment is
+   * percent-encoded, so `#`, `?`, `%` and spaces stay part of the file name
+   * and the URL names the same file {@link readPluginAsset} reads. Do not
+   * pre-encode: pass `"data/my file.json"`, not `"data/my%20file.json"`
+   * (that names a file literally called `my%20file.json`). Returns
    * null for built-in plugins, for plugins installed from the desktop
    * filesystem (which have no URL base), or when `relativePath` escapes the
    * plugin directory. `pluginId` should be the calling plugin's own id; since
@@ -602,6 +1158,22 @@ export interface GeoLibreAppAPI {
    * since any plugin can fetch any same-origin URL directly.
    */
   resolvePluginAssetUrl?: (pluginId: string, relativePath: string) => string | null;
+  /**
+   * Read one asset file shipped inside an external plugin's own bundle, as
+   * raw bytes. For plugins installed from the desktop filesystem (a zip
+   * archive or a development directory) the host reads the file out of that
+   * bundle; for URL-installed plugins it fetches the same asset URL
+   * {@link resolvePluginAssetUrl} resolves. Resolves null when the plugin is
+   * unknown or built-in, `relativePath` is absolute or escapes the plugin's
+   * own bundle, or the asset does not exist. `pluginId` should be the calling
+   * plugin's own id; since all plugins share one JS context the host cannot
+   * verify the caller, so this is a convention rather than an enforced
+   * boundary — passing another plugin's id does read that plugin's bundle.
+   * Web-installed plugin
+   * archives currently persist only their entry and style sources, so asset
+   * reads resolve to null there.
+   */
+  readPluginAsset?: (pluginId: string, relativePath: string) => Promise<Uint8Array | null>;
   /**
    * Activate an installed plugin and optionally apply a partial project-state
    * patch after activation. Returns false when the plugin is unavailable,
@@ -630,7 +1202,9 @@ export interface GeoLibreAppAPI {
   queryOvertureFeatures?: (query: GeoLibreOvertureQuery) => Promise<GeoLibreOvertureQueryResult>;
   /**
    * Create a named Layers-panel group, optionally assigning existing layer ids
-   * to it, and return the new group id.
+   * to it, and return the new group id. A call that names layers reuses a
+   * same-named group holding only some of those layers (or none), such as the
+   * one a reopened project restored, and returns that group's id instead.
    */
   addLayerGroup?: (name?: string, layerIds?: string[]) => string;
   /**
@@ -662,6 +1236,14 @@ export interface GeoLibreAppAPI {
   listLayerGroups?: () => GeoLibreLayerGroupSummary[];
   fitBounds?: (bounds: [number, number, number, number]) => void;
   /**
+   * Frame a store layer's extent, as the Layers panel's zoom-to does. Returns
+   * false, without moving the camera, when the layer is missing or its extent
+   * is unknown. On the 3D globe a layer still loading (a 3D tileset or scene
+   * layer just added) is framed once it has loaded, so this can be called
+   * right after adding the layer.
+   */
+  fitLayer?: (layerId: string) => boolean;
+  /**
    * The geographic extent the primary map currently shows, as
    * `[west, south, east, north]` in degrees, or `null` when no map is mounted
    * (or the globe is mid-morph and has no bounded view).
@@ -679,8 +1261,57 @@ export interface GeoLibreAppAPI {
   getMap?: () => MapLibreMap | null;
   /** Active primary renderer, including while its canvas is being replaced. */
   getMapRenderer?: () => MapRendererKind;
+  /**
+   * The CRS the primary map is drawn in, or `null` on the default Web
+   * Mercator map or globe, and on renderers other than MapLibre (only MapLibre
+   * draws other CRSs). On a map in another CRS the host asks WMS and ArcGIS
+   * export layers for each tile's box in `wmsSrs ?? code`, so a WMS that lists
+   * that CRS lines up even without EPSG:3857, and it does not draw XYZ, vector
+   * tile or MBTiles layers. A plugin's own tiles and deck.gl overlays are not
+   * adapted. A newly picked CRS shows up here only once it has resolved (an
+   * EPSG code loads the EPSG tables first); {@link onMapCrsChange} reports it.
+   */
+  getMapCrs?: () => GeoLibreMapCrs | null;
+  /**
+   * Subscribe to the value {@link getMapCrs} returns changing: the user picking
+   * another CRS, leaving one, or switching renderer. Does not call back
+   * immediately. Switching CRS rebuilds the style, which drops layers and
+   * sources a plugin added to the map itself; re-add them on the map's next
+   * `style.load`. Call the returned unsubscribe function on deactivation.
+   */
+  onMapCrsChange?: (listener: (crs: GeoLibreMapCrs | null) => void) => () => void;
+  /**
+   * Draw the primary map in a CRS, with the checks and effects of choosing it in
+   * Settings: `id` is a preset id or `"EPSG:<code>"`, `null` the default map. The
+   * choice is a project preference, so it marks the project unsaved. Resolves to
+   * `false`, leaving the map as it is, when the value cannot be drawn or the
+   * renderer is not MapLibre. `true` means the switch has started: it rebuilds
+   * the style, and {@link onMapCrsChange} reports when it lands.
+   */
+  setMapCrs?: (id: string | null) => Promise<boolean>;
   /** Native ArcGIS view; null while another engine is active. */
   getArcgisView?: () => ReturnType<import("@geolibre/map").ArcgisEngine["getView"]>;
+  /**
+   * The MapLibre-shaped map controls receive on the ArcGIS renderer (null
+   * while another engine is active): camera, events, projection and DOM go
+   * through the view, and its style is recorded rather than handed to the SDK.
+   * The host draws what the style holds in two ways: a layer mirrored into
+   * the GeoLibre store is drawn from that store record, and any other GeoJSON
+   * fill, line, circle or text layer is drawn as the host's own graphics (see
+   * "Plugin controls" in docs/arcgis-renderer.md). Raster or vector-tile
+   * sources that are not mirrored, icons and custom layers are not drawn.
+   * Read it through `getControlMap` in `style-map.ts` rather than directly.
+   */
+  getArcgisControlMap?: () => MapLibreMap | null;
+  /**
+   * The same recording map on the Cesium globe (null while another engine is
+   * active, and in a split pane): camera, events and DOM go through the globe,
+   * a layer mirrored into the store is drawn by the globe's layer sync, and
+   * any other GeoJSON fill, line, circle or text layer is drawn as globe
+   * entities clamped to the ground. Read it through `getControlMap` in
+   * `style-map.ts` rather than directly.
+   */
+  getCesiumControlMap?: () => MapLibreMap | null;
   /** Native Mapbox map, available only while Mapbox is the primary renderer. */
   getMapboxMap?: () => ReturnType<import("@geolibre/map").MapboxEngine["getMapboxMap"]>;
   /**
@@ -726,6 +1357,14 @@ export interface GeoLibreAppAPI {
    * are ignored. Plugins should call this rather than `window.open` directly.
    */
   openExternalUrl?: (url: string) => void;
+  /**
+   * Open a `.geolibre.json` project from an `http(s)://` or `s3://` URL,
+   * replacing the current project. An S3 object in a bucket a configured
+   * connection covers is read with its credentials. Rejects with an
+   * explanatory error when the file cannot be read or is not a valid project;
+   * resolves quietly when `signal` aborts.
+   */
+  openProjectFromUrl?: (url: string, signal?: AbortSignal) => Promise<void>;
   pickLocalDirectoryFiles?: () => Promise<File[] | null>;
   /**
    * Prompt the user (desktop only) to pick one or more vector files via the
@@ -775,6 +1414,12 @@ export interface GeoLibreAppAPI {
    */
   exportTextFile?: (filename: string, content: string, options?: GeoLibreFileDialogOptions) => void;
   /**
+   * Convert WGS84 GeoJSON features to GeoParquet and save them through the
+   * host's native or browser file dialog. `filename` is the base name without
+   * an extension. Resolves to the saved path/name, or null when cancelled.
+   */
+  exportGeoParquetFile?: (filename: string, data: FeatureCollection) => Promise<string | null>;
+  /**
    * Return a redacted, serializable snapshot of the current GeoLibre project.
    * Plugins can embed this snapshot in portable HTML viewers without copying
    * the host's layer/style serialization logic.
@@ -795,6 +1440,22 @@ export interface GeoLibreAppAPI {
   unregisterExternalNativeLayer?: (id: string) => void;
   addMapControl: (control: IControl, position?: GeoLibreMapControlPosition) => boolean;
   removeMapControl: (control: IControl) => void;
+  /**
+   * Open a built-in panel using the host's existing control. Idempotent; the
+   * menu checkmark follows. Minimap options also update an already open map
+   * and survive basemap changes until it is closed; Measure options update an
+   * already open panel. Controls initialize asynchronously. Optional on older
+   * hosts.
+   */
+  openControlPanel?: {
+    (id: "minimap", options: GeoLibreMinimapOptions): void;
+    (id: "measure", options: GeoLibreMeasureOptions): void;
+    (id: GeoLibreControlPanelId): void;
+  };
+  /** Close a built-in panel, as its menu toggle does. Optional on older hosts. */
+  closeControlPanel?: (id: GeoLibreControlPanelId) => void;
+  /** Read the built-in panel's menu visibility state. Optional on older hosts. */
+  isControlPanelVisible?: (id: GeoLibreControlPanelId) => boolean;
   setBuiltInMapControlVisible: (control: GeoLibreBuiltInMapControl, visible: boolean) => boolean;
   getBuiltInMapControlPosition: (control: GeoLibreBuiltInMapControl) => GeoLibreMapControlPosition;
   setBuiltInMapControlPosition: (
@@ -826,6 +1487,30 @@ export interface GeoLibreAppAPI {
    * forward-compatibility, so plugins should call it with optional chaining.
    */
   getMaplibreGlRaster?: () => Promise<typeof import("maplibre-gl-raster")>;
+  /**
+   * Resolve GeoLibre's own `maplibre-gl-lidar` module so an external plugin can
+   * read and draw point clouds through the host's instance instead of bundling
+   * its own: its `PointCloudLoader` and `CopcStreamingLoader` decode LAS/LAZ/COPC
+   * with the LAZ WebAssembly the host already serves, and its `LidarControl`,
+   * `LidarLayerAdapter`, and `DeckOverlay` render on the host's single deck.gl
+   * instance. A bundled copy carries a second deck.gl/luma.gl, which throws
+   * (luma.gl: "already initialized"), and must ship its own WebAssembly, which a
+   * desktop install cannot always serve. Use it for points the LiDAR layer does
+   * not model, or a custom point renderer; for a plain point cloud layer use
+   * {@link addPointCloudLayer}. Always present on the GeoLibre desktop and web
+   * hosts; typed optional for forward-compatibility, so plugins should call it
+   * with optional chaining.
+   */
+  getMaplibreGlLidar?: () => Promise<typeof import("maplibre-gl-lidar")>;
+  /**
+   * Resolve the host's shared proj4 module namespace instead of bundling a copy.
+   * Its `default` export is the callable library. Pass CRS definitions directly
+   * or register plugin-prefixed names through `default.defs`; do not register
+   * or redefine EPSG names. The mutable registry is shared with the host and
+   * all plugins, so conflicting definitions can corrupt later reprojections.
+   * Optional for older or variant hosts; plugins must handle its absence.
+   */
+  getProj4?: () => Promise<typeof Proj4>;
   /**
    * Set the map projection preference (persisted in app state, so the host's
    * projection enforcement keeps it). deck.gl-backed plugins call this with
@@ -918,6 +1603,54 @@ export interface GeoLibreAppAPI {
     params?: Record<string, string | number>,
   ) => string;
   /**
+   * Ship a plugin's own translations, so an externally installed plugin can
+   * localize without a GeoLibre catalog change. `resources` maps a locale code
+   * to flat dotted keys, e.g.
+   * `{ de: { "plugin.my-plugin.title": "Werkbank" } }`; {@link translate}
+   * then resolves those keys in that locale.
+   *
+   * Only string values under `plugin.<id>.` are accepted (anything else is
+   * dropped with a console warning), and a key the host's bundled catalogs
+   * already define keeps the host's text. Registrations last for the session;
+   * re-registering the same key is a no-op, so call it once from `activate`.
+   */
+  registerTranslations?: (resources: Record<string, Record<string, string>>) => void;
+  /**
+   * Save small secrets (access tokens, API keys) for this plugin. On the
+   * desktop app they live in the OS credential store; on the web build, the
+   * Jupyter embed and mobile they live in localStorage. Reads are synchronous
+   * because the host loads every value at startup.
+   *
+   * Names are 1-64 characters of `[A-Za-z0-9_-]`. The host scopes each name to
+   * the calling plugin (`plugin.<pluginId>.<name>`), so plugins never pass
+   * their own id. This is storage, not isolation: plugins are trusted code and
+   * can still read each other's values. Never put secrets in `getProjectState`.
+   */
+  credentials?: GeoLibrePluginCredentials;
+  /**
+   * The redirect URI to register with an OAuth provider for
+   * {@link authorizeInPopup}: the app's callback page on the web, its custom URL
+   * scheme on the desktop. Typed optional for forward-compatibility with host
+   * variants, so call it with optional chaining.
+   */
+  getOAuthRedirectUri?: () => string;
+  /**
+   * Run an OAuth authorization-code sign-in: send the user to the provider's
+   * page (a popup on the web, the system browser on the desktop) and resolve
+   * with the authorization code it redirects back with. The URL must carry a
+   * `state` and a `redirect_uri` equal to {@link getOAuthRedirectUri}; the
+   * callback is accepted only when its `state` matches. The plugin keeps its
+   * PKCE verifier and exchanges the code itself. On the web, call it from a
+   * click handler before any `await`, or the browser blocks the popup.
+   * Rejects with an error whose `reason` is a {@link GeoLibreOAuthFailure}.
+   * Typed optional for forward-compatibility with host variants, so call it
+   * with optional chaining.
+   */
+  authorizeInPopup?: (
+    authorizationUrl: string,
+    options?: { timeoutMs?: number },
+  ) => Promise<string>;
+  /**
    * Register a plugin-owned top-level toolbar menu shown in the GeoLibre banner
    * beside the built-in menus, with nested submenus and action items. Returns
    * an unregister function (call it from `deactivate`). Re-registering the same
@@ -931,6 +1664,29 @@ export interface GeoLibreAppAPI {
   registerToolbarMenu?: (menu: GeoLibreToolbarMenu) => () => void;
   /** Remove a previously registered toolbar menu. */
   unregisterToolbarMenu?: (id: string) => void;
+  /**
+   * Add items to one of the built-in toolbar menus (Add Data, Processing,
+   * Controls), the way a QGIS plugin adds itself to the Vector or Raster menu.
+   * The host nests the items under a submenu named after the plugin, after the
+   * built-in entries. Returns an unregister function (call it from
+   * `deactivate`). Re-registering the same id replaces the contribution. An
+   * unknown `menu` warns and is ignored rather than throwing. Typed optional
+   * for forward-compatibility, so call it with optional chaining.
+   */
+  registerMenuContribution?: (contribution: GeoLibreMenuContribution) => () => void;
+  /** Remove a previously registered menu contribution. */
+  unregisterMenuContribution?: (id: string) => void;
+  /**
+   * Receive files dropped on the map in a format this plugin reads. Handlers
+   * are consulted before the built-in file groups, and can decide by content
+   * for an extension they share with the core (such as `.zip`). Returns an
+   * unregister function (call it from `deactivate`). Re-registering the same id
+   * replaces the handler. Typed optional for forward-compatibility, so call it
+   * with optional chaining.
+   */
+  registerFileHandler?: (handler: GeoLibreFileHandler) => () => void;
+  /** Remove a previously registered file handler. */
+  unregisterFileHandler?: (id: string) => void;
   /**
    * Register a plugin-owned floating panel: a draggable, closeable card the
    * host overlays on the map's top-left corner. Returns an unregister function
@@ -1013,6 +1769,84 @@ export interface GeoLibreToolbarMenu {
   icon?: string;
   /** Top-level items (actions, separators, or submenus). */
   items: GeoLibreToolbarMenuItem[];
+}
+
+/** The built-in toolbar menus a plugin can add items to. */
+export const GEOLIBRE_MENU_CONTRIBUTION_TARGETS = ["addData", "processing", "controls"] as const;
+
+/** A built-in toolbar menu that accepts plugin contributions. */
+export type GeoLibreMenuContributionTarget = (typeof GEOLIBRE_MENU_CONTRIBUTION_TARGETS)[number];
+
+/**
+ * Items a plugin adds to a built-in toolbar menu. The host renders them inside
+ * a submenu named after the plugin at the end of {@link menu}; contributions
+ * from the same plugin to the same menu share that submenu, separated by a
+ * divider.
+ */
+export interface GeoLibreMenuContribution {
+  /** Stable unique id used to unregister the contribution. */
+  id: string;
+  /** The built-in menu to add the items to. */
+  menu: GeoLibreMenuContributionTarget;
+  /** The items (actions, separators, or submenus), same shape as toolbar menus. */
+  items: GeoLibreToolbarMenuItem[];
+}
+
+/** What a {@link GeoLibreFileHandler} is told about a dropped file when claiming it. */
+export interface GeoLibreDroppedFileInfo {
+  /** The file name, without any directory. */
+  name: string;
+  /** Path relative to the drop, starting with the folder name. Only for files inside a dropped folder. */
+  path?: string;
+  /** Size in bytes. */
+  size: number;
+  /**
+   * Paths inside the archive, read from its central directory without loading
+   * the archive. Only for a readable `.zip`.
+   */
+  entries?: string[];
+}
+
+/** A dropped file a handler can read, the same on web and desktop. */
+export interface GeoLibreDroppedFile extends GeoLibreDroppedFileInfo {
+  /** Read the whole file. */
+  arrayBuffer: () => Promise<ArrayBuffer>;
+  /** Read the whole file as UTF-8 text. */
+  text: () => Promise<string>;
+}
+
+/**
+ * A plugin's handler for a file format dropped on the map or loaded by URL
+ * (`?data=` and the embed `addData` command). Project files are still opened
+ * first, and files no handler claims load as they would without it.
+ */
+export interface GeoLibreFileHandler {
+  /** Stable unique id used to unregister the handler. */
+  id: string;
+  /** Shown in the drop status message: "Opened by <name>". */
+  name: string;
+  /** Cheap pre-filter such as `[".zip", ".xml"]`. Only matching files are offered. */
+  extensions: string[];
+  /**
+   * Names this handler answers to as a `dataType` hint, such as `["isoxml"]`:
+   * lower-case letters, digits and hyphens, at most 32 characters. A file
+   * loaded by URL with `dataType=<name>` goes straight to {@link open}, without
+   * {@link claim} and without the {@link extensions} filter. `lidar` is built in
+   * and cannot be declared. When two handlers declare a name, the first
+   * registered one keeps it.
+   */
+  dataTypes?: string[];
+  /**
+   * Claim files from the drop. Gets every dropped file that matched
+   * {@link extensions}, so a handler can take a multi-file set. Returns the
+   * files it takes; an empty list means "not mine". A rejection counts as "not
+   * mine" too.
+   */
+  claim: (
+    files: GeoLibreDroppedFileInfo[],
+  ) => GeoLibreDroppedFileInfo[] | Promise<GeoLibreDroppedFileInfo[]>;
+  /** Load the claimed files: parse them, add layers, open a panel. */
+  open: (files: GeoLibreDroppedFile[]) => void | Promise<void>;
 }
 
 /**
@@ -1168,6 +2002,19 @@ export interface GeoLibreRightPanelRegistration {
   onExplicitClose?: () => void;
 }
 
+/**
+ * What the AI Assistant is told about an inactive plugin it could turn on.
+ * See {@link GeoLibrePlugin.assistant}.
+ */
+export interface GeoLibrePluginAssistantInfo {
+  /**
+   * One sentence on what the plugin's assistant tools do and which data they
+   * cover, shown to the model while the plugin is off (at most 300
+   * characters for an external plugin).
+   */
+  description: string;
+}
+
 export interface GeoLibrePlugin {
   id: string;
   name: string;
@@ -1182,6 +2029,13 @@ export interface GeoLibrePlugin {
   engines?: MapRendererKind[];
   /** Plugins in the same group cannot be active at the same time. */
   exclusiveGroup?: string;
+  /**
+   * Declares that this plugin registers AI Assistant tools once it is on, so
+   * the assistant can offer to turn it on (`activate_plugin`) while it is off.
+   * Tools only exist for an active plugin, so without this the assistant
+   * cannot know an installed but inactive plugin could help.
+   */
+  assistant?: GeoLibrePluginAssistantInfo;
   /** At least one name is required for handleUrlParameters to be called. */
   urlParameterNames?: string[];
   /**
@@ -1229,6 +2083,27 @@ export interface GeoLibrePlugin {
    * panel opens.
    */
   restoresPanelCollapseState?: boolean;
+  /**
+   * Set when the plugin's project state is project *data* rather than a
+   * preference (e.g. point labels): every project load then calls
+   * `applyProjectState`, with `undefined` when the file has no state for the
+   * plugin, so data from the previously open project is not carried over
+   * (and re-saved) into one that never had it.
+   */
+  clearsStateOnProjectLoad?: boolean;
+  /**
+   * Set when the plugin is a workspace tool rather than part of a project
+   * (e.g. the S3 Browser panel). Its activation belongs to the session: a
+   * project load or a map swap leaves it running when the project does not
+   * list it, and it is left out of the saved `activePluginIds`, so opening a
+   * project from its panel does not close the panel, and sharing a project
+   * does not open the panel for whoever opens it.
+   *
+   * Only for plugins that add no map controls or map layers of their own (they
+   * may still add layers through the store): the plugin is not re-activated
+   * when the map is replaced.
+   */
+  sessionScoped?: boolean;
 }
 
 export interface GeoLibreExternalPluginManifest {
@@ -1250,6 +2125,12 @@ export interface GeoLibreExternalPluginManifest {
    * third-party plugins cannot force themselves active.
    */
   activeByDefault?: boolean;
+  /**
+   * Declares that the plugin registers AI Assistant tools, so the assistant
+   * can turn it on while it is off. Copied onto the exported plugin when it
+   * does not declare its own. See {@link GeoLibrePlugin.assistant}.
+   */
+  assistant?: GeoLibrePluginAssistantInfo;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./test";
 import { layerRow, waitForMap } from "./helpers";
 
 // The Catalog plugin reads a TerriaJS init file and adds its entries as

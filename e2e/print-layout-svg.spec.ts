@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./test";
 import { dropGeoJson, layerRow, readFixture, waitForMap } from "./helpers";
 
 async function downloadSvg(page: Page): Promise<string> {
@@ -24,7 +24,7 @@ for (const theme of ["light", "dark"]) {
     await dropGeoJson(page, "smoke", readFixture("smoke.geojson"));
     await expect(layerRow(page, "smoke")).toBeVisible();
     await page.getByRole("button", { name: "Project", exact: true }).click();
-    await page.getByRole("menuitem", { name: "Print Layout...", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Print layout…", exact: true }).click();
 
     const title = "Map <SVG> & café 地図";
     const subtitle = "A long editable subtitle & <text> ".repeat(20);

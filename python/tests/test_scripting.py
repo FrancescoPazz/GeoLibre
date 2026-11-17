@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
+import gc
 import json
+import pathlib
 import sys
+import threading
+import time
 import types
+import warnings
 
+import ipywidgets
 import pytest
 
 import geolibre.geolibre as gmod
@@ -97,6 +104,111 @@ def test_wait_for_result_times_out(monkeypatch):
     slot = {"done": False, "ok": False, "value": None, "error": None}
     with pytest.raises(TimeoutError, match="timed out"):
         Map._wait_for_result(slot, "getCenter", 0.05)
+
+
+# -- _wait_for_result fallback (no kernel pump, e.g. inside Shiny) ----------
+
+
+def _resolve_slot_later(slot, delay=0.1):
+    """Resolve a pending-result slot from another thread after `delay` seconds."""
+
+    def resolve():
+        time.sleep(delay)
+        slot["done"] = True
+        slot["ok"] = True
+
+    t = threading.Thread(target=resolve, daemon=True)
+    t.start()
+    return t
+
+
+def test_wait_for_result_sleep_polls_when_no_jupyter_ui_poll(monkeypatch):
+    # Without jupyter_ui_poll (and no event loop on this thread), fall back to
+    # a plain sleep-poll -- the reply is delivered by a loop on another thread.
+    monkeypatch.setitem(sys.modules, "jupyter_ui_poll", None)
+    slot = {"done": False, "ok": False, "value": None, "error": None}
+    t = _resolve_slot_later(slot)
+    Map._wait_for_result(slot, "getCenter", 5)
+    t.join()
+    assert slot["done"]
+
+
+def test_wait_for_result_sleep_poll_times_out(monkeypatch):
+    monkeypatch.setitem(sys.modules, "jupyter_ui_poll", None)
+    slot = {"done": False, "ok": False, "value": None, "error": None}
+    with pytest.raises(TimeoutError, match="timed out"):
+        Map._wait_for_result(slot, "getCenter", 0.05)
+
+
+def test_wait_for_result_raises_on_event_loop_thread_without_pump(monkeypatch):
+    # Blocking a thread that runs an event loop would freeze the loop that
+    # delivers the reply, so it must raise guidance instead of hanging.
+    monkeypatch.setitem(sys.modules, "jupyter_ui_poll", None)
+    slot = {"done": False, "ok": False, "value": None, "error": None}
+
+    async def main():
+        Map._wait_for_result(slot, "flyTo", 5)
+
+    with pytest.raises(RuntimeError, match="worker thread"):
+        asyncio.run(main())
+
+
+def test_wait_for_result_falls_back_when_ui_events_has_no_kernel(monkeypatch):
+    # jupyter_ui_poll importable but no live kernel to pump (its ui_events
+    # raises): fall back to the sleep-poll rather than erroring.
+    @contextlib.contextmanager
+    def broken_ui_events():
+        raise AttributeError("'NoneType' object has no attribute 'kernel'")
+        yield
+
+    monkeypatch.setitem(
+        sys.modules,
+        "jupyter_ui_poll",
+        types.SimpleNamespace(ui_events=broken_ui_events),
+    )
+    slot = {"done": False, "ok": False, "value": None, "error": None}
+    t = _resolve_slot_later(slot)
+    Map._wait_for_result(slot, "getCenter", 5)
+    t.join()
+    assert slot["done"]
+
+
+def test_wait_for_result_falls_back_when_ui_events_raises_on_call(monkeypatch):
+    # The no-kernel AttributeError can come from calling ui_events() itself,
+    # before its context manager is entered; that call must fall back too.
+    def broken_ui_events():
+        raise AttributeError("'NoneType' object has no attribute 'kernel'")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "jupyter_ui_poll",
+        types.SimpleNamespace(ui_events=broken_ui_events),
+    )
+    slot = {"done": False, "ok": False, "value": None, "error": None}
+    t = _resolve_slot_later(slot)
+    Map._wait_for_result(slot, "getCenter", 5)
+    t.join()
+    assert slot["done"]
+
+
+def test_wait_for_result_propagates_errors_raised_while_pumping(monkeypatch):
+    # Only "no kernel" should trigger the fallback. A failure inside the pump
+    # loop is a real error and must surface, not be swallowed into a sleep-poll.
+    def failing_poll(_n=1):
+        raise AttributeError("reply handler broke")
+
+    @contextlib.contextmanager
+    def pump_that_fails():
+        yield failing_poll
+
+    monkeypatch.setitem(
+        sys.modules,
+        "jupyter_ui_poll",
+        types.SimpleNamespace(ui_events=pump_that_fails),
+    )
+    slot = {"done": False, "ok": False, "value": None, "error": None}
+    with pytest.raises(AttributeError, match="reply handler broke"):
+        Map._wait_for_result(slot, "getCenter", 5)
 
 
 def test_result_for_unknown_request_is_ignored(m):
@@ -422,6 +534,24 @@ def test_python_project_egress_redacts_credentials(m, tmp_path):
     assert m.to_project(keep_credentials=True)["plugins"]["settings"]
 
 
+def test_redact_credentials_keeps_only_non_secret_environment_variables():
+    """Same rule as the app: rows travel only when marked ``secret: false``."""
+    safe = redact_credentials(
+        {
+            "preferences": {
+                "environmentVariables": [
+                    {"key": "SERVICE_TOKEN", "value": "env-secret", "enabled": True},
+                    {"key": "MARKED", "value": "marked-secret", "enabled": True, "secret": True},
+                    {"key": "ENDPOINT", "value": "https://x", "enabled": True, "secret": False},
+                ]
+            }
+        }
+    )
+    assert safe["preferences"]["environmentVariables"] == [
+        {"key": "ENDPOINT", "value": "https://x", "enabled": True, "secret": False}
+    ]
+
+
 def test_redact_credentials_keeps_the_first_party_map_controls():
     """Wiping these stripped the legend/colorbar/swipe from every export."""
     safe = redact_credentials(
@@ -460,6 +590,30 @@ def test_redact_credentials_keeps_the_first_party_map_controls():
     }
     # An unknown plugin's blob is free-form and can hold a key, so it still goes.
     assert "some-third-party-plugin" not in settings
+
+
+def test_redact_credentials_keeps_only_the_geolens_publish_keys():
+    """The GeoLens plugin lists explicit sub-keys, so a stored key never publishes."""
+    saved = {
+        "serverUrl": "https://demo.getgeolens.com",
+        "mapKey": "geolibre-map-0b7d4e1f-6a2c-4f88-9d3e-5c1a2b8e7f90",
+        "layerKeys": {"layer-1": "geolibre-7c2f1c0e-3b0a-4d6e-9a53-1f0d9d6a2b11"},
+    }
+    safe = redact_credentials(
+        {
+            "plugins": {
+                "settings": {
+                    "maplibre-gl-geolens": {
+                        **saved,
+                        "apiKey": "gl-live-secret",
+                        "session": "bearer-secret",
+                    }
+                }
+            }
+        }
+    )
+    assert safe["plugins"]["settings"]["maplibre-gl-geolens"] == saved
+    assert "secret" not in json.dumps(safe)
 
 
 def test_redact_credentials_drops_the_custom_html_panel():
@@ -533,6 +687,26 @@ def test_python_credential_field_registry_matches_js():
     assert safe["layers"][0]["source"] == {"sr": 4326, "key": "layer-identifier"}
 
 
+def test_redact_credentials_keeps_header_values_that_only_reference_a_variable():
+    """Same rule as the app's isHeaderReferenceOnly: `Bearer ${T}` holds no secret."""
+    safe = redact_credentials(
+        {
+            "layers": [
+                {
+                    "source": {
+                        "requestHeaders": {
+                            "Authorization": "Bearer ${T}",
+                            "X-Key": "literal",
+                            "X-Mixed": "abc${T}",
+                        }
+                    }
+                }
+            ]
+        }
+    )
+    assert safe["layers"][0]["source"] == {"requestHeaders": {"Authorization": "Bearer ${T}"}}
+
+
 def test_python_redaction_sweeps_layer_connection():
     """`connection.lastError` is free-form error text and must be swept too."""
     safe = redact_credentials(
@@ -583,7 +757,42 @@ def test_to_html_inserts_embed_before_fragment(m):
     # embed=1 must land in the query string, before any "#fragment", or the
     # browser folds it into the fragment and the iframe never sees the flag.
     html = m.to_html(app_url="https://example.com/app#section")
-    assert "https://example.com/app?embed=1#section" in html
+    assert "https://example.com/app?embed=1&amp;layout=embed&amp;theme=light#section" in html
+
+
+@pytest.mark.parametrize(
+    ("layout", "theme", "flags"),
+    [
+        ("maponly", "dark", "embed=1&amp;maponly=1&amp;theme=dark"),
+        ("embed", "light", "embed=1&amp;layout=embed&amp;theme=light"),
+        ("full", "dark", "embed=1&amp;theme=dark"),
+    ],
+)
+def test_to_html_carries_the_layout_and_theme(monkeypatch, layout, theme, flags):
+    # The export frames the app with the same chrome flags the widget uses, so a
+    # map-only notebook map exports as map-only (#2764).
+    monkeypatch.setattr(gmod, "serve_app", lambda *_a, **_k: "http://127.0.0.1:0/")
+    monkeypatch.setattr(gmod, "app_port", lambda: 0)
+    html = Map(app_layout=layout, theme=theme).to_html(app_url="https://example.com/app")
+    assert f'src="https://example.com/app?{flags}"' in html
+
+
+def test_to_html_keeps_flags_the_app_url_already_sets(m):
+    html = m.to_html(app_url="https://example.com/app?theme=dark&embed=1")
+    assert 'src="https://example.com/app?theme=dark&amp;embed=1&amp;layout=embed"' in html
+
+
+def test_to_html_still_forces_embed_over_a_disabling_app_url(m):
+    # The app reads only the first "embed", so a disabling one is replaced.
+    html = m.to_html(app_url="https://example.com/app?embed=0&foo=1")
+    assert 'src="https://example.com/app?foo=1&amp;embed=1&amp;layout=embed' in html
+
+
+def test_render_project_html_rejects_an_unknown_layout():
+    with pytest.raises(ValueError, match="layout must be one of"):
+        gmod.render_project_html({}, layout="sidebar")
+    with pytest.raises(ValueError, match="theme must be one of"):
+        gmod.render_project_html({}, theme="sepia")
 
 
 def test_to_html_posts_the_project_to_the_app_origin_only(m):
@@ -917,3 +1126,105 @@ def test_stale_layer_access_raises(m):
     m.remove_layer(layer_id)
     with pytest.raises(ValueError, match="no longer exists"):
         _ = layer.name
+
+
+@pytest.fixture
+def stub_app_server(monkeypatch):
+    """Let ``Map()`` construct without the built app bundle, as on CI."""
+    monkeypatch.setattr(gmod, "serve_app", lambda *_a, **_k: "http://127.0.0.1:0/")
+    monkeypatch.setattr(gmod, "app_port", lambda: 0)
+
+
+def test_layout_is_the_ipywidgets_layout_not_the_app_chrome(stub_app_server):
+    m = Map(app_layout="full")
+    assert isinstance(m.layout, ipywidgets.Layout)
+    assert m.app_layout == "full"
+    # Frontends resolve this state entry to a model, so a string here is what
+    # threw in DOMWidgetView.setLayout.
+    state = m.get_state()
+    assert state["layout"].startswith("IPY_MODEL_")
+    assert state["app_layout"] == "full"
+    m.layout = ipywidgets.Layout(width="50%")
+    assert m.layout.width == "50%"
+
+
+def test_frontend_reads_the_renamed_app_layout_trait():
+    source = (pathlib.Path(gmod.__file__).parent / "_frontend.js").read_text(encoding="utf-8")
+    assert 'model.get("app_layout")' in source
+    assert 'model.get("layout")' not in source
+
+
+def test_layout_string_is_a_deprecated_alias_for_app_layout(stub_app_server):
+    with pytest.warns(DeprecationWarning, match="app_layout"):
+        m = Map(layout="maponly")
+    assert m.app_layout == "maponly"
+    assert isinstance(m.layout, ipywidgets.Layout)
+
+
+def test_app_layout_defaults_to_embed_without_warning(stub_app_server, recwarn):
+    assert Map().app_layout == "embed"
+    assert not [w for w in recwarn if w.category is DeprecationWarning]
+
+
+def test_conflicting_app_layout_and_layout_string_are_rejected():
+    with pytest.raises(TypeError, match="app_layout"):
+        Map(app_layout="full", layout="embed")
+
+
+@pytest.mark.parametrize("kwargs", [{"app_layout": "sidebar"}, {"layout": "sidebar"}])
+def test_unknown_app_layout_is_rejected(kwargs):
+    with pytest.raises(ValueError, match="app_layout must be one of"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        Map(**kwargs)
+
+
+def test_layout_height_sizes_the_map(stub_app_server):
+    assert Map(layout=ipywidgets.Layout(height="100%"), height="500px").height == "100%"
+
+    m = Map(height="500px")
+    assert m.height == "500px"
+    m.layout.height = "100%"
+    assert m.height == "100%"
+    m.layout.height = None  # clearing keeps the last height
+    assert m.height == "100%"
+
+
+def test_replacing_layout_moves_the_height_watcher(stub_app_server):
+    m = Map()
+    old = m.layout
+    m.layout = ipywidgets.Layout(height="300px")
+    assert m.height == "300px"
+    old.height = "111px"
+    assert m.height == "300px"
+    m.layout.height = "222px"
+    assert m.height == "222px"
+
+
+def test_closed_map_stops_following_its_layout(stub_app_server):
+    m = Map(height="500px")
+    layout = m.layout
+    m.close()
+    layout.height = "100%"
+    assert m.height == "500px"
+
+
+def test_map_can_be_closed_twice(stub_app_server):
+    m = Map()
+    m.close()
+    m.close()
+
+
+def test_layout_passed_to_the_constructor_stops_following_on_close(stub_app_server):
+    layout = ipywidgets.Layout(height="100px")
+    m = Map(layout=layout)
+    m.close()
+    layout.height = "5px"
+    assert m.height == "100px"
+
+
+def test_rejected_constructor_does_not_leave_a_layout_widget():
+    before = set(ipywidgets.widgets.widget._instances)
+    with pytest.raises(ValueError, match="app_layout must be one of"):
+        Map(app_layout="sidebar")
+    gc.collect()
+    assert set(ipywidgets.widgets.widget._instances) == before

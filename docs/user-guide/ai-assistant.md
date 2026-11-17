@@ -24,27 +24,86 @@ The assistant is **provider-pluggable** — it uses the
 [Strands Agents](https://strandsagents.com) SDK. Configure one or more
 providers in **Settings → AI Providers**:
 
-| Provider                       | Environment variable(s)                                                                             | Default model                      |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| Google Gemini                  | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                                                                | `gemini-3.6-flash`                 |
-| Anthropic                      | `ANTHROPIC_API_KEY`                                                                                 | `claude-opus-5`                    |
-| OpenAI                         | `OPENAI_API_KEY`                                                                                    | Select from the current GPT models |
-| **Ollama** (local)             | `OLLAMA_BASE_URL` (e.g. `http://localhost:11434`)                                                   | `gemma4`                           |
-| **Amazon Bedrock**             | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_REGION`, optional `AWS_SESSION_TOKEN`)        | `global.anthropic.claude-opus-5`   |
-| **Custom** (OpenAI-compatible) | `OPENAI_COMPATIBLE_BASE_URL` (+ optional `OPENAI_COMPATIBLE_API_KEY`) and `OPENAI_COMPATIBLE_MODEL` | —                                  |
+| Provider | Environment variable(s) | Default model |
+| --- | --- | --- |
+| Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` | `gemini-3.6-flash` |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-opus-5` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-5.6` |
+| **ChatGPT (sign in)**, desktop | none: sign in with your ChatGPT account | the plan's first model |
+| **OpenRouter** | `OPENROUTER_API_KEY` (+ optional `OPENROUTER_MODEL`) | `openai/gpt-5.6-luna` |
+| **Vercel AI Gateway** | `AI_GATEWAY_API_KEY` (+ optional `AI_GATEWAY_MODEL`) | `openai/gpt-5.6-luna` |
+| **TrustedRouter** | `TRUSTEDROUTER_API_KEY` (+ optional `TRUSTEDROUTER_MODEL`) | `trustedrouter/auto` |
+| **Ollama** (local) | `OLLAMA_BASE_URL` (e.g. `http://localhost:11434`) | `gemma4` |
+| **Amazon Bedrock** | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_REGION`, optional `AWS_SESSION_TOKEN`) | `global.anthropic.claude-opus-5` |
+| **Custom** (OpenAI-compatible) | `OPENAI_COMPATIBLE_BASE_URL` (+ optional `OPENAI_COMPATIBLE_API_KEY`) and `OPENAI_COMPATIBLE_MODEL` | — |
 
 - **Ollama** runs models on your own machine — no API key and nothing leaves your
   computer. Point `OLLAMA_BASE_URL` at your Ollama host (the `/v1` suffix is added
-  automatically); set `OLLAMA_MODEL` to pick which pulled model to use.
+  automatically). In an Ollama profile, type any pulled model into the **Model**
+  box, tag included (for example `qwen3:8b`), or pick one of the suggestions;
+  **Refresh model list** suggests the models your server actually has. An
+  `OLLAMA_MODEL` set in the OS environment pre-fills the model of a new profile.
 - **Bedrock** calls AWS from the browser using your credentials (and the model
   id is an inference-profile id such as `global.anthropic.claude-sonnet-4-6`; set
   `BEDROCK_MODEL` to choose another).
-- **Custom** covers any OpenAI-compatible endpoint — LiteLLM, vLLM, OpenRouter,
-  Groq, Together, a local server, etc. — via its chat-completions API.
+- **OpenRouter** calls its Chat Completions API from your browser. Its model picker
+  fetches the public catalog without sending your key; search by model name or id,
+  or enter an unlisted `provider/model` id. Set `OPENROUTER_MODEL` to choose a
+  different default.
+- **Vercel AI Gateway** calls `https://ai-gateway.vercel.sh/v1` with Chat
+  Completions from your browser, using one `AI_GATEWAY_API_KEY` for every model
+  the gateway offers. The model picker fetches the public catalog without
+  sending your key and keeps language models that accept tools and return text.
+  Set `AI_GATEWAY_MODEL` to a `provider/model` id to choose a different default.
+  Provider credentials you bring yourself (BYOK) stay in the Vercel dashboard;
+  they do not replace the gateway key.
+- **TrustedRouter** calls `https://api.trustedrouter.com/v1` with Chat
+  Completions from your browser, using one `TRUSTEDROUTER_API_KEY` for every
+  model it routes to. Model ids are prefixed, such as `trustedrouter/auto` or
+  `anthropic/claude-sonnet-4.5`. The model picker fetches the public catalog
+  without sending your key and keeps models that accept tools and return text.
+  Set `TRUSTEDROUTER_MODEL` to choose a different default.
+- **Custom** covers any OpenAI-compatible endpoint — LiteLLM, vLLM, Groq, Together, a local server, etc. — via its chat-completions API.
+- **ChatGPT (sign in)** uses your ChatGPT plan instead of an API key, through
+  OpenAI's [Sign in with ChatGPT for open-source apps](https://developers.openai.com/siwc/token-sharing-open-source).
+  See [Signing in with ChatGPT](#signing-in-with-chatgpt-desktop).
 
 Hosted keys (and AWS credentials) are used **directly from your browser** to call
 the provider; they are never sent to GeoLibre's servers. Saving the setting
 enables the panel immediately — no reload needed.
+
+### Signing in with ChatGPT (desktop)
+
+With a ChatGPT plan you can use the assistant without an API key. In the
+desktop app, add a profile in **Settings → AI Providers**, choose **ChatGPT
+(sign in)** and click **Continue with ChatGPT**. Your browser opens OpenAI's
+sign-in page, where you allow GeoLibre to use your plan (the first time, OpenAI
+registers GeoLibre as an app of your account; you can rename it there). The
+browser then returns to GeoLibre on `127.0.0.1`, and the profile shows the
+account's email and **Using your ChatGPT plan**. The **Model** list loads the
+models your plan offers; when the profile's model isn't one of them, the first
+is chosen.
+
+- **Tokens never reach the page.** The sign-in, its tokens and every request
+  stay in the desktop app's native side: the refresh token is kept in the
+  system keychain (macOS Keychain, Windows Credential Manager, Linux Secret
+  Service), and the access token only in memory. Plugins cannot read either,
+  and the token is only ever sent to OpenAI's Responses API and model list.
+  Without a usable keychain the sign-in lasts until GeoLibre closes.
+- **Plugins can still use the plan.** External plugins run in the same page
+  as the app, so while you are signed in an installed plugin could send
+  requests to OpenAI on your plan and see the account's email, even though it
+  never sees a token. Install only plugins you trust, and watch your usage
+  under **Usage and connected apps**.
+- **Sign out** forgets the tokens and asks OpenAI to end the session. If
+  OpenAI doesn't confirm, GeoLibre says so; disconnect GeoLibre under
+  **Usage and connected apps** (your ChatGPT settings) to be sure. The
+  registration is kept for the next sign-in; **Use another account** forgets
+  it so a different ChatGPT account can sign in.
+- A signed-in plan is never picked automatically: a profile (or
+  `GEOLIBRE_ASSISTANT_PROVIDER=chatgpt`) must choose it.
+- Desktop only. The web build and the Mac App Store build cannot accept the
+  browser's return to `127.0.0.1`, so they don't offer it.
 
 ### Using local Ollama from web.geolibre.app
 
@@ -156,10 +215,10 @@ which is a separate client-side mechanism unrelated to this one.
 
 Optional variables:
 
-| Variable                      | Purpose                                                                         |
-| ----------------------------- | ------------------------------------------------------------------------------- |
-| `GEOLIBRE_ASSISTANT_PROVIDER` | Force a provider (`google` / `anthropic` / `openai`) when several keys are set. |
-| `GEOLIBRE_ASSISTANT_MODEL`    | Pin a specific model id, overriding the default and the picker.                 |
+| Variable | Purpose |
+| --- | --- |
+| `GEOLIBRE_ASSISTANT_PROVIDER` | Force a provider (`google` / `anthropic` / `openai` / `openrouter` / `vercel` / `trustedrouter`) when several keys are set. |
+| `GEOLIBRE_ASSISTANT_MODEL` | Pin a specific model id, overriding the default and the picker. |
 
 When more than one provider key is configured, a **provider** dropdown appears in
 the panel header; a **model** dropdown lets you switch models for the selected
@@ -181,16 +240,19 @@ never reads any other system variable (your `PATH`, `HOME`, and the like never
 reach the app), and this allowlist is enforced in the native backend, not just
 the UI:
 
-| Group                                                                                                             | Variables read from the OS environment                                               |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Provider / model overrides                                                                                        | `GEOLIBRE_ASSISTANT_PROVIDER`, `GEOLIBRE_ASSISTANT_MODEL`                            |
-| Google Gemini                                                                                                     | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_API_KEY`                           |
-| Anthropic                                                                                                         | `ANTHROPIC_API_KEY`                                                                  |
-| OpenAI                                                                                                            | `OPENAI_API_KEY`                                                                     |
-| Ollama                                                                                                            | `OLLAMA_BASE_URL`, `OLLAMA_MODEL`                                                    |
-| Custom (OpenAI-compatible)                                                                                        | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` |
-| Web search                                                                                                        | `TAVILY_API_KEY`                                                                     |
-| [Fast path](#fast-path-for-simple-commands-optional) and [tool search](#finding-the-right-whitebox-tool-optional) | `JEV_API_KEY`                                                                        |
+| Group | Variables read from the OS environment |
+| --- | --- |
+| Provider / model overrides | `GEOLIBRE_ASSISTANT_PROVIDER`, `GEOLIBRE_ASSISTANT_MODEL` |
+| Google Gemini | `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_GENAI_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` |
+| Vercel AI Gateway | `AI_GATEWAY_API_KEY`, `AI_GATEWAY_MODEL` |
+| TrustedRouter | `TRUSTEDROUTER_API_KEY`, `TRUSTEDROUTER_MODEL` |
+| Ollama | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` |
+| Custom (OpenAI-compatible) | `OPENAI_COMPATIBLE_BASE_URL`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_MODEL` |
+| Web search | `TAVILY_API_KEY` |
+| [Fast path](#fast-path-for-simple-commands-optional) and [tool search](#finding-the-right-whitebox-tool-optional) | `JEV_API_KEY` |
 
 **Precedence:** a value you enter in **Settings → Environment Variables** always
 wins; the OS environment only fills in the gaps. In the AI settings, any field
@@ -218,7 +280,11 @@ Type a request and press **Enter** (or click **Send**); **Shift + Enter**
 inserts a newline, and **Ctrl/Cmd + Enter** still sends. The
 assistant streams its reply, runs tools as needed, and reports what it did. While
 it is working, **Send** becomes **Stop** — click it to cancel. **Clear** (the
-eraser icon) starts a fresh conversation.
+eraser icon) starts a fresh conversation. Switching the profile in the panel's
+dropdown keeps the conversation: the newly selected model continues with the
+earlier turns, so you can ask it about an answer the previous model gave.
+Those turns, including tool output such as query results, are sent to the newly
+selected provider; click **Clear** before switching if they should not be.
 
 ```text
 show me all parcels larger than 1 hectare within 500 m of a river
@@ -376,10 +442,10 @@ typed request — so it is still auditable in the transcript and still undoable.
 
 There are two ways in, and they behave differently on purpose:
 
-| Gesture                          | Mode                                                                         | How it ends    |
-| -------------------------------- | ---------------------------------------------------------------------------- | -------------- |
-| **Click the microphone**         | Open mic — it keeps listening, and each finished sentence is sent on its own | Click it again |
-| **Hold Space for half a second** | Push-to-talk — one turn                                                      | Release Space  |
+| Gesture | Mode | How it ends |
+| --- | --- | --- |
+| **Click the microphone** | Open mic — it keeps listening, and a request is sent once you pause for about two and a half seconds, so short pauses mid-sentence are kept together | Click it again |
+| **Hold Space for half a second** | Push-to-talk — one turn | Release Space |
 
 Push-to-talk is deliberately a _hold_. A short tap on Space still activates
 whatever control has focus, and a space typed in the composer is always just a
@@ -416,19 +482,20 @@ A few things worth knowing:
 The assistant works by calling a fixed set of tools — it cannot invent
 operations, so its actions stay within GeoLibre's validated surface.
 
-| Capability            | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Inspect layers**    | Lists loaded layers, their geometry, attribute fields, and SQL table names (schema only — never your full data).                                                                                                                                                                                                                                                                                                                                               |
-| **NL → Spatial SQL**  | Generates and runs a **read-only** DuckDB Spatial SQL query through the [SQL Workspace](sql-workspace.md), and can add the result as a layer.                                                                                                                                                                                                                                                                                                                  |
-| **Geoprocessing**     | Runs the registered [processing](processing.md) algorithms (buffer, clip, dissolve, intersection, difference, union, spatial join, simplify, H3 grids, …) and chains them into multi-step pipelines, adding each result as a layer.                                                                                                                                                                                                                            |
-| **Raster tools**      | Searches the Whitebox catalog and runs its tools in the browser via WASM — hydrology (fill depressions, flow accumulation, extract streams), terrain (slope, aspect, hillshade), LiDAR, image processing, raster↔vector conversion — adding each result as a layer.                                                                                                                                                                                            |
-| **Model Builder**     | Creates a validated, editable Model Builder workflow from a description, saves it with the project, and opens it for review before you run it. It draws on the same palette as the canvas — client-side vector tools plus the full Whitebox catalog — so a raster chain such as fill depressions → flow accumulation → extract streams is a valid model. If the canvas holds unsaved work or a run is still in flight, Model Builder asks before replacing it. |
-| **Symbology**         | Applies a **graduated** (numeric) or **categorized** (text) color ramp to a layer.                                                                                                                                                                                                                                                                                                                                                                             |
-| **Add data**          | Adds a layer from a public GeoJSON URL, or an XYZ tile basemap by name (`osm`, `opentopomap`, `carto-dark`) or a custom `{z}/{x}/{y}` URL.                                                                                                                                                                                                                                                                                                                     |
-| **Earth observation** | Searches the Microsoft [Planetary Computer](https://planetarycomputer.microsoft.com) STAC catalog (Sentinel-2, Landsat, NAIP, DEMs, …) and adds an item over the current view as a raster layer — tiles are signed server-side, so no credentials are needed.                                                                                                                                                                                                  |
-| **Map control**       | Moves the camera (fit a layer or a bounding box), switches the basemap, toggles layer visibility/opacity, and removes layers.                                                                                                                                                                                                                                                                                                                                  |
-| **Web search**        | Looks up current information online (best with `TAVILY_API_KEY`).                                                                                                                                                                                                                                                                                                                                                                                              |
-| **Code fallback**     | For tasks with no dedicated tool, runs a small **JavaScript** snippet against the live map (e.g. globe projection) or a **Python** snippet in the [Pyodide runtime](python-console.md).                                                                                                                                                                                                                                                                        |
+| Capability | What it does |
+| --- | --- |
+| **Inspect layers** | Lists loaded layers, their geometry, attribute fields, and SQL table names (schema only — never your full data). |
+| **NL → Spatial SQL** | Generates and runs a **read-only** DuckDB Spatial SQL query through the [SQL Workspace](sql-workspace.md), and can add the result as a layer. |
+| **Geoprocessing** | Runs the registered [processing](processing.md) algorithms (buffer, clip, dissolve, intersection, difference, union, spatial join, simplify, H3 grids, …) and chains them into multi-step pipelines, adding each result as a layer. |
+| **Raster tools** | Searches the Whitebox catalog and runs its tools in the browser via WASM — hydrology (fill depressions, flow accumulation, extract streams), terrain (slope, aspect, hillshade), LiDAR, image processing, raster↔vector conversion — adding each result as a layer. |
+| **Model Builder** | Creates a validated, editable Model Builder workflow from a description, saves it with the project, and opens it for review before you run it. It draws on the same palette as the canvas — client-side vector tools plus the full Whitebox catalog — so a raster chain such as fill depressions → flow accumulation → extract streams is a valid model. If the canvas holds unsaved work or a run is still in flight, Model Builder asks before replacing it. |
+| **Symbology** | Applies a **graduated** (numeric) or **categorized** (text) color ramp to a layer. |
+| **Add data** | Adds a layer from a public GeoJSON URL, or an XYZ tile basemap by name (`osm`, `opentopomap`, `carto-dark`) or a custom `{z}/{x}/{y}` URL. |
+| **Earth observation** | Searches the Microsoft [Planetary Computer](https://planetarycomputer.microsoft.com) STAC catalog (Sentinel-2, Landsat, NAIP, DEMs, …) and adds a scene over the current view as a raster layer, or a mosaic of every scene matching a date range and cloud-cover limit ("a cloud-free Sentinel-2 composite for last summer"). It can pick a render preset such as NDVI or false color. The layer is listed in the [Planetary Computer panel](data-integrations.md#planetary-computer), where it can be restyled, and no credentials are needed. |
+| **Map control** | Moves the camera (fit a layer or a bounding box, or go to an exact center, zoom, rotation, and tilt with `set_view`), switches the basemap, toggles layer visibility/opacity, and removes layers. |
+| **Web search** | Looks up current information online (best with `TAVILY_API_KEY`). |
+| **Plugin tools** | Calls the tools an installed plugin registers while it is on. It can also turn on an installed plugin that is off when the plugin declares assistant tools: ask for the plugin by name ("open the RNDT plugin and search for…"), or describe the task and the assistant picks the plugin. The plugin turns on as it would from the Plugins menu, and its tools are usable in the same reply. |
+| **Code fallback** | For tasks with no dedicated tool, runs a small **JavaScript** snippet against the live map (e.g. globe projection) or a **Python** snippet in the [Pyodide runtime](python-console.md). |
 
 ## Sample prompts
 
@@ -482,6 +549,8 @@ add this GeoJSON: https://example.com/data.geojson
 ```text
 zoom to the parcels layer
 fly to San Francisco
+center the map on 40.71, -74.01 at zoom 12
+tilt the map 60 degrees and rotate it to face east
 switch to a dark basemap
 hide the buildings layer and set the parcels opacity to 0.5
 remove the temporary buffer layer
@@ -506,7 +575,8 @@ load a CSV from a URL with pandas and summarize its columns
 - **Scoped context.** Only layer/table **names**, attribute **field names**, and
   the current view are sent to the model — not your feature data.
 - **What leaves your browser.** When you send a prompt, it (plus that scoped
-  context) is sent to your chosen LLM provider using your own key. Don't enable
+  context) is sent to your chosen LLM provider using your own key (or, with a
+  ChatGPT sign-in, to OpenAI on your plan). Don't enable
   the assistant on sensitive data you can't share with that provider. A TypeSafe
   credential adds a second destination for two things: the
   [fast path](#fast-path-for-simple-commands-optional) sends the prompt and your
@@ -537,3 +607,19 @@ The assistant runs **inside** GeoLibre and edits the map you are looking at. To
 have an AI agent _outside_ GeoLibre — in a terminal, an editor, or a notebook —
 build a project file for you, see the [agent skill](../agent-skill.md) and the
 [MCP server](../mcp.md).
+
+### Keyless Parallel web search
+
+On an instance using GeoLibre's same-origin managed AI proxy, add an enabled
+`GEOLIBRE_WEB_SEARCH_PROVIDER` variable with value `parallel` in **Settings →
+Environment variables**. The ordinary assistant's **Web search** tool then uses
+anonymous [Parallel Search](https://parallel.ai) through the Worker's `/parallel`
+route. No search API key is needed. Queries leave the instance for Parallel;
+results include source URLs and excerpts. This does not change the chat model.
+
+Remove or disable that setting to restore the existing Tavily (when
+`TAVILY_API_KEY` is set), then DuckDuckGo Instant Answer order. Selecting Parallel
+requires the managed proxy; an unavailable proxy or failed search is reported to
+the assistant without silently switching providers. The instance's authentication
+and shared per-client rate limit still apply. A standalone browser build without
+that proxy cannot use this option.

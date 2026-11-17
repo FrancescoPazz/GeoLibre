@@ -12,6 +12,9 @@
  */
 import { jsPDF } from "jspdf";
 import { pageMm, resolvePageSize, type Orientation, type PaperSizeId } from "./print-layout";
+import { htmlToPlainText, singleLine } from "./storymap-text";
+
+export { htmlToPlainText, singleLine } from "./storymap-text";
 
 /** An image to embed: a canvas (app) or a PNG/JPEG data URL (tests), plus its
  * natural pixel dimensions so the aspect ratio can be preserved. */
@@ -102,186 +105,6 @@ function lineHeightMm(fontSizePt: number): number {
 }
 
 /**
- * Named HTML entities a WYSIWYG story editor commonly emits, mapped to their
- * characters. Numeric entities (`&#160;`, `&#xA0;`) are handled separately.
- * Runs in Node for tests too, so this cannot rely on the DOM to decode.
- */
-const HTML_ENTITIES: Record<string, string> = {
-  nbsp: " ",
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  mdash: "—",
-  ndash: "–",
-  hellip: "…",
-  ldquo: "“",
-  rdquo: "”",
-  lsquo: "‘",
-  rsquo: "’",
-  laquo: "«",
-  raquo: "»",
-  copy: "©",
-  reg: "®",
-  trade: "™",
-  deg: "°",
-};
-
-/** Decode the named and numeric HTML entities in a string to their characters. */
-function decodeEntities(text: string): string {
-  return text.replace(/&(#x?[0-9a-f]+|[a-z][a-z0-9]*);/gi, (match, body) => {
-    if (body[0] === "#") {
-      const code =
-        body[1] === "x" || body[1] === "X"
-          ? parseInt(body.slice(2), 16)
-          : parseInt(body.slice(1), 10);
-      // Guard the Unicode range: fromCodePoint throws (RangeError) above
-      // 0x10FFFF (which would abort the export), and a code point of 0 would
-      // insert a null byte that can corrupt the PDF text stream. Both are HTML
-      // "parse errors", so leave the token as-is.
-      return Number.isInteger(code) && code >= 1 && code <= 0x10ffff
-        ? String.fromCodePoint(code)
-        : match;
-    }
-    const named = HTML_ENTITIES[body.toLowerCase()];
-    return named ?? match;
-  });
-}
-
-/** Remove complete script/style blocks without retrying from every opening `<`. */
-function stripRawTextBlocks(text: string): string {
-  const lower = text.toLowerCase();
-  const lastClose: Record<"script" | "style", number> = {
-    script: lower.lastIndexOf("</script>"),
-    style: lower.lastIndexOf("</style>"),
-  };
-  const output: string[] = [];
-  let plainStart = 0;
-  let searchFrom = 0;
-  const hasTagName = (open: number, candidate: "script" | "style"): boolean => {
-    if (!lower.startsWith(`<${candidate}`, open)) return false;
-    const boundary = lower[open + candidate.length + 1];
-    return boundary === ">" || boundary === "/" || /\s/.test(boundary ?? "");
-  };
-
-  for (;;) {
-    const open = lower.indexOf("<", searchFrom);
-    if (open === -1) break;
-    const name = hasTagName(open, "script") ? "script" : hasTagName(open, "style") ? "style" : null;
-    if (name === null || lastClose[name] <= open) {
-      searchFrom = open + 1;
-      continue;
-    }
-
-    const openEnd = lower.indexOf(">", open + name.length + 1);
-    if (openEnd === -1) break;
-    const closeToken = `</${name}>`;
-    const close = lower.indexOf(closeToken, openEnd + 1);
-    if (close === -1) {
-      // The last closing token was swallowed by this malformed opening tag, so
-      // no later block of the same type can be complete.
-      lastClose[name] = -1;
-      searchFrom = open + 1;
-      continue;
-    }
-
-    output.push(text.slice(plainStart, open));
-    plainStart = close + closeToken.length;
-    searchFrom = plainStart;
-  }
-
-  output.push(text.slice(plainStart));
-  return output.join("");
-}
-
-/**
- * Strip complete HTML-like tags in one pass while respecting quoted `>`.
- *
- * A regex that retries at every `<` becomes quadratic when no `>` follows.
- * When another unquoted `<` appears before a closing `>`, keep the malformed
- * prefix as text and treat the newer `<` as the start of a possible tag.
- * A raw `<` inside an attribute is likewise treated as malformed; valid HTML
- * escapes that character as `&lt;`, which is decoded after tags are stripped.
- */
-function stripTags(text: string): string {
-  const output: string[] = [];
-  let plainStart = 0;
-  let tagStart = -1;
-  let quote: '"' | "'" | null = null;
-
-  const closesBeforeNextTag = (start: number, delimiter: '"' | "'"): boolean => {
-    for (let index = start; index < text.length; index += 1) {
-      if (text[index] === delimiter) return true;
-      if (text[index] === "<") return false;
-    }
-    return false;
-  };
-
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index];
-    if (tagStart === -1) {
-      if (character === "<") tagStart = index;
-      continue;
-    }
-
-    if (quote !== null) {
-      if (character === quote) quote = null;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      // Only enter quote mode when the delimiter closes before another tag can
-      // begin. This lets malformed attribute quotes degrade locally instead of
-      // consuming unrelated quoted text and well-formed tags later on.
-      if (closesBeforeNextTag(index + 1, character)) quote = character;
-    } else if (character === "<") {
-      output.push(text.slice(plainStart, index));
-      plainStart = index;
-      tagStart = index;
-    } else if (character === ">") {
-      output.push(text.slice(plainStart, tagStart));
-      plainStart = index + 1;
-      tagStart = -1;
-    }
-  }
-
-  output.push(text.slice(plainStart));
-  return output.join("");
-}
-
-/**
- * Reduce an HTML (or plain) chapter description to single-spaced plain text.
- *
- * Block-level tags become line breaks, remaining tags are dropped, and named
- * and numeric HTML entities are decoded so the handout reads cleanly. This is
- * presentation-only (the text is drawn, never parsed as HTML), so a permissive
- * strip is sufficient.
- *
- * @param html The chapter description, possibly containing HTML.
- * @returns Plain text with normalized whitespace.
- */
-export function htmlToPlainText(html: string): string {
-  return decodeEntities(
-    stripTags(
-      stripRawTextBlocks(html)
-        .replace(/<\s*br\s*(?:\/\s*)?>/gi, "\n")
-        .replace(/<\/\s*(p|div|li|h[1-6]|tr)\s*>/gi, "\n"),
-    ),
-  )
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
-    .trim();
-}
-
-/** Reduce HTML/multi-line text to a single line of plain text for headers. */
-export function singleLine(value: string): string {
-  return htmlToPlainText(value)
-    .replace(/\s*\n\s*/g, " ")
-    .trim();
-}
-
-/**
  * Append an ellipsis to a line, trimming trailing words until it (plus the
  * ellipsis) fits within `maxWidth`, so a truncated description ends in "…".
  */
@@ -293,6 +116,79 @@ function truncateWithEllipsis(pdf: jsPDF, line: string, maxWidth: number): strin
     words.pop();
   }
   return "…";
+}
+
+/** Space kept between neighbouring footer items (byline, footer, page number). */
+const FOOTER_GAP_MM = 4;
+
+/** The footer band's text, each already fitted to its slot. */
+export interface HandoutFooterLayout {
+  byline: string;
+  footer: string;
+}
+
+/**
+ * Fit `text` on one line of at most `maxWidth`, dropping whole words and then
+ * characters behind an ellipsis, so a cut is visible rather than silent.
+ */
+function fitOneLine(text: string, maxWidth: number, measure: (text: string) => number): string {
+  if (measure(text) <= maxWidth) return text;
+  const words = text.trimEnd().split(/\s+/);
+  while (words.length > 1) {
+    words.pop();
+    const candidate = `${words.join(" ")}…`;
+    if (measure(candidate) <= maxWidth) return candidate;
+  }
+  let chars = Array.from(words[0] ?? "");
+  while (chars.length > 0) {
+    chars = chars.slice(0, -1);
+    const candidate = `${chars.join("")}…`;
+    if (measure(candidate) <= maxWidth) return candidate;
+  }
+  return "…";
+}
+
+/**
+ * Lay out the handout footer band: the byline on the left, the footer text
+ * centered, and the page number on the right.
+ *
+ * The byline used to be cut to a fixed 24 mm slot, which printed only the first
+ * word of an ordinary two-word name (#3477). It now gets the width it needs: all
+ * of the band left of the page number when there is no footer text, and up to a
+ * third of it when the centered footer shares the band. The footer is then
+ * bounded symmetrically by whichever side is wider, so it stays centered and
+ * clear of both neighbours.
+ *
+ * @param measure Width of a string in mm at the footer font.
+ * @param contentWidth Width of the band between the page margins, in mm.
+ * @param byline Single-line byline, or "" for none.
+ * @param footer Single-line footer text, or "" for none.
+ * @param pageNumber The page-number label, e.g. "2 / 5".
+ * @returns The byline and footer text to draw, each fitted to its slot.
+ */
+export function layoutHandoutFooter(
+  measure: (text: string) => number,
+  contentWidth: number,
+  byline: string,
+  footer: string,
+  pageNumber: string,
+): HandoutFooterLayout {
+  const pageNumberSlot = Math.max(PAGE_NUM_SLOT_MM, measure(pageNumber) + FOOTER_GAP_MM);
+  let fittedByline = "";
+  let bylineSlot = 0;
+  if (byline) {
+    const bylineMax = footer
+      ? Math.max(PAGE_NUM_SLOT_MM, contentWidth / 3 - FOOTER_GAP_MM)
+      : Math.max(20, contentWidth - pageNumberSlot);
+    fittedByline = fitOneLine(byline, bylineMax, measure);
+    bylineSlot = measure(fittedByline) + FOOTER_GAP_MM;
+  }
+  let fittedFooter = "";
+  if (footer) {
+    const side = Math.max(pageNumberSlot, bylineSlot);
+    fittedFooter = fitOneLine(footer, Math.max(20, contentWidth - 2 * side), measure);
+  }
+  return { byline: fittedByline, footer: fittedFooter };
 }
 
 /** Scale `(w, h)` to fit inside a `boxW x boxH` box, preserving aspect ratio. */
@@ -603,27 +499,19 @@ function drawChapterPage(
   pdf.setFont("helvetica", "normal");
   pdf.setFontSize(footerSize);
   pdf.setTextColor(130, 130, 130);
-  if (byline) {
-    // Left-aligned in the footer band, occupying the left slot that mirrors the
-    // page-number slot on the right. The centered footer text is kept clear of
-    // both slots (see footerMaxWidth below), so bounding the byline to
-    // PAGE_NUM_SLOT_MM guarantees it never runs into the footer. The first
-    // wrapped line is kept; a very long byline is truncated to this slot.
-    const bylineMaxWidth = Math.max(20, PAGE_NUM_SLOT_MM);
-    const [line] = pdf.splitTextToSize(byline, bylineMaxWidth) as string[];
-    pdf.text(line, MARGIN_MM, footerY);
+  const pageLabel = `${pageNumber} / ${pageCount}`;
+  const footerLayout = layoutHandoutFooter(
+    (text) => pdf.getTextWidth(text),
+    contentWidth,
+    byline,
+    footerText,
+    pageLabel,
+  );
+  if (footerLayout.byline) pdf.text(footerLayout.byline, MARGIN_MM, footerY);
+  if (footerLayout.footer) {
+    pdf.text(footerLayout.footer, widthMm / 2, footerY, { align: "center" });
   }
-  if (footerText) {
-    // Keep the footer centered but bound its width symmetrically so it stays
-    // clear of the byline (left) and the page number (right) on both sides, even
-    // on wide pages (e.g. Tabloid landscape). Only the first wrapped line is kept.
-    const footerMaxWidth = Math.max(20, widthMm - 2 * (MARGIN_MM + PAGE_NUM_SLOT_MM));
-    // splitTextToSize always returns at least one element for non-empty input,
-    // and footerText is non-empty here, so `line` is always a string.
-    const [line] = pdf.splitTextToSize(footerText, footerMaxWidth) as string[];
-    pdf.text(line, widthMm / 2, footerY, { align: "center" });
-  }
-  pdf.text(`${pageNumber} / ${pageCount}`, widthMm - MARGIN_MM, footerY, {
+  pdf.text(pageLabel, widthMm - MARGIN_MM, footerY, {
     align: "right",
   });
 }

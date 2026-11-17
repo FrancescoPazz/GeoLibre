@@ -1,6 +1,6 @@
 import { createCzmlLayer, useAppStore } from "@geolibre/core";
 import type { CesiumSceneHandle } from "@geolibre/map";
-import type { GeoLibreAppAPI, GeoLibrePlugin } from "../types";
+import type { GeoLibreAppAPI, GeoLibrePlugin, GeoLibrePluginCredentials } from "../types";
 import {
   czmlPacketsToAttributeGeoJson,
   CELESTRAK_CORE_SAMPLE_STEP_SECONDS,
@@ -14,7 +14,9 @@ import {
   fetchOsmInfrastructureCzml,
   fetchRadioBrowserCzml,
   fetchSubmarineCablesCzml,
+  RADIO_CATEGORIES,
   type GodsEyeViewFeedPayload,
+  type RadioCategory,
 } from "./gods-eye-view-catalog-feeds";
 import { GodsEyeViewDenseCatalog } from "./gods-eye-view-dense";
 import { fetchActiveFiresCzml } from "./gods-eye-view-fire-feeds";
@@ -35,8 +37,10 @@ import { OVERPASS_REQUEST_TIMEOUT_MS } from "./osm-downloader-api";
 import { fetchMilitaryFlightsCzml, fetchOpenSkyCzml } from "./gods-eye-view-aircraft-feeds";
 import {
   CCTV_MAX_VIEW_SPAN_DEGREES,
+  CCTV_PREVIEW_MODES,
   CCTV_QUERY_SNAP_DEGREES,
-  cctvPreviewsVisibleAtZoom,
+  cctvShowPreviews,
+  type CctvPreviewMode,
   fetchCctvCzml,
 } from "./gods-eye-view-cctv-feeds";
 import { fetchTransitCzml } from "./gods-eye-view-transit-feeds";
@@ -90,6 +94,19 @@ interface FeedFetchContext {
   window: CzmlTimeWindow;
   bounds: [number, number, number, number] | null;
   zoom: number | null;
+  /** The feed's option values, every declared option resolved to a choice. */
+  options: Readonly<Record<string, string>>;
+}
+
+/**
+ * A per-feed choice offered under the feed's row, such as the radio category.
+ * A project persists only the choices that differ from the default.
+ */
+interface FeedOptionDescriptor {
+  id: string;
+  label: readonly [key: string, fallback: string];
+  choices: readonly { value: string; label: readonly [key: string, fallback: string] }[];
+  defaultValue: string;
 }
 
 /** A translatable status line: key, English fallback, interpolation params. */
@@ -119,6 +136,8 @@ interface FeedDescriptor {
   status?: (enabled: boolean) => StatusMessage | null;
   /** Release what the feed holds outside the layer, such as an open socket. */
   dispose?: () => void;
+  /** Choices that change what the feed shows; changing one refreshes it. */
+  options?: readonly FeedOptionDescriptor[];
   fetch: (context: FeedFetchContext) => Promise<GodsEyeViewFeedPayload>;
 }
 
@@ -138,6 +157,25 @@ function aisQueryBounds(bounds: FeedFetchContext["bounds"]) {
   return viewportQueryBounds(bounds, AIS_MAX_VIEW_SPAN_DEGREES, AIS_QUERY_SNAP_DEGREES);
 }
 
+/** The radio categories' labels, with upstream's panel wording as the fallback. */
+const RADIO_CATEGORY_LABELS: Record<RadioCategory, readonly [key: string, fallback: string]> = {
+  all: ["panel.godsEyeView.options.radioCategories.all", "All"],
+  news: ["panel.godsEyeView.options.radioCategories.news", "News"],
+  talk: ["panel.godsEyeView.options.radioCategories.talk", "Talk"],
+  weather: ["panel.godsEyeView.options.radioCategories.weather", "Weather / emergency"],
+  "public-safety": ["panel.godsEyeView.options.radioCategories.publicSafety", "Public safety"],
+  "aviation-marine": [
+    "panel.godsEyeView.options.radioCategories.aviationMarine",
+    "Aviation / marine",
+  ],
+  "traffic-transit": [
+    "panel.godsEyeView.options.radioCategories.trafficTransit",
+    "Traffic / transit",
+  ],
+  music: ["panel.godsEyeView.options.radioCategories.music", "Music"],
+  other: ["panel.godsEyeView.options.radioCategories.other", "Other"],
+};
+
 /**
  * The complete contract for every feed.
  *
@@ -149,7 +187,7 @@ function aisQueryBounds(bounds: FeedFetchContext["bounds"]) {
 const FEED_DESCRIPTORS = {
   flights: {
     group: "movement",
-    label: ["panel.godsEyeView.flights", "Live Flights"],
+    label: ["panel.godsEyeView.flights", "Live flights"],
     attribution: "Live flights: © OpenSky Network; aircraft details: ADSBDB",
     refreshIntervalMs: 30_000,
     timeoutMs: 20_000,
@@ -159,7 +197,7 @@ const FEED_DESCRIPTORS = {
   },
   militaryFlights: {
     group: "movement",
-    label: ["panel.godsEyeView.militaryFlights", "Military Flights"],
+    label: ["panel.godsEyeView.militaryFlights", "Military flights"],
     attribution: "Military flights: adsb.lol, ODbL; aircraft details: ADSBDB",
     refreshIntervalMs: 15_000,
     timeoutMs: 20_000,
@@ -193,7 +231,7 @@ const FEED_DESCRIPTORS = {
   },
   bikeShare: {
     group: "movement",
-    label: ["panel.godsEyeView.bikeShare", "Bike Share"],
+    label: ["panel.godsEyeView.bikeShare", "Bike share"],
     attribution: "Bike share: GBFS feeds from participating public systems",
     refreshIntervalMs: 5 * 60_000,
     timeoutMs: 60_000,
@@ -203,7 +241,7 @@ const FEED_DESCRIPTORS = {
   },
   vessels: {
     group: "movement",
-    label: ["panel.godsEyeView.vessels", "Live AIS Vessels"],
+    label: ["panel.godsEyeView.vessels", "Live AIS vessels"],
     attribution: "Live vessels: AISStream.io",
     // A snapshot of the open socket, so this costs no request.
     refreshIntervalMs: 10_000,
@@ -216,7 +254,7 @@ const FEED_DESCRIPTORS = {
       viewportBoundsKey(bounds, AIS_MAX_VIEW_SPAN_DEGREES, AIS_QUERY_SNAP_DEGREES),
     hasQueryableViewport: (bounds) => aisQueryBounds(bounds) !== null,
     status(enabled) {
-      if (!resolveGodsEyeViewKey("aisstream")) {
+      if (!resolveGodsEyeViewKey(credentials, "aisstream")) {
         return [
           "panel.godsEyeView.vesselsKeyRequired",
           "Add an AISStream API key under API keys to stream vessels.",
@@ -241,7 +279,7 @@ const FEED_DESCRIPTORS = {
     },
     dispose: () => aisClient.stop(),
     async fetch({ bounds, window }) {
-      const key = resolveGodsEyeViewKey("aisstream")?.key;
+      const key = resolveGodsEyeViewKey(credentials, "aisstream")?.key;
       const queryBounds = aisQueryBounds(bounds);
       if (!key || !queryBounds) {
         aisClient.stop();
@@ -253,7 +291,7 @@ const FEED_DESCRIPTORS = {
   },
   transit: {
     group: "movement",
-    label: ["panel.godsEyeView.transit", "Live Transit"],
+    label: ["panel.godsEyeView.transit", "Live transit"],
     attribution:
       "Live transit: MBTA/MassDOT; CapMetro; Metro Transit; HSL; OVapi; Entur; TransLink Queensland",
     refreshIntervalMs: 15_000,
@@ -264,18 +302,19 @@ const FEED_DESCRIPTORS = {
   },
   streetTraffic: {
     group: "movement",
-    label: ["panel.godsEyeView.streetTraffic", "Simulated Street Traffic"],
+    label: ["panel.godsEyeView.streetTraffic", "Simulated street traffic"],
     attribution:
       "Simulated vehicle positions on © OpenStreetMap contributors, ODbL 1.0; live flow: © TomTom",
     // Road geometry changes slowly, but live flow is worth re-reading. The roads
     // are cached per viewport, so the faster cadence only re-reads TomTom.
-    refreshIntervalMs: () => (resolveGodsEyeViewKey("tomtom") ? 5 * 60_000 : 2 * 60 * 60_000),
+    refreshIntervalMs: () =>
+      resolveGodsEyeViewKey(credentials, "tomtom") ? 5 * 60_000 : 2 * 60 * 60_000,
     timeoutMs: OVERPASS_REQUEST_TIMEOUT_MS,
     flag: GODS_EYE_VIEW_STREET_TRAFFIC_FLAG,
     defaultEnabled: false,
     usesKeys: ["tomtom"],
     status(enabled) {
-      if (!enabled || !resolveGodsEyeViewKey("tomtom")) return null;
+      if (!enabled || !resolveGodsEyeViewKey(credentials, "tomtom")) return null;
       if (trafficFlowStatus === "keyRejected") {
         return [
           "panel.godsEyeView.trafficFlowKeyRejected",
@@ -296,7 +335,7 @@ const FEED_DESCRIPTORS = {
       viewportQueryBounds(bounds, TRAFFIC_MAX_VIEW_SPAN_DEGREES, TRAFFIC_QUERY_SNAP_DEGREES) !==
       null,
     fetch: ({ bounds, signal, window }) => {
-      const tomtomKey = resolveGodsEyeViewKey("tomtom")?.key;
+      const tomtomKey = resolveGodsEyeViewKey(credentials, "tomtom")?.key;
       if (!tomtomKey) trafficFlowStatus = null;
       return fetchStreetTrafficCzml(bounds, window, {
         signal,
@@ -309,7 +348,7 @@ const FEED_DESCRIPTORS = {
   },
   osmInfrastructure: {
     group: "infrastructure",
-    label: ["panel.godsEyeView.osmInfrastructure", "OSM Infrastructure"],
+    label: ["panel.godsEyeView.osmInfrastructure", "OSM infrastructure"],
     attribution: "OSM infrastructure: © OpenStreetMap contributors, ODbL 1.0",
     refreshIntervalMs: 60 * 60_000,
     // Overpass gets the same longer budget as the shared OSM downloader.
@@ -330,7 +369,7 @@ const FEED_DESCRIPTORS = {
   },
   cables: {
     group: "infrastructure",
-    label: ["panel.godsEyeView.cables", "Submarine Cables"],
+    label: ["panel.godsEyeView.cables", "Submarine cables"],
     attribution: "Submarine cables: © TeleGeography, submarinecablemap.com, CC BY-NC-SA 3.0",
     refreshIntervalMs: 24 * 60 * 60_000,
     timeoutMs: 60_000,
@@ -364,7 +403,7 @@ const FEED_DESCRIPTORS = {
   },
   spaceMissions: {
     group: "events",
-    label: ["panel.godsEyeView.spaceMissions", "Space Missions (30d)"],
+    label: ["panel.godsEyeView.spaceMissions", "Space missions (30d)"],
     attribution: "Space missions: Launch Library 2, The Space Devs",
     refreshIntervalMs: 15 * 60_000,
     timeoutMs: 30_000,
@@ -374,7 +413,7 @@ const FEED_DESCRIPTORS = {
   },
   activeFires: {
     group: "events",
-    label: ["panel.godsEyeView.activeFires", "Active Fires (24h)"],
+    label: ["panel.godsEyeView.activeFires", "Active fires (24h)"],
     attribution: "Active fires: NASA FIRMS, VIIRS NRT (NOAA-20, NOAA-21, Suomi NPP)",
     // The relay caches for 30 minutes; polling faster would only re-read it.
     refreshIntervalMs: 30 * 60_000,
@@ -386,7 +425,7 @@ const FEED_DESCRIPTORS = {
   },
   mappedAlpr: {
     group: "cameras",
-    label: ["panel.godsEyeView.mappedAlpr", "Mapped ALPR Cameras"],
+    label: ["panel.godsEyeView.mappedAlpr", "Mapped ALPR cameras"],
     attribution: "Mapped ALPR cameras: © OpenStreetMap contributors, ODbL 1.0",
     refreshIntervalMs: 60 * 60_000,
     timeoutMs: OVERPASS_REQUEST_TIMEOUT_MS,
@@ -400,29 +439,66 @@ const FEED_DESCRIPTORS = {
   },
   cctv: {
     group: "cameras",
-    label: ["panel.godsEyeView.cctv", "Public CCTV Cameras"],
+    label: ["panel.godsEyeView.cctv", "Public CCTV cameras"],
     attribution:
       "Public camera imagery: TfL Open Data; City of Austin; City of Calgary; Fintraffic; Ontario 511; DriveBC; Live Traffic NSW; Caltrans",
     refreshIntervalMs: 60_000,
     timeoutMs: 30_000,
     flag: GODS_EYE_VIEW_CCTV_FLAG,
     defaultEnabled: false,
+    options: [
+      {
+        id: "previews",
+        label: ["panel.godsEyeView.options.cctvPreviews", "Snapshots on map"],
+        choices: [
+          {
+            value: "auto" satisfies CctvPreviewMode,
+            label: ["panel.godsEyeView.options.cctvPreviewsAuto", "When zoomed in"],
+          },
+          {
+            value: "always" satisfies CctvPreviewMode,
+            label: ["panel.godsEyeView.options.cctvPreviewsAlways", "Always"],
+          },
+          {
+            value: "off" satisfies CctvPreviewMode,
+            label: ["panel.godsEyeView.options.cctvPreviewsOff", "Off (markers only)"],
+          },
+        ],
+        defaultValue: "auto",
+      },
+    ],
     viewportKey: (bounds, zoom) =>
-      `${viewportBoundsKey(bounds, CCTV_MAX_VIEW_SPAN_DEGREES, CCTV_QUERY_SNAP_DEGREES)}|preview:${cctvPreviewsVisibleAtZoom(zoom)}`,
+      `${viewportBoundsKey(
+        bounds,
+        CCTV_MAX_VIEW_SPAN_DEGREES,
+        CCTV_QUERY_SNAP_DEGREES,
+      )}|preview:${cctvShowPreviews(cctvPreviewMode(), zoom)}`,
     hasQueryableViewport: (bounds) =>
       viewportQueryBounds(bounds, CCTV_MAX_VIEW_SPAN_DEGREES, CCTV_QUERY_SNAP_DEGREES) !== null,
-    fetch: ({ bounds, signal, zoom }) =>
-      fetchCctvCzml(bounds, { signal, showPreviews: cctvPreviewsVisibleAtZoom(zoom) }),
+    fetch: ({ bounds, signal, zoom, options }) =>
+      fetchCctvCzml(bounds, {
+        signal,
+        showPreviews: cctvShowPreviews(options.previews as CctvPreviewMode, zoom),
+      }),
   },
   radio: {
     group: "utilities",
-    label: ["panel.godsEyeView.radio", "Radio Stations"],
+    label: ["panel.godsEyeView.radio", "Radio stations"],
     attribution: "Radio stations: Radio Browser (radio-browser.info), public domain",
     refreshIntervalMs: 60 * 60_000,
     timeoutMs: 20_000,
     flag: GODS_EYE_VIEW_RADIO_FLAG,
     defaultEnabled: false,
-    fetch: ({ signal }) => fetchRadioBrowserCzml({ signal }),
+    options: [
+      {
+        id: "category",
+        label: ["panel.godsEyeView.options.radioCategory", "Category"],
+        choices: RADIO_CATEGORIES.map((value) => ({ value, label: RADIO_CATEGORY_LABELS[value] })),
+        defaultValue: "all" satisfies RadioCategory,
+      },
+    ],
+    fetch: ({ signal, options }) =>
+      fetchRadioBrowserCzml({ signal, category: options.category as RadioCategory }),
   },
 } as const satisfies Record<string, FeedDescriptor>;
 
@@ -440,12 +516,18 @@ const FEED_IDS = Object.keys(FEED_DESCRIPTORS) as FeedId[];
 const SPEED_OPTIONS = [1, 10, 60, 600] as const;
 const DEFAULT_SPEED = 1;
 
-/** What a project persists: the feed toggles and the clock speed. */
+/** What a project persists: the feed toggles, their options and the clock speed. */
 type GodsEyeViewProjectState = Record<FeedId, boolean> & {
   /** Add the current Starlink shell as lightweight points. */
   dense: boolean;
   /** One of {@link SPEED_OPTIONS}. */
   speed: number;
+  /**
+   * Each feed's option choices that differ from the default. Defaults are left
+   * out, so a project saved before options existed and one that never changed
+   * them persist the same blob.
+   */
+  options?: Partial<Record<FeedId, Record<string, string>>>;
 };
 
 interface FeedState {
@@ -459,6 +541,8 @@ interface FeedState {
   generation: number;
   lastViewportKey: string | null;
   requestedViewportKey: string | null;
+  /** The options the layer's current rows were fetched with. */
+  lastOptionsKey: string | null;
 }
 
 const feeds = Object.fromEntries(
@@ -475,6 +559,7 @@ const feeds = Object.fromEntries(
       generation: 0,
       lastViewportKey: null,
       requestedViewportKey: null,
+      lastOptionsKey: null,
     },
   ]),
 ) as Record<FeedId, FeedState>;
@@ -491,6 +576,7 @@ let savedState: GodsEyeViewProjectState = {
 } as GodsEyeViewProjectState;
 
 let appRef: GeoLibreAppAPI | null = null;
+let credentials: GeoLibrePluginCredentials | undefined;
 let cesiumRef: CesiumSceneHandle | null = null;
 let unregisterPanel: (() => void) | null = null;
 let unsubscribeLocale: (() => void) | null = null;
@@ -522,6 +608,25 @@ function translate(
 
 function feedFlag(feed: FeedId): string {
   return FEED_DESCRIPTORS[feed].flag;
+}
+
+function feedOptionDescriptors(feed: FeedId): readonly FeedOptionDescriptor[] {
+  return (FEED_DESCRIPTORS[feed] as FeedDescriptor).options ?? [];
+}
+
+/** Every declared option of a feed, resolved to the saved choice or its default. */
+function feedOptions(feed: FeedId): Record<string, string> {
+  const saved = savedState.options?.[feed];
+  return Object.fromEntries(
+    feedOptionDescriptors(feed).map((option) => [
+      option.id,
+      saved?.[option.id] ?? option.defaultValue,
+    ]),
+  );
+}
+
+function cctvPreviewMode(): CctvPreviewMode {
+  return feedOptions("cctv").previews as CctvPreviewMode;
 }
 
 function feedName(feed: FeedId): string {
@@ -735,7 +840,7 @@ async function refreshFeed(feed: FeedId, force = true): Promise<void> {
   const descriptor: FeedDescriptor = FEED_DESCRIPTORS[feed];
   // Without its key the layer has nothing to show, and a request would only be
   // refused. A key cleared while the layer was on takes the layer down with it.
-  if (descriptor.requiresKey && !resolveGodsEyeViewKey(descriptor.requiresKey)) {
+  if (descriptor.requiresKey && !resolveGodsEyeViewKey(credentials, descriptor.requiresKey)) {
     if (state.layerId || ownedLayer(feed)) removeFeedLayer(feed);
     else descriptor.dispose?.();
     state.failed = false;
@@ -745,10 +850,14 @@ async function refreshFeed(feed: FeedId, force = true): Promise<void> {
   const bounds = appRef?.getViewBounds?.() ?? null;
   const zoom = cesiumRef?.readView().zoom ?? null;
   const viewportKey = descriptor.viewportKey?.(bounds, zoom) ?? null;
+  const options = feedOptions(feed);
+  const optionsKey = JSON.stringify(options);
   if (
     !force &&
     state.lastUpdated &&
     Date.now() - state.lastUpdated.getTime() < refreshInterval(descriptor) &&
+    // A project load can carry other options than the rows on the map show.
+    state.lastOptionsKey === optionsKey &&
     // Recent data the user can no longer see is no reason to skip: a feed
     // toggled off and on has had its layer removed and must rebuild it, and a
     // project load brings the layer back without the rows, which are stripped
@@ -773,6 +882,7 @@ async function refreshFeed(feed: FeedId, force = true): Promise<void> {
       window,
       bounds,
       zoom,
+      options,
     });
     if (generation !== state.generation || !state.enabled) return;
     const updatedAt = new Date();
@@ -781,6 +891,7 @@ async function refreshFeed(feed: FeedId, force = true): Promise<void> {
     state.lastUpdated = updatedAt;
     state.retryAfter = 0;
     state.lastViewportKey = viewportKey;
+    state.lastOptionsKey = optionsKey;
     if (feed === "satellites") syncDenseCatalog();
   } catch (error) {
     // No `signal.aborted` check: the timeout watchdog aborts this very request,
@@ -816,6 +927,7 @@ function removeFeedLayer(feed: FeedId): void {
   state.request = null;
   state.requestedViewportKey = null;
   state.lastViewportKey = null;
+  state.lastOptionsKey = null;
   state.loading = false;
   state.retryAfter = 0;
   const layer = state.layerId
@@ -872,6 +984,23 @@ function bindViewportRefresh(): void {
   removeViewportListener = moveEnd.addEventListener(onMoveEnd);
 }
 
+function setFeedOption(feed: FeedId, option: FeedOptionDescriptor, value: string): void {
+  if (!option.choices.some((choice) => choice.value === value)) return;
+  const { [option.id]: _previous, ...others } = savedState.options?.[feed] ?? {};
+  const choices = value === option.defaultValue ? others : { ...others, [option.id]: value };
+  const { [feed]: _feed, ...otherFeeds } = savedState.options ?? {};
+  savedState = {
+    ...savedState,
+    options: Object.keys(choices).length ? { ...otherFeeds, [feed]: choices } : otherFeeds,
+  };
+  if (feeds[feed].enabled) {
+    feeds[feed].failed = false;
+    feeds[feed].retryAfter = 0;
+    void refreshFeed(feed);
+  }
+  renderPanel();
+}
+
 function setDenseEnabled(enabled: boolean): void {
   savedState = { ...savedState, dense: enabled };
   if (enabled) {
@@ -906,11 +1035,35 @@ function normalizeProjectState(value: unknown): GodsEyeViewProjectState {
       typeof record[feed] === "boolean" ? record[feed] : FEED_DESCRIPTORS[feed].defaultEnabled,
     ]),
   ) as Record<FeedId, boolean>;
+  const savedOptions =
+    record.options && typeof record.options === "object"
+      ? (record.options as Record<string, unknown>)
+      : {};
+  const options: Partial<Record<FeedId, Record<string, string>>> = {};
+  for (const feed of FEED_IDS) {
+    const saved = savedOptions[feed];
+    if (!saved || typeof saved !== "object") continue;
+    const choices: Record<string, string> = {};
+    for (const option of feedOptionDescriptors(feed)) {
+      const value = (saved as Record<string, unknown>)[option.id];
+      // Only an offered, non-default choice survives: a hand-edited project can
+      // carry anything, and the default is what an absent value already means.
+      if (
+        typeof value === "string" &&
+        value !== option.defaultValue &&
+        option.choices.some((choice) => choice.value === value)
+      ) {
+        choices[option.id] = value;
+      }
+    }
+    if (Object.keys(choices).length) options[feed] = choices;
+  }
   return {
     ...toggles,
     dense: typeof record.dense === "boolean" ? record.dense : false,
     // A hand-edited project can carry anything; only an offered step is honoured.
     speed: SPEED_OPTIONS.find((option) => option === record.speed) ?? DEFAULT_SPEED,
+    ...(Object.keys(options).length ? { options } : {}),
   };
 }
 
@@ -974,6 +1127,33 @@ function speedRow(): HTMLElement {
   return row;
 }
 
+/** One per-feed option as a labelled select under the feed's row. */
+function optionRow(feed: FeedId, option: FeedOptionDescriptor): HTMLElement {
+  const row = document.createElement("div");
+  row.dataset.feedOption = option.id;
+  row.style.cssText =
+    "display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px";
+  const id = `gods-eye-view-option-${feed}-${option.id}`;
+  const label = document.createElement("label");
+  label.htmlFor = id;
+  label.textContent = translate(...option.label);
+  label.style.cssText = "font-size:11px;color:hsl(var(--muted-foreground))";
+  const select = document.createElement("select");
+  select.id = id;
+  select.disabled = !cesiumRef;
+  const current = feedOptions(feed)[option.id];
+  for (const choice of option.choices) {
+    const item = document.createElement("option");
+    item.value = choice.value;
+    item.textContent = translate(...choice.label);
+    item.selected = choice.value === current;
+    select.append(item);
+  }
+  select.addEventListener("change", () => setFeedOption(feed, option, select.value));
+  row.append(label, select);
+  return row;
+}
+
 /**
  * The panel's long-lived frame. Feed rows are rebuilt on every status change,
  * which is often, so the API-key inputs live outside them: rebuilding an input
@@ -990,17 +1170,17 @@ const KEY_PROVIDER_DETAILS: Record<
   { label: readonly [key: string, fallback: string]; signupUrl: string }
 > = {
   tomtom: {
-    label: ["panel.godsEyeView.apiKeys.tomtom", "TomTom (Street Traffic live flow)"],
+    label: ["panel.godsEyeView.apiKeys.tomtom", "TomTom (street traffic live flow)"],
     signupUrl: "https://developer.tomtom.com/",
   },
   aisstream: {
-    label: ["panel.godsEyeView.apiKeys.aisstream", "AISStream (Live AIS Vessels)"],
+    label: ["panel.godsEyeView.apiKeys.aisstream", "AISStream (live AIS vessels)"],
     signupUrl: "https://aisstream.io/",
   },
 };
 
 /** Apply a saved or cleared key to every feed whose output depends on it. */
-function onKeyChanged(provider: GodsEyeViewKeyProvider): void {
+function onKeyChanged(provider: GodsEyeViewKeyProvider, notice?: string): void {
   if (provider === "tomtom") trafficFlowStatus = null;
   for (const feed of FEED_IDS) {
     const descriptor: FeedDescriptor = FEED_DESCRIPTORS[feed];
@@ -1016,14 +1196,16 @@ function onKeyChanged(provider: GodsEyeViewKeyProvider): void {
   // text in the other key field.
   panelFrame?.keys
     .querySelector(`[data-key-provider="${provider}"]`)
-    ?.replaceWith(keyRow(provider));
+    ?.replaceWith(keyRow(provider, notice));
   renderPanel();
 }
 
 function keyStatusText(provider: GodsEyeViewKeyProvider): string {
-  const resolved = resolveGodsEyeViewKey(provider);
+  const resolved = resolveGodsEyeViewKey(credentials, provider);
   if (resolved?.source === "panel") {
-    return translate("panel.godsEyeView.apiKeys.fromPanel", "Saved in this browser");
+    return credentials?.location() === "keychain"
+      ? translate("panel.godsEyeView.apiKeys.fromPanelKeychain", "Saved in your system keychain")
+      : translate("panel.godsEyeView.apiKeys.fromPanel", "Saved in this browser");
   }
   if (resolved?.source === "environment") {
     return translate(
@@ -1034,7 +1216,7 @@ function keyStatusText(provider: GodsEyeViewKeyProvider): string {
   return translate("panel.godsEyeView.apiKeys.notSet", "Not set");
 }
 
-function keyRow(provider: GodsEyeViewKeyProvider): HTMLElement {
+function keyRow(provider: GodsEyeViewKeyProvider, notice?: string): HTMLElement {
   const details = KEY_PROVIDER_DETAILS[provider];
   const row = document.createElement("div");
   row.dataset.keyProvider = provider;
@@ -1052,7 +1234,7 @@ function keyRow(provider: GodsEyeViewKeyProvider): HTMLElement {
   input.autocomplete = "off";
   input.spellcheck = false;
   input.placeholder = translate("panel.godsEyeView.apiKeys.placeholder", "Paste API key");
-  input.value = readStoredGodsEyeViewKey(provider);
+  input.value = readStoredGodsEyeViewKey(credentials, provider);
   input.style.cssText =
     "flex:1;min-width:0;padding:4px 6px;border:1px solid hsl(var(--border));border-radius:4px;background:hsl(var(--background));color:hsl(var(--foreground));font-size:12px";
   const buttonStyle =
@@ -1065,11 +1247,11 @@ function keyRow(provider: GodsEyeViewKeyProvider): HTMLElement {
   clear.type = "button";
   clear.textContent = translate("panel.godsEyeView.apiKeys.clear", "Clear");
   clear.style.cssText = buttonStyle;
-  clear.disabled = !readStoredGodsEyeViewKey(provider);
+  clear.disabled = !readStoredGodsEyeViewKey(credentials, provider);
   const status = document.createElement("div");
   status.className = "geolibre-gods-eye-view-key-status";
   status.style.cssText = "font-size:11px;color:hsl(var(--muted-foreground))";
-  status.textContent = keyStatusText(provider);
+  status.textContent = notice ?? keyStatusText(provider);
   const signup = document.createElement("a");
   signup.href = details.signupUrl;
   signup.target = "_blank";
@@ -1077,14 +1259,21 @@ function keyRow(provider: GodsEyeViewKeyProvider): HTMLElement {
   signup.textContent = translate("panel.godsEyeView.apiKeys.getKey", "Get a free key");
   signup.style.cssText = "font-size:11px;color:hsl(var(--primary))";
   const store = (value: string) => {
-    if (!writeStoredGodsEyeViewKey(provider, value)) {
-      status.textContent = translate(
-        "panel.godsEyeView.apiKeys.saveFailed",
-        "Could not save the key in this browser.",
-      );
-      return;
-    }
-    onKeyChanged(provider);
+    const persisted = writeStoredGodsEyeViewKey(credentials, provider, value);
+    onKeyChanged(
+      provider,
+      persisted
+        ? undefined
+        : credentials?.location() === "keychain"
+          ? translate(
+              "panel.godsEyeView.apiKeys.saveFailedKeychain",
+              "Could not save the key in your system keychain. It works until GeoLibre closes.",
+            )
+          : translate(
+              "panel.godsEyeView.apiKeys.saveFailed",
+              "Could not save the key in this browser.",
+            ),
+    );
   };
   save.addEventListener("click", () => store(input.value));
   input.addEventListener("keydown", (event) => {
@@ -1110,12 +1299,18 @@ function renderKeysSection(): void {
   const body = document.createElement("div");
   body.style.cssText = "display:flex;flex-direction:column;gap:10px;margin-top:8px";
   const note = document.createElement("p");
-  note.textContent = translate(
-    "panel.godsEyeView.apiKeys.description",
-    "Keys are kept in this browser only and are never saved with the project.",
-  );
+  note.textContent =
+    credentials?.location() === "keychain"
+      ? translate(
+          "panel.godsEyeView.apiKeys.descriptionKeychain",
+          "Keys are kept in your system keychain and are never saved with the project.",
+        )
+      : translate(
+          "panel.godsEyeView.apiKeys.description",
+          "Keys are kept in this browser only and are never saved with the project.",
+        );
   note.style.cssText = "margin:0;color:hsl(var(--muted-foreground))";
-  body.append(note, ...GODS_EYE_VIEW_KEY_PROVIDERS.map(keyRow));
+  body.append(note, ...GODS_EYE_VIEW_KEY_PROVIDERS.map((provider) => keyRow(provider)));
   section.append(summary, body);
   host.replaceChildren(section);
 }
@@ -1196,6 +1391,7 @@ function renderPanel(): void {
       status.textContent = statusText(feed);
       status.style.cssText = "font-size:11px;color:hsl(var(--muted-foreground))";
       row.append(label, status);
+      for (const option of feedOptionDescriptors(feed)) row.append(optionRow(feed, option));
       if (feed === "satellites") {
         const dense = denseCatalog.snapshot();
         const button = document.createElement("button");
@@ -1263,6 +1459,9 @@ function resetRuntime(): void {
 
 function activate(app: GeoLibreAppAPI): void {
   appRef = app;
+  // The scoped app only: `appRef` can be swapped for the host's unscoped app
+  // by `reattachGodsEyeView`, whose `credentials` refuses plugin calls.
+  credentials = app.credentials;
   const globe = app.getCesiumScene?.() ?? null;
   cesiumRef = globe?.primary ? globe : null;
   for (const feed of FEED_IDS) {
@@ -1288,7 +1487,7 @@ function activate(app: GeoLibreAppAPI): void {
   unregisterPanel =
     app.registerRightPanel?.({
       id: GODS_EYE_VIEW_PLUGIN_ID,
-      title: () => translate("toolbar.plugin.gods-eye-view", "God's Eye View"),
+      title: () => translate("toolbar.plugin.gods-eye-view", "God's eye view"),
       dock: "replace-style",
       defaultWidth: 320,
       render(container) {
@@ -1395,6 +1594,7 @@ function deactivate(): void {
   clearStreetTrafficRoadCache();
   cesiumRef = null;
   appRef = null;
+  credentials = undefined;
 }
 
 export const godsEyeViewPlugin: GeoLibrePlugin = {
@@ -1413,7 +1613,12 @@ export const godsEyeViewPlugin: GeoLibrePlugin = {
   deactivate,
   // The host drops plugin settings that are not strictly JSON-compatible, so
   // round-trip the record the way the Time Slider does before persisting it.
-  getProjectState: () => JSON.parse(JSON.stringify(savedState)) as GodsEyeViewProjectState,
+  getProjectState: () => {
+    const { options, ...state } = savedState;
+    return JSON.parse(
+      JSON.stringify(options && Object.keys(options).length ? { ...state, options } : state),
+    ) as GodsEyeViewProjectState;
+  },
   applyProjectState: (_app: GeoLibreAppAPI, state: unknown) => {
     savedState = normalizeProjectState(state);
     for (const feed of FEED_IDS) {

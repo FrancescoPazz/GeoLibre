@@ -1,25 +1,41 @@
 import type { Model } from "@strands-agents/sdk";
+import { getDeploymentPolicy, readDeploymentEnv } from "../deployment-env";
+import { isChatGptReady } from "./chatgpt";
 
 /**
  * Supported LLM providers for the natural-language assistant. The boundary is
  * kept deliberately small and provider-pluggable: each provider maps to a
  * Strands model class that is dynamically imported so only the selected
- * provider's SDK is pulled into the bundle. `ollama` and `custom` reuse the
- * OpenAI-compatible client against a configurable base URL.
+ * provider's SDK is pulled into the bundle. `openrouter`, `vercel`,
+ * `trustedrouter`, `ollama`, and `custom` reuse the OpenAI-compatible client
+ * against a base URL. `chatgpt` uses the Responses API through the desktop
+ * app's Sign in with ChatGPT (`chatgpt.ts`) instead of a key.
  */
 export type AssistantProviderId =
   | "google"
   | "anthropic"
   | "openai"
+  | "chatgpt"
+  | "openrouter"
+  | "vercel"
+  | "trustedrouter"
   | "ollama"
   | "bedrock"
   | "custom";
 
-/** All provider ids, in auto-selection preference order. */
+/**
+ * All provider ids, in auto-selection preference order. `chatgpt` is listed
+ * for the settings but never auto-selected: a ChatGPT plan is used only when
+ * a profile (or `GEOLIBRE_ASSISTANT_PROVIDER`) chooses it.
+ */
 export const ASSISTANT_PROVIDER_IDS: readonly AssistantProviderId[] = [
   "google",
   "anthropic",
   "openai",
+  "chatgpt",
+  "openrouter",
+  "vercel",
+  "trustedrouter",
   "ollama",
   "bedrock",
   "custom",
@@ -35,7 +51,8 @@ export interface BedrockCredentials {
 /**
  * A named, saved profile that bundles a provider, model, and credential values
  * together so users can define multiple LLM configurations and switch between
- * them. Profiles are stored in DesktopSettings (localStorage), never in the
+ * them. Profiles are stored in DesktopSettings (secret fields in the OS
+ * credential store on desktop, localStorage on the web), never in the
  * shared project file.
  */
 export interface AssistantProfile {
@@ -50,7 +67,7 @@ export interface AssistantProfile {
   /**
    * Credential values keyed by env-var name, matching {@link PROVIDER_FIELDS}.
    * E.g. for google: `{ GEMINI_API_KEY: "AIza..." }`
-   *      for ollama: `{ OLLAMA_BASE_URL: "http://localhost:11434", OLLAMA_MODEL: "llama3.2" }`
+   *      for ollama: `{ OLLAMA_BASE_URL: "http://localhost:11434" }`
    */
   fieldValues: Record<string, string>;
 }
@@ -80,6 +97,9 @@ const PROVIDER_KEY_NAMES: Partial<Record<AssistantProviderId, readonly string[]>
   google: ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI_API_KEY"],
   anthropic: ["ANTHROPIC_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  vercel: ["AI_GATEWAY_API_KEY"],
+  trustedrouter: ["TRUSTEDROUTER_API_KEY"],
 };
 
 /**
@@ -113,6 +133,16 @@ export const OS_ENV_VAR_NAMES: readonly string[] = [
   "ANTHROPIC_API_KEY",
   // OpenAI.
   "OPENAI_API_KEY",
+  // OpenRouter.
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_MODEL",
+  // Vercel AI Gateway. `VERCEL_OIDC_TOKEN` is intentionally omitted — it is an
+  // ambient Vercel deployment credential, not a key the user set for GeoLibre.
+  "AI_GATEWAY_API_KEY",
+  "AI_GATEWAY_MODEL",
+  // TrustedRouter.
+  "TRUSTEDROUTER_API_KEY",
+  "TRUSTEDROUTER_MODEL",
   // Ollama (local). `OLLAMA_HOST` is intentionally omitted — it is the ambient
   // Ollama variable; `OLLAMA_BASE_URL` is GeoLibre's own documented setting.
   "OLLAMA_BASE_URL",
@@ -218,9 +248,12 @@ export function mergeRuntimeEnv({
 /**
  * Selectable models per provider, recommended/newest first. The first entry is
  * the provider default. Users can pin any other id via `GEOLIBRE_ASSISTANT_MODEL`
- * (or the per-provider env var) or the model picker. The hosted-model ids were
- * verified against the providers' docs as of 2026-07; the `ollama`/`bedrock`
- * lists are common examples (use your own via the env vars). `custom` has no
+ * (or the per-provider env var) or the model picker. For Google, Anthropic,
+ * OpenAI, OpenRouter, Vercel AI Gateway, TrustedRouter, and Bedrock the picker replaces these with the provider's
+ * live catalog once it loads (see `model-discovery.ts`), so the lists here are
+ * only the default and the offline fallback. The hosted-model ids were
+ * verified against the providers' docs as of 2026-07; the `ollama` list is
+ * common examples (Ollama discovers the installed models separately). `custom` has no
  * preset — supply the model with `OPENAI_COMPATIBLE_MODEL`.
  */
 export const PROVIDER_MODELS: Record<AssistantProviderId, readonly string[]> = {
@@ -232,6 +265,12 @@ export const PROVIDER_MODELS: Record<AssistantProviderId, readonly string[]> = {
   ],
   anthropic: ["claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5"],
   openai: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
+  // OpenAI's example model; the signed-in plan's catalog replaces it once it
+  // loads and says which models the account may use.
+  chatgpt: ["gpt-6.1-sol"],
+  openrouter: ["openai/gpt-5.6-luna"],
+  vercel: ["openai/gpt-5.6-luna"],
+  trustedrouter: ["trustedrouter/auto"],
   ollama: ["gemma4", "qwen3.6", "qwen3.5", "llama4", "gpt-oss"],
   bedrock: [
     "global.anthropic.claude-opus-5",
@@ -249,6 +288,10 @@ const DEFAULT_MODEL: Record<AssistantProviderId, string> = {
   google: PROVIDER_MODELS.google[0],
   anthropic: PROVIDER_MODELS.anthropic[0],
   openai: PROVIDER_MODELS.openai[0],
+  chatgpt: PROVIDER_MODELS.chatgpt[0],
+  openrouter: PROVIDER_MODELS.openrouter[0],
+  vercel: PROVIDER_MODELS.vercel[0],
+  trustedrouter: PROVIDER_MODELS.trustedrouter[0],
   ollama: PROVIDER_MODELS.ollama[0],
   bedrock: PROVIDER_MODELS.bedrock[0],
   custom: "",
@@ -259,6 +302,10 @@ export const PROVIDER_LABELS: Record<AssistantProviderId, string> = {
   google: "Google Gemini",
   anthropic: "Anthropic",
   openai: "OpenAI",
+  chatgpt: "ChatGPT (sign in)",
+  openrouter: "OpenRouter",
+  vercel: "Vercel AI Gateway",
+  trustedrouter: "TrustedRouter",
   ollama: "Ollama (local)",
   bedrock: "Amazon Bedrock",
   custom: "Custom (OpenAI-compatible)",
@@ -314,10 +361,17 @@ export function readBuildTimeAssistantEnv(
   if (fastPathUrl) {
     result.GEOLIBRE_FAST_PATH_URL = managedProxyPath(fastPathUrl, baseOrigin);
   }
-  const proxyUrl = viteEnv.VITE_GEOLIBRE_AI_URL?.trim().replace(/\/+$/, "");
+  // deployment.json `ai`: `enabled: false` removes the managed proxy whichever
+  // env supplied it; `model` outranks the env's model.
+  const aiPolicy = getDeploymentPolicy()?.ai;
+  const proxyUrl =
+    aiPolicy?.enabled === false
+      ? undefined
+      : viteEnv.VITE_GEOLIBRE_AI_URL?.trim().replace(/\/+$/, "");
   if (proxyUrl) {
     result.OPENAI_COMPATIBLE_BASE_URL = managedProxyBaseUrl(proxyUrl, baseOrigin);
     result.OPENAI_COMPATIBLE_MODEL =
+      aiPolicy?.model?.trim() ||
       viteEnv.VITE_GEOLIBRE_AI_MODEL?.trim() ||
       result.OPENAI_COMPATIBLE_MODEL ||
       "openai/gpt-5.6-luna";
@@ -328,11 +382,7 @@ export function readBuildTimeAssistantEnv(
 /** Public proxy configuration injected by the Docker entrypoint at container startup. */
 export function readDeploymentAssistantEnv(): RuntimeEnv {
   if (typeof window === "undefined") return {};
-  const deploymentEnv = (
-    window as unknown as {
-      __GEOLIBRE_DEPLOYMENT_ENV__?: Record<string, string | undefined>;
-    }
-  ).__GEOLIBRE_DEPLOYMENT_ENV__;
+  const deploymentEnv = readDeploymentEnv();
   const result = readBuildTimeAssistantEnv(deploymentEnv, browserOrigin());
   if (result.OPENAI_COMPATIBLE_BASE_URL) {
     result.GEOLIBRE_AI_PROXY_BASE_URL = result.OPENAI_COMPATIBLE_BASE_URL;
@@ -341,17 +391,19 @@ export function readDeploymentAssistantEnv(): RuntimeEnv {
   return result;
 }
 
-/**
- * True when the build or the Docker entrypoint supplied a managed AI proxy.
- *
- * Deliberately ignores `__GEOLIBRE_RUNTIME_ENV__`: an endpoint the user typed
- * into Settings is their own custom provider, not an operator-managed proxy.
- */
-export function hasManagedAssistantProxy(viteEnv?: Record<string, string | undefined>): boolean {
-  return Boolean(
-    readBuildTimeAssistantEnv(viteEnv, browserOrigin()).OPENAI_COMPATIBLE_BASE_URL ||
-    readDeploymentAssistantEnv().OPENAI_COMPATIBLE_BASE_URL,
+/** Resolve the operator-managed proxy, ignoring project-level endpoint overrides. */
+export function managedAssistantProxyBaseUrl(
+  viteEnv?: Record<string, string | undefined>,
+): string | undefined {
+  return (
+    readDeploymentAssistantEnv().OPENAI_COMPATIBLE_BASE_URL ??
+    readBuildTimeAssistantEnv(viteEnv, browserOrigin()).OPENAI_COMPATIBLE_BASE_URL
   );
+}
+
+/** Whether a managed build or the Docker entrypoint supplied an AI proxy. */
+export function hasManagedAssistantProxy(viteEnv?: Record<string, string | undefined>): boolean {
+  return Boolean(managedAssistantProxyBaseUrl(viteEnv));
 }
 
 /** Read build-time credentials plus the live runtime environment map. */
@@ -394,9 +446,49 @@ export function getApiKey(
   return names ? firstValue(env, ...names) : null;
 }
 
-/** The default model id for a provider. */
-export function defaultModelFor(provider: AssistantProviderId): string {
-  return DEFAULT_MODEL[provider];
+/**
+ * The default model id for a provider.
+ *
+ * OpenRouter, Vercel AI Gateway, TrustedRouter and Ollama honor their optional
+ * model overrides here so a new profile picks that id up. Other providers apply their
+ * overrides only when a request is resolved, not when the settings form
+ * proposes a default.
+ */
+export function defaultModelFor(
+  provider: AssistantProviderId,
+  env: RuntimeEnv = readRuntimeEnv(),
+): string {
+  const override =
+    provider === "openrouter"
+      ? env.OPENROUTER_MODEL
+      : provider === "vercel"
+        ? env.AI_GATEWAY_MODEL
+        : provider === "trustedrouter"
+          ? env.TRUSTEDROUTER_MODEL
+          : provider === "ollama"
+            ? env.OLLAMA_MODEL
+            : undefined;
+  return override?.trim() || DEFAULT_MODEL[provider];
+}
+
+/** The optional model override a provider reads from the environment, if any. */
+function perProviderModel(provider: AssistantProviderId, env: RuntimeEnv): string | undefined {
+  switch (provider) {
+    case "ollama":
+      return env.OLLAMA_MODEL;
+    case "bedrock":
+      return env.BEDROCK_MODEL;
+    case "custom":
+      return env.OPENAI_COMPATIBLE_MODEL;
+    case "openrouter":
+      return env.OPENROUTER_MODEL;
+    case "vercel":
+      return env.AI_GATEWAY_MODEL;
+    case "trustedrouter":
+      return env.TRUSTEDROUTER_MODEL;
+    default:
+      return undefined;
+  }
 }
 
 /** Resolve the model id for a provider: explicit → env → provider default. */
@@ -405,14 +497,7 @@ function resolveModelId(
   model: string | undefined,
   env: RuntimeEnv,
 ): string {
-  const perProvider =
-    provider === "ollama"
-      ? env.OLLAMA_MODEL
-      : provider === "bedrock"
-        ? env.BEDROCK_MODEL
-        : provider === "custom"
-          ? env.OPENAI_COMPATIBLE_MODEL
-          : undefined;
+  const perProvider = perProviderModel(provider, env);
   return (
     model?.trim() ||
     env.GEOLIBRE_ASSISTANT_MODEL?.trim() ||
@@ -426,12 +511,14 @@ function resolveModelId(
  * or null when that provider is not configured. Each provider type reads its own
  * Settings → Environment variables:
  *
- * - google / anthropic / openai — an API key (see {@link PROVIDER_KEY_NAMES}).
+ * - google / anthropic / openai / openrouter / vercel / trustedrouter — an API key (see {@link PROVIDER_KEY_NAMES}).
  * - ollama — `OLLAMA_BASE_URL` (or `OLLAMA_HOST`); keyless, local.
  * - bedrock — `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ `AWS_REGION`,
  *   `AWS_SESSION_TOKEN`).
  * - custom — `OPENAI_COMPATIBLE_BASE_URL` (+ optional `OPENAI_COMPATIBLE_API_KEY`)
  *   and a model via `OPENAI_COMPATIBLE_MODEL`.
+ * - chatgpt — no variable: the desktop app's Sign in with ChatGPT, signed in
+ *   with the plan's use allowed.
  */
 export function configForProvider(
   provider: AssistantProviderId,
@@ -447,6 +534,25 @@ export function configForProvider(
       const apiKey = getApiKey(provider, env);
       if (!apiKey) return null;
       return { provider, apiKey, modelId };
+    }
+    case "chatgpt":
+      return isChatGptReady() ? { provider, modelId } : null;
+    case "openrouter":
+    case "vercel":
+    case "trustedrouter": {
+      const apiKey = getApiKey(provider, env);
+      if (!apiKey) return null;
+      return {
+        provider,
+        apiKey,
+        baseURL:
+          provider === "vercel"
+            ? "https://ai-gateway.vercel.sh/v1"
+            : provider === "trustedrouter"
+              ? "https://api.trustedrouter.com/v1"
+              : "https://openrouter.ai/api/v1",
+        modelId,
+      };
     }
     case "ollama": {
       const baseURL = ollamaBaseUrl(env);
@@ -501,7 +607,7 @@ export function resolveProviderConfig(
   const order =
     requested && ASSISTANT_PROVIDER_IDS.includes(requested as AssistantProviderId)
       ? [requested as AssistantProviderId]
-      : ASSISTANT_PROVIDER_IDS;
+      : ASSISTANT_PROVIDER_IDS.filter((provider) => provider !== "chatgpt");
 
   for (const provider of order) {
     const config = configForProvider(provider, undefined, env);
@@ -510,9 +616,12 @@ export function resolveProviderConfig(
   return null;
 }
 
-/** True when at least one provider is configured. */
+/**
+ * True when at least one provider is configured, a ChatGPT sign-in included
+ * (which a profile must still choose; it is never auto-selected).
+ */
 export function hasProviderKey(env: RuntimeEnv = readRuntimeEnv()): boolean {
-  return resolveProviderConfig(env) !== null;
+  return resolveProviderConfig(env) !== null || isChatGptReady();
 }
 
 /** Providers that are currently configured, in preference order. */
@@ -622,10 +731,35 @@ export async function createModel(config: AssistantProviderConfig): Promise<Mode
         clientConfig: { dangerouslyAllowBrowser: true },
       }) as unknown as Model;
     }
+    case "chatgpt": {
+      // A ChatGPT plan speaks the Responses API, streamed and stateless
+      // (`store: false`, the SDK's default). Requests go through the desktop
+      // backend, which puts on the signed-in account's token; the key here is
+      // only a marker the SDK requires.
+      const [{ OpenAIModel }, chatgpt] = await Promise.all([
+        import("@strands-agents/sdk/models/openai"),
+        import("./chatgpt"),
+      ]);
+      return new OpenAIModel({
+        api: "responses",
+        apiKey: chatgpt.CHATGPT_KEY_PLACEHOLDER,
+        modelId: config.modelId,
+        clientConfig: {
+          baseURL: chatgpt.CHATGPT_API_BASE,
+          fetch: chatgpt.chatGptFetch,
+          defaultHeaders: openAiCompatibleHeaders(true),
+          dangerouslyAllowBrowser: true,
+        },
+      }) as unknown as Model;
+    }
+    case "openrouter":
+    case "vercel":
+    case "trustedrouter":
     case "ollama":
     case "custom": {
-      // Ollama and custom endpoints speak the OpenAI Chat Completions API; the
-      // Responses API (OpenAI's default) is not generally supported there.
+      // Ollama, OpenRouter, Vercel AI Gateway, TrustedRouter, and custom
+      // endpoints speak OpenAI Chat Completions;
+      // the Responses API (OpenAI's default) is not generally supported there.
       const { OpenAIModel } = await import("@strands-agents/sdk/models/openai");
       return new OpenAIModel({
         api: "chat",

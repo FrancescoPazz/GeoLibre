@@ -242,6 +242,8 @@ const PROJECT_MENU_ITEM_CAPABILITIES: Readonly<Record<string, DeploymentCapabili
   // Everything that gets data or a rendering back out of the deployment.
   "project.share": "export:data",
   "project.exportHtml": "export:data",
+  "project.exportLayerStyles": "export:data",
+  "project.exportLayers": "export:data",
   "project.print": "export:data",
   "project.printLayout": "export:data",
   "project.offlineRegion": "export:data",
@@ -285,4 +287,39 @@ export function editMenuItemCapability(id: string): DeploymentCapability | undef
  */
 export function projectMenuItemCapability(id: string): DeploymentCapability | undefined {
   return PROJECT_MENU_ITEM_CAPABILITIES[id];
+}
+
+/** The capability gating each data-entry toolbar menu. */
+const ENTRY_MENU_CAPABILITIES = {
+  addData: "data:add",
+  plugins: "plugins:install",
+} as const satisfies Record<string, DeploymentCapability>;
+
+/**
+ * Whether the toolbar shows the Add data or Plugins menu.
+ *
+ * One rule for every surface that renders or names these menus: the toolbar
+ * itself and the empty Layers panel hint, which must not point at a menu the
+ * toolbar hides (issue #3474).
+ *
+ * @param menu - The toolbar menu id.
+ * @param options - The gates in effect.
+ * @param options.viewer - Whether the read-only viewer layout is active.
+ * @param options.capabilities - What this deployment may do.
+ * @param options.menuVisible - Whether the interface profile shows the menu.
+ * @returns True when the menu is on the toolbar.
+ */
+export function entryMenuOffered(
+  menu: keyof typeof ENTRY_MENU_CAPABILITIES,
+  options: {
+    viewer: boolean;
+    capabilities: ReadonlySet<DeploymentCapability>;
+    menuVisible: boolean;
+  },
+): boolean {
+  return (
+    !options.viewer &&
+    options.menuVisible &&
+    options.capabilities.has(ENTRY_MENU_CAPABILITIES[menu])
+  );
 }

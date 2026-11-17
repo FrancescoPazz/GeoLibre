@@ -3,45 +3,132 @@ import {
   getAssistantToolOwnerScope,
   unregisterAssistantToolsByOwner,
 } from "./assistant-tool-registry";
+import { unregisterFileHandlersByOwner } from "./file-handler-registry";
+import { unregisterMenuContributionsByOwner } from "./menu-contribution-registry";
 import type { MapRendererKind, ProjectPluginState } from "@geolibre/core";
 import type { IControl } from "maplibre-gl";
 import type {
   GeoLibreAppAPI,
+  GeoLibreCredentialLocation,
+  GeoLibreFileHandler,
   GeoLibreMapControlPosition,
   GeoLibrePlugin,
+  GeoLibreMenuContribution,
   GeoLibreToolbarMenu,
 } from "./types";
+
+/**
+ * Drop the host-side registrations a plugin owns once it stops being active
+ * (deactivated, unregistered, or a failed activation). Assistant tools and
+ * built-in menu contributions are both keyed by owner, so a plugin that forgets
+ * to dispose of them in `deactivate` cannot leave stale entries behind.
+ */
+function releaseOwnedRegistrations(id: string): void {
+  unregisterAssistantToolsByOwner(id);
+  unregisterMenuContributionsByOwner(id);
+  unregisterFileHandlersByOwner(id);
+}
 
 export class PluginManager {
   private renderer: MapRendererKind | null = null;
   private deferredState: ProjectPluginState | null = null;
   private deferredActive = new Set<string>();
+  /** Bumped by every restoreProjectState so a superseded restore's scopes go stale. */
+  private restorePass = 0;
 
   private supportsEngine(id: string, app: GeoLibreAppAPI): boolean {
     return isPluginEngineSupported(this.plugins.get(id), app.getMapRenderer?.() ?? "maplibre");
+  }
+
+  /** Whether a session-scoped plugin stays active through a restore on this renderer. */
+  private keepsSessionActivation(id: string, app: GeoLibreAppAPI): boolean {
+    return Boolean(this.plugins.get(id)?.sessionScoped) && this.supportsEngine(id, app);
   }
 
   private scopeAppToPlugin(
     app: GeoLibreAppAPI,
     id: string,
     options: ScopeAppOptions = {},
+    restorePass?: number,
   ): GeoLibreAppAPI {
     const generation = this.activationGenerations.get(id);
+    // A later renderer handoff or re-registration invalidates the scope even
+    // before the next restore bumps the pass.
+    const plugin = this.plugins.get(id);
+    const renderer = app.getMapRenderer?.() ?? "maplibre";
     // Settings and restore callbacks may register UI synchronously before
-    // activation. Retained callbacks need a live activation after this turn.
+    // activation. Retained callbacks need a live activation after this turn,
+    // except a project restore's: an inactive plugin may still mount the
+    // panels its saved state describes once a dynamic import resolves (the
+    // Components legend, colorbar, and HTML panels), until the next restore
+    // (another project load or a renderer swap) supersedes this one.
     let synchronous = true;
     queueMicrotask(() => {
       synchronous = false;
     });
-    return scopeAppToPlugin(app, id, {
+    const scoped = scopeAppToPlugin(app, id, {
       ...options,
+      pluginName: plugin?.name,
+      isLive: () => this.activating.has(id) || this.active.has(id),
       canAddControl: () =>
+        this.plugins.get(id) === plugin &&
+        (app.getMapRenderer?.() ?? "maplibre") === renderer &&
         this.supportsEngine(id, app) &&
         this.activationGenerations.get(id) === generation &&
         (this.activating.has(id) ||
           this.active.has(id) ||
-          (!options.assistantTools && synchronous)),
+          (!options.assistantTools &&
+            (synchronous || (restorePass !== undefined && restorePass === this.restorePass)))),
     });
+    if (app.setUrlParameters) {
+      scoped.setUrlParameters = (params) => {
+        if (
+          this.plugins.get(id) !== plugin ||
+          this.activationGenerations.get(id) !== generation ||
+          (!this.active.has(id) && !this.activating.has(id)) ||
+          (app.getMapRenderer?.() ?? "maplibre") !== renderer
+        )
+          return;
+        if (this.writeUrlParameters(id, app, params)) this.urlPublishingPlugins.add(id);
+      };
+    }
+    return scoped;
+  }
+
+  private writeUrlParameters(id: string, app: GeoLibreAppAPI, params: URLSearchParams): boolean {
+    // The trailing argument is host-only. Plugins only receive the scoped API.
+    const write = app.setUrlParameters as
+      | ((params: URLSearchParams, names: readonly string[]) => void)
+      | undefined;
+    if (!write) return false;
+    const ownedNames = this.writableUrlParameterNamesById.get(id) ?? [];
+    const declaredNames = new Set(this.urlParameterNamesById.get(id) ?? []);
+    const currentNames = ownedNames.filter((name) => declaredNames.has(name));
+    // Retired names remain reserved until this host-backed write clears them,
+    // but a replacement may only publish its current declarations.
+    const currentParams = new URLSearchParams();
+    for (const name of currentNames) {
+      for (const value of params.getAll(name)) currentParams.append(name, value);
+    }
+    try {
+      write(currentParams, ownedNames);
+      this.writableUrlParameterNamesById.set(id, currentNames);
+      return true;
+    } catch (error) {
+      // Address-bar updates must not interrupt plugin lifecycle cleanup. Keep
+      // retired claims until a later successful write can clear their values.
+      console.warn(`Failed to update URL parameters for plugin '${id}'.`, error);
+      return false;
+    }
+  }
+
+  private clearUrlParameters(id: string, app: GeoLibreAppAPI, publishedOnly = false): void {
+    // An activation that never published must leave its inbound link intact
+    // so a declined or failed activation can be retried with the same input.
+    if (publishedOnly && !this.urlPublishingPlugins.has(id)) return;
+    if (this.writeUrlParameters(id, app, new URLSearchParams())) {
+      this.urlPublishingPlugins.delete(id);
+    }
   }
 
   private plugins = new Map<string, GeoLibrePlugin>();
@@ -51,6 +138,8 @@ export class PluginManager {
   private handledUrlParametersByContext = new Map<string, Set<string>>();
   private inFlightUrlContexts = new Map<string, number>();
   private urlParameterNamesById = new Map<string, string[]>();
+  private writableUrlParameterNamesById = new Map<string, string[]>();
+  private urlPublishingPlugins = new Set<string>();
   private listeners = new Set<() => void>();
   private activationGenerations = new Map<string, number>();
   private activationResults = new Map<string, Promise<boolean>>();
@@ -70,7 +159,28 @@ export class PluginManager {
       }
     }
     this.plugins.set(plugin.id, plugin);
-    this.urlParameterNamesById.set(plugin.id, normalizeUrlParameterNames(plugin.urlParameterNames));
+    // Keep the first registration's claim so another plugin cannot overwrite
+    // or clear its published state, even when that owner is inactive.
+    const claimed = new Set(
+      [...this.writableUrlParameterNamesById]
+        .filter(([id]) => id !== plugin.id)
+        .flatMap(([, names]) => names),
+    );
+    const requestedNames = normalizeUrlParameterNames(plugin.urlParameterNames);
+    // URL reads remain shareable for backwards-compatible dispatch semantics.
+    this.urlParameterNamesById.set(plugin.id, requestedNames);
+    const conflictingNames = requestedNames.filter((name) => claimed.has(name));
+    if (conflictingNames.length > 0) {
+      console.warn(
+        `Plugin '${plugin.id}' cannot own URL parameters already declared by another plugin: ${conflictingNames.join(", ")}`,
+      );
+    }
+    this.writableUrlParameterNamesById.set(plugin.id, [
+      ...new Set([
+        ...(this.writableUrlParameterNamesById.get(plugin.id) ?? []),
+        ...requestedNames.filter((name) => !claimed.has(name)),
+      ]),
+    ]);
     const defaultPosition = plugin.getMapControlPosition?.();
     if (defaultPosition) {
       this.defaultMapControlPositions.set(plugin.id, defaultPosition);
@@ -118,12 +228,15 @@ export class PluginManager {
       }
       this.active.delete(id);
     }
-    unregisterAssistantToolsByOwner(id);
+    releaseOwnedRegistrations(id);
+    this.clearUrlParameters(id, app);
     this.plugins.delete(id);
     this.deferredActive.delete(id);
     this.defaultActive.delete(id);
     this.defaultMapControlPositions.delete(id);
     this.urlParameterNamesById.delete(id);
+    this.writableUrlParameterNamesById.delete(id);
+    this.urlPublishingPlugins.delete(id);
     // Invalidate any watcher retained by an activation Promise from the old
     // plugin instance. Keep the counter monotonic so a re-registered plugin
     // cannot reuse the same generation identity.
@@ -209,8 +322,11 @@ export class PluginManager {
       // persist project state must overwrite manifestUrls with the real list
       // (see TopToolbar.handleSave and persistProjectPluginState).
       manifestUrls: [],
+      // A session-scoped plugin's activation is not part of the project.
       activePluginIds: Array.from(this.plugins.keys()).filter(
-        (id) => this.active.has(id) || this.deferredActive.has(id),
+        (id) =>
+          !this.plugins.get(id)?.sessionScoped &&
+          (this.active.has(id) || this.deferredActive.has(id)),
       ),
       mapControlPositions,
       settings,
@@ -247,26 +363,22 @@ export class PluginManager {
     try {
       activated = plugin.activate(scopedApp);
     } catch (error) {
-      unregisterAssistantToolsByOwner(id);
+      releaseOwnedRegistrations(id);
+      this.clearUrlParameters(id, app, true);
       restoreDisplaced();
       throw error;
     } finally {
       this.activating.delete(id);
     }
     if (activated === false) {
-      unregisterAssistantToolsByOwner(id);
+      releaseOwnedRegistrations(id);
+      this.clearUrlParameters(id, app, true);
       restoreDisplaced();
       return false;
     }
     this.active.add(id);
     this.notify();
-    const result = this.watchAsyncActivation(
-      id,
-      activated,
-      scopedApp,
-      generation,
-      restoreDisplaced,
-    );
+    const result = this.watchAsyncActivation(id, activated, app, generation, restoreDisplaced);
     if (!result) return true;
     this.trackActivationResult(id, result);
     return result;
@@ -335,12 +447,13 @@ export class PluginManager {
       try {
         // Tear down any partial mount. Plugin teardown is written to be safe to
         // run even when nothing was mounted.
-        plugin.deactivate(app);
+        plugin.deactivate(this.scopeAppToPlugin(app, id));
       } catch (deactivateError) {
         console.warn(`Plugin '${id}' threw while reverting a failed activation.`, deactivateError);
       }
     }
-    unregisterAssistantToolsByOwner(id);
+    releaseOwnedRegistrations(id);
+    this.clearUrlParameters(id, app, true);
     this.notify();
     return true;
   }
@@ -358,7 +471,8 @@ export class PluginManager {
     try {
       plugin.deactivate(this.scopeAppToPlugin(app, id));
     } finally {
-      unregisterAssistantToolsByOwner(id);
+      releaseOwnedRegistrations(id);
+      this.clearUrlParameters(id, app);
       this.active.delete(id);
       this.nextActivationGeneration(id);
       this.activationResults.delete(id);
@@ -521,13 +635,18 @@ export class PluginManager {
     app: GeoLibreAppAPI,
     options: { resetMissingSettings?: boolean; mapReplaced?: boolean } = {},
   ): void {
+    const restorePass = ++this.restorePass;
     const renderer = app.getMapRenderer?.() ?? "maplibre";
     // A new map took down every live control with the old one, so reactivate
     // from scratch. A swap and back (MapLibre to Mapbox to MapLibre) before
     // the middle map restored lands on the same renderer kind, so the kind
     // alone cannot tell; the caller says when the map itself was replaced.
     if (this.renderer !== null && (renderer !== this.renderer || options.mapReplaced)) {
-      for (const id of Array.from(this.active)) this.deactivate(id, app);
+      for (const id of Array.from(this.active)) {
+        // A session-scoped plugin owns no map controls, so the new map does
+        // not need it rebuilt (and the saved project would not bring it back).
+        if (!this.keepsSessionActivation(id, app)) this.deactivate(id, app);
+      }
     }
     this.renderer = renderer;
     this.deferredState = state;
@@ -579,18 +698,24 @@ export class PluginManager {
     // write the collapsed state back on the next save.
     const scopeForRestore = (id: string, assistantTools = false): GeoLibreAppAPI =>
       this.plugins.get(id)?.restoresPanelCollapseState
-        ? this.scopeAppToPlugin(app, id, { assistantTools })
-        : this.scopeAppToPlugin(app, id, {
-            assistantTools,
-            onControlAdded: collapseRestoredPanel,
-            onRightPanelOpened: collapseRestoredRightPanel,
-          });
+        ? this.scopeAppToPlugin(app, id, { assistantTools }, restorePass)
+        : this.scopeAppToPlugin(
+            app,
+            id,
+            {
+              assistantTools,
+              onControlAdded: collapseRestoredPanel,
+              onRightPanelOpened: collapseRestoredRightPanel,
+            },
+            restorePass,
+          );
 
     // Deactivate first so plugins that should be inactive tear down their live
     // controls before we touch positions or settings. This keeps the order of
     // operations from rebuilding a control only to remove it on the next pass.
+    // A session-scoped plugin the project does not list stays as it is.
     for (const id of Array.from(this.active)) {
-      if (targetActive.has(id)) continue;
+      if (targetActive.has(id) || this.keepsSessionActivation(id, app)) continue;
       const plugin = this.plugins.get(id);
       if (!plugin) continue;
       this.deactivate(id, app);
@@ -616,9 +741,14 @@ export class PluginManager {
       }
 
       // Regular project loads apply only the settings present in the file. New
-      // project resets can opt into clearing cached state for every plugin.
+      // project resets can opt into clearing cached state for every plugin,
+      // and a plugin whose state is project data (not a preference) opts into
+      // being cleared by any load that does not carry it.
       const hasSetting = state?.settings && id in state.settings;
-      if (plugin.applyProjectState && (hasSetting || options.resetMissingSettings)) {
+      if (
+        plugin.applyProjectState &&
+        (hasSetting || options.resetMissingSettings || plugin.clearsStateOnProjectLoad)
+      ) {
         const updated = plugin.applyProjectState(
           scopedApp,
           hasSetting ? state.settings[id] : undefined,
@@ -638,13 +768,15 @@ export class PluginManager {
       try {
         activated = plugin.activate(scopedApp);
       } catch (error) {
-        unregisterAssistantToolsByOwner(id);
+        releaseOwnedRegistrations(id);
+        this.clearUrlParameters(id, app, true);
         throw error;
       } finally {
         this.activating.delete(id);
       }
       if (activated === false) {
-        unregisterAssistantToolsByOwner(id);
+        releaseOwnedRegistrations(id);
+        this.clearUrlParameters(id, app, true);
         continue;
       }
       this.active.add(id);
@@ -652,7 +784,7 @@ export class PluginManager {
       // Restoring a saved project re-activates plugins the same way the user
       // would, so an async mount that later fails (e.g. a stale chunk after a
       // redeploy) must roll back here too, not just from activate().
-      const result = this.watchAsyncActivation(id, activated, scopedApp, generation);
+      const result = this.watchAsyncActivation(id, activated, app, generation);
       if (result) this.trackActivationResult(id, result);
     }
 
@@ -708,6 +840,18 @@ interface ScopeAppOptions {
    * callable by the assistant until the plugin is unregistered.
    */
   assistantTools?: boolean;
+  /**
+   * The plugin's registered name, injected into `registerMenuContribution` so
+   * the host can title the plugin's submenu without a registry lookup.
+   */
+  pluginName?: string;
+  /**
+   * Whether the plugin is active or activating. Menu contributions are only
+   * accepted then: a restore callback can run for a plugin that stays inactive
+   * (`applyProjectState`), and its contributions would otherwise linger, since
+   * cleanup runs on deactivation.
+   */
+  isLive?: () => boolean;
 }
 
 function scopeAppToPlugin(
@@ -715,8 +859,16 @@ function scopeAppToPlugin(
   pluginId: string,
   options: ScopeAppOptions = {},
 ): GeoLibreAppAPI {
-  const { onControlAdded, onRightPanelOpened, assistantTools = false, canAddControl } = options;
+  const {
+    onControlAdded,
+    onRightPanelOpened,
+    assistantTools = false,
+    canAddControl,
+    pluginName,
+    isLive,
+  } = options;
   const register = app.registerToolbarMenu;
+  const registerContribution = app.registerMenuContribution;
   const registerRightPanel = app.registerRightPanel;
   const activatePlugin = app.activatePlugin;
   const deactivatePlugin = app.deactivatePlugin;
@@ -727,10 +879,16 @@ function scopeAppToPlugin(
     !canAddControl &&
     !hasAssistantRegistration &&
     !register &&
+    !registerContribution &&
+    !app.unregisterMenuContribution &&
+    !app.registerFileHandler &&
+    !app.unregisterFileHandler &&
     !onControlAdded &&
     !onRightPanelOpened &&
     !activatePlugin &&
-    !deactivatePlugin
+    !deactivatePlugin &&
+    !app.credentials &&
+    !app.readAllowedFile
   )
     return app;
 
@@ -760,6 +918,31 @@ function scopeAppToPlugin(
     }
   }
 
+  if (app.credentials) {
+    // The host's concrete impl takes the owner id as a trailing argument (see
+    // lib/plugin-credentials.ts); plugins only ever pass `name`.
+    const credentials = app.credentials as unknown as {
+      get(name: string, ownerPluginId: string): string;
+      set(name: string, value: string, ownerPluginId: string): boolean;
+      location(): GeoLibreCredentialLocation;
+    };
+    scoped.credentials = {
+      get: (name) => credentials.get(name, pluginId),
+      set: (name, value) => credentials.set(name, value, pluginId),
+      location: () => credentials.location(),
+    };
+  }
+
+  if (app.readAllowedFile) {
+    // Same host-side owner injection as credentials: the host impl takes the
+    // owner id as a trailing argument, so a plugin reads only its own allowlist.
+    const readWithOwner = app.readAllowedFile as unknown as (
+      path: string,
+      ownerPluginId: string,
+    ) => Promise<string>;
+    scoped.readAllowedFile = (path) => readWithOwner(path, pluginId);
+  }
+
   if (register) {
     // The public `registerToolbarMenu` is single-arg; the host's concrete impl
     // accepts an owner id as a second argument (see toolbar-menu-registry). Cast
@@ -770,6 +953,49 @@ function scopeAppToPlugin(
     ) => () => void;
     scoped.registerToolbarMenu = (menu) =>
       canAddControl?.() === false ? () => {} : registerWithOwner(menu, pluginId);
+  }
+
+  if (registerContribution) {
+    // Same host-side owner injection as registerToolbarMenu, plus the plugin's
+    // name so the host can title the submenu it nests the items under.
+    const registerContributionWithOwner = registerContribution as (
+      contribution: GeoLibreMenuContribution,
+      ownerPluginId: string,
+      ownerPluginName?: string,
+    ) => () => void;
+    scoped.registerMenuContribution = (contribution) =>
+      canAddControl?.() === false || isLive?.() === false
+        ? () => {}
+        : registerContributionWithOwner(contribution, pluginId, pluginName);
+  }
+  if (app.unregisterMenuContribution) {
+    // Scoped too, so a plugin can only remove contributions it owns.
+    const unregisterContribution = app.unregisterMenuContribution as (
+      id: string,
+      ownerPluginId: string,
+    ) => void;
+    scoped.unregisterMenuContribution = (id) => unregisterContribution(id, pluginId);
+  }
+
+  if (app.registerFileHandler) {
+    // Same host-side owner injection and liveness gate as menu contributions: a
+    // plugin that stays inactive must not start receiving dropped files.
+    const registerHandlerWithOwner = app.registerFileHandler as (
+      handler: GeoLibreFileHandler,
+      ownerPluginId: string,
+    ) => () => void;
+    scoped.registerFileHandler = (handler) =>
+      canAddControl?.() === false || isLive?.() === false
+        ? () => {}
+        : registerHandlerWithOwner(handler, pluginId);
+  }
+  if (app.unregisterFileHandler) {
+    // Scoped too, so a plugin can only remove handlers it owns.
+    const unregisterHandler = app.unregisterFileHandler as (
+      id: string,
+      ownerPluginId: string,
+    ) => void;
+    scoped.unregisterFileHandler = (id) => unregisterHandler(id, pluginId);
   }
 
   if (registerRightPanel) {
@@ -784,7 +1010,15 @@ function scopeAppToPlugin(
                     try {
                       panel.onExplicitClose?.();
                     } finally {
-                      if (deactivatePlugin) setTimeout(() => deactivatePlugin(pluginId), 0);
+                      // A plugin's own deactivate() closes its panel too, and a
+                      // renderer swap re-activates it before this timer fires.
+                      // That deactivation's scope has gone stale by then, so
+                      // only a close of the live activation deactivates.
+                      if (deactivatePlugin)
+                        setTimeout(() => {
+                          if (canAddControl?.() === false) return;
+                          deactivatePlugin(pluginId);
+                        }, 0);
                     }
                   },
                 }

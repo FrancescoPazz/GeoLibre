@@ -1,4 +1,4 @@
-import type { Cartesian3, Cartographic } from "@cesium/engine";
+import type { Cartesian3, Cartographic } from "@cesium/core";
 import type { LngLatAlt } from "./line-of-sight-geometry";
 
 type CesiumNs = typeof import("@cesium/engine");

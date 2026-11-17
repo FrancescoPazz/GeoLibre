@@ -12,6 +12,13 @@ export {
   type AssistantToolEntry,
 } from "./assistant-tool-registry";
 export * from "./types";
+export {
+  setI3sBuildingNodeVisible,
+  visibleI3sBuildingSublayers,
+  type I3sBuildingNode,
+  type I3sBuildingState,
+} from "./plugins/i3s-building";
+export { openControlPanel, closeControlPanel, isControlPanelVisible } from "./control-panels";
 export { PluginManager } from "./plugin-manager";
 export {
   registerRightPanel,
@@ -43,6 +50,24 @@ export {
   type ToolbarMenuEntry,
 } from "./toolbar-menu-registry";
 export {
+  registerMenuContribution,
+  unregisterMenuContribution,
+  listMenuContributions,
+  getMenuContributionsSnapshot,
+  subscribeMenuContributions,
+  isMenuContributionTarget,
+  type MenuContributionsSnapshot,
+  type MenuContributionEntry,
+} from "./menu-contribution-registry";
+export {
+  registerFileHandler,
+  unregisterFileHandler,
+  listFileHandlers,
+  findFileHandlerByDataType,
+  isFileHandlerDataType,
+  type FileHandlerEntry,
+} from "./file-handler-registry";
+export {
   registerFloatingPanel,
   unregisterFloatingPanel,
   openFloatingPanel,
@@ -68,7 +93,22 @@ export {
   resolveToolbarLabel,
   type GeoLibreToolbarLabel,
 } from "./toolbar-menu-label";
-export { maplibreLayerControlPlugin } from "./plugins/layer-control";
+// The translator plugins use to resolve `plugin.<id>.*` keys through the app
+// API with an interpolated English fallback (see docs/plugin-api.md).
+export {
+  createPluginTranslator,
+  interpolatePluginText,
+  pluginDisplayTitle,
+  type PluginTranslate,
+  type PluginTranslateParams,
+} from "./plugin-i18n";
+export {
+  LocalizedError,
+  localizedMessage,
+  setLocalizedErrorTranslator,
+  type LocalizedErrorTranslator,
+} from "./localized-error";
+export { LAYER_CONTROL_PLUGIN_ID, maplibreLayerControlPlugin } from "./plugins/layer-control";
 export { getStyleMap } from "./plugins/style-map";
 export {
   createAnnotationMarker,
@@ -86,6 +126,7 @@ export {
 } from "./plugins/maplibre-basemap-control";
 export {
   addArcGISLayer,
+  arcGISAttributeConstraints,
   isArcGISWritableLayer,
   saveArcGISLayerEdits,
   arcGISLayerHasPendingEdits,
@@ -102,17 +143,63 @@ export {
   refreshArcGISFeatureLayer,
   reloadArcGISViewportLayer,
   restoreArcGISViewportLayers,
+  type ArcGISAttributeConstraints,
   type ArcGISLayerOptions,
   type ArcGISImageServiceRasterFunction,
   type ArcGISLayerType,
   type ArcGISMapServiceSublayer,
   type ArcGISSourceType,
 } from "./plugins/arcgis-layer";
+export type { ArcGISDomainDiagnostic } from "./plugins/arcgis-domains";
 export {
-  addCogRasterLayer,
+  arcGISContingencyChecks,
+  arcGISContingentChoices,
+  blocksArcGISEdit,
+  type ArcGISContingencyCheck,
+  type ArcGISContingentValues,
+} from "./plugins/arcgis-contingent-values";
+export {
+  arcGISLayerCreationTemplates,
+  type ArcGISCreationTemplate,
+  type ArcGISCreationTemplateSelection,
+} from "./plugins/arcgis-defaults";
+export {
+  addArcGISAttachment,
+  arcGISAttachmentObjectId,
+  arcGISAttachmentSupport,
+  arcGISRelatedAttachmentSupport,
+  deleteArcGISAttachments,
+  downloadArcGISAttachment,
+  listArcGISAttachments,
+  updateArcGISAttachment,
+  type ArcGISAttachmentInfo,
+  type ArcGISAttachmentSource,
+  type ArcGISAttachmentSupport,
+} from "./plugins/arcgis-attachments";
+export {
+  addArcGISRelatedRecord,
+  arcGISRelatedEditSupport,
+  arcGISRelatedFields,
+  arcGISRelatedNewRecordDefaults,
+  arcGISRelatedParentKey,
+  arcGISRelatedParentObjectId,
+  arcGISRelationships,
+  deleteArcGISRelatedRecord,
+  fetchArcGISRelatedTableInfo,
+  queryArcGISRelatedRecords,
+  updateArcGISRelatedRecord,
+  type ArcGISRelatedEditSupport,
+  type ArcGISRelatedField,
+  type ArcGISRelatedRecord,
+  type ArcGISRelatedRecords,
+  type ArcGISRelatedTableInfo,
+  type ArcGISRelationship,
+} from "./plugins/arcgis-related-records";
+export {
   closeBookmarkPanel,
   closeColorbarPanel,
   closeHtmlPanel,
+  closeImagePanel,
   closeLegendPanel,
   closeMaplibreComponentControls,
   closeMeasurePanel,
@@ -124,6 +211,7 @@ export {
   isBookmarkPanelVisible,
   isColorbarPanelVisible,
   isHtmlPanelVisible,
+  isImagePanelVisible,
   isLegendPanelVisible,
   isMeasurePanelVisible,
   isMinimapPanelVisible,
@@ -138,10 +226,30 @@ export {
   openFlatGeobufAddVectorLayerPanel,
   openColorbarPanel,
   openHtmlPanel,
+  openHtmlPanelWithEntry,
+  setImageControl,
+  setImageLabels,
+  removeImageControl,
+  getImageControlStates,
+  MAX_IMAGE_CONTROLS,
+  subscribeImagePanel,
+  DEFAULT_IMAGE_STATE,
+  IMAGE_RATIO_MAX,
+  IMAGE_RATIO_MIN,
+  IMAGE_SIZE_MAX,
+  IMAGE_SIZE_MIN,
+  formatAspectRatio,
+  normalizeImageUrl,
+  isRatioHeightInRange,
+  ratioHeight,
+  parseAspectRatio,
+  type ComponentImageState,
+  type ImageSizeMode,
   openLegendPanel,
   openLegendPanelWithItems,
   LIDAR_SOURCE_KIND,
   openLidarLayerPanel,
+  addLidarLayerFromBytes,
   addLidarLayerFromUrl,
   restoreLidarLayers,
   openMeasurePanel,
@@ -152,6 +260,7 @@ export {
   openSearchPlacesPanel,
   openSpinGlobePanel,
   openSplattingLayerPanel,
+  restoreSplattingLayers,
   openStacSearchLayerPanel,
   openViewStatePanel,
   openZarrLayerPanel,
@@ -159,6 +268,7 @@ export {
   type CloudNetcdfLayerOptions,
   addZarrRasterLayer,
   restoreArcgisZarrLayers,
+  restoreZarrLayers,
   queryZarrLayer,
   setZarrLayerSelector,
   setZarrLocalStoreProvider,
@@ -177,7 +287,6 @@ export {
   subscribeSearchPlacesPanel,
   subscribeSpinGlobePanel,
   subscribeViewStatePanel,
-  type CogRasterLayerOptions,
 } from "./plugins/maplibre-components";
 export {
   KerchunkReferenceStore,
@@ -202,6 +311,7 @@ export {
   buildInlineZarrStore,
   composeColormappedImage,
   composeRgbImage,
+  crossesAntimeridian,
   gridBounds,
   gridPixelAt,
   gridValueAt,
@@ -218,11 +328,27 @@ export {
   type LocalNetcdfImage,
   type LocalNetcdfVariable,
   type LocalNetcdfLayerRefs,
+  type LocalNetcdfLayerRefsOptions,
   type LocalNetcdfRgbImage,
   type LocalNetcdfRgbOptions,
   type LocalNetcdfWindow,
+  type InlineZarrAxis,
   type InlineZarrGrid,
 } from "./plugins/local-netcdf";
+export {
+  alongTrackKm,
+  detectSpaceborneLidarProduct,
+  openSpaceborneLidar,
+  SPACEBORNE_LIDAR_PRODUCTS,
+  type SpaceborneLidarBeam,
+  type SpaceborneLidarField,
+  type SpaceborneLidarFieldSpec,
+  type SpaceborneLidarFile,
+  type SpaceborneLidarFootprints,
+  type SpaceborneLidarProductId,
+  type SpaceborneLidarProductSpec,
+  type SpaceborneLidarReadOptions,
+} from "./plugins/spaceborne-lidar";
 export {
   closeDuckDBLayerPanel,
   getDuckDBFeatureBounds,
@@ -240,10 +366,26 @@ export {
   overtureTilesForBBox,
 } from "./plugins/overture-query";
 export {
+  addPlanetaryComputerItemLayer,
+  addPlanetaryComputerMosaicLayer,
   closePlanetaryComputerPanel,
+  identifyPlanetaryComputerLayer,
+  isPlanetaryComputerPanelSupported,
   openPlanetaryComputerPanel,
   PLANETARY_COMPUTER_SOURCE_KIND,
   restorePlanetaryComputerLayers,
+  searchPlanetaryComputerItems,
+} from "./plugins/maplibre-planetary-computer";
+export {
+  createPlanetaryComputerCustomActions,
+  setPlanetaryComputerLabels,
+  type PlanetaryComputerLabels,
+} from "./plugins/planetary-computer-actions";
+export type {
+  PlanetaryComputerAddResult,
+  PlanetaryComputerPixelReading,
+  PlanetaryComputerSearchInput,
+  PlanetaryComputerStyleInput,
 } from "./plugins/maplibre-planetary-computer";
 export {
   closeEarthEnginePanel,
@@ -262,6 +404,7 @@ export {
   restoreThreeDTilesLayers,
   THREE_D_TILES_SOURCE_KIND,
 } from "./plugins/maplibre-3d-tiles";
+export { probeArcgisI3sLayers } from "./plugins/arcgis-i3s-tiles";
 export { isRecoverableNonTiledRasterError } from "./plugins/non-tiled-raster-error";
 export {
   addRasterToMap,
@@ -278,11 +421,15 @@ export {
   setLocalRasterPicker,
   setNonTiledRasterHandler,
   setRasterPixelInspect,
+  setUnrestorableRasterHandler,
   type LocalRasterFileReader,
   type LocalRasterPicker,
   type NonTiledRasterRequest,
   type PickedLocalRaster,
+  type UnrestorableRasterHandler,
 } from "./plugins/maplibre-raster";
+// Lets the save flow warn about local rasters a saved project cannot reload.
+export { isUnsavableLocalRaster } from "./plugins/raster-layer-sync";
 export { getSharedDeckLoadState } from "./plugins/shared-deck-overlay";
 export {
   RASTER_MAX_CLASSES,
@@ -331,8 +478,13 @@ export {
 // tests import the sync helpers from the module paths directly. These two are
 // the exception — the Layer Library (issue #1520) has to recognize a
 // control-painted vector layer to read its features before saving it, and to
-// route a re-add back to restoreVectorLayers.
-export { isEmbeddableLocalVectorLayer, VECTOR_SOURCE_KIND } from "./plugins/vector-layer-sync";
+// route a re-add back to restoreVectorLayers. The adopted kind routes there too,
+// since an adopted layer saved by path is replayed through the control.
+export {
+  ADOPTED_VECTOR_SOURCE_KIND,
+  isEmbeddableLocalVectorLayer,
+  VECTOR_SOURCE_KIND,
+} from "./plugins/vector-layer-sync";
 export {
   clearDirectionsWaypoints,
   type DirectionsRouteLegMetric,
@@ -419,7 +571,7 @@ export {
   DECK_VIZ_SOURCE_KIND,
   isDeckVizLayer,
 } from "./plugins/deckgl-viz/store-layer";
-export { VIEWER_BLOCKED_PLUGIN_IDS } from "./viewer-plugins";
+export { VIEWER_BLOCKED_PLUGIN_IDS, isViewerBlockedPlugin } from "./viewer-plugins";
 export {
   maplibreAnnotationsPlugin,
   ANNOTATIONS_PLUGIN_ID,
@@ -453,12 +605,17 @@ export {
   GEO_EDITOR_PLUGIN_ID,
   DEFAULT_GEO_EDITOR_LABELS,
   setGeoEditorLabels,
+  setGeoEditorFileTools,
   type GeoEditorLabels,
   canEditLayerGeometry,
   SKETCHES_SOURCE_KIND,
   startLayerGeometryEdit,
   endLayerGeometryEdit,
   getGeometryEditTargetLayerId,
+  getLastGeometryEditEnd,
+  type GeometryEditEnd,
+  selectGeometryEditFeature,
+  isGeoEditorUsingRightClick,
   subscribeGeometryEdit,
   isGeoEditorAvailableForImport,
   getGeoEditorFeatureCount,
@@ -479,6 +636,15 @@ export {
 } from "./plugins/geo-editor-view-import";
 export { maplibreGeoAgentPlugin, GEOAGENT_PLUGIN_ID } from "./plugins/maplibre-geoagent";
 export { maplibreUsgsLidarPlugin } from "./plugins/maplibre-usgs-lidar";
+export {
+  pointCloudAnnotationPlugin,
+  POINT_CLOUD_ANNOTATION_PLUGIN_ID,
+  setPointCloudAnnotationFileSaver,
+  setPointCloudPrelabelRunner,
+  setPointCloudLabelWriter,
+  type PointCloudAnnotationFileSaver,
+  type PointCloudLabelWriter,
+} from "./plugins/point-cloud-annotation";
 export {
   buildBasinUrl,
   buildFlowtraceBody,
@@ -514,6 +680,15 @@ export {
   type EarthdataGisSearchResult,
   type EarthdataServiceKind,
 } from "./plugins/earthdata-gis-api";
+export { EARTHACCESS_PLUGIN_ID, maplibreEarthaccessPlugin } from "./plugins/maplibre-earthaccess";
+export {
+  CMR_SEARCH_URL,
+  EARTHDATA_PRESETS,
+  searchEarthdataCollections,
+  searchEarthdataGranules,
+  type EarthdataCollection,
+  type EarthdataGranule,
+} from "./plugins/earthaccess-api";
 export {
   DEFAULT_OPENAERIALMAP_LABELS,
   maplibreOpenAerialMapPlugin,
@@ -532,6 +707,30 @@ export {
   type FieldsOfTheWorldFileSaver,
 } from "./plugins/maplibre-fields-of-the-world";
 export {
+  SENTINEL2_EXPLORER_PLUGIN_ID,
+  maplibreSentinel2ExplorerPlugin,
+} from "./plugins/maplibre-sentinel2-explorer";
+export { registerSentinel2CompositeProtocol } from "./plugins/sentinel2-composite";
+export {
+  DEFAULT_RENDER_RAMP,
+  RENDER_RAMPS,
+  registerStacRenderProtocol,
+  renderTileUrl,
+  specFromTileUrl,
+  withRenderStyle,
+  type RenderRamp,
+  type RenderStyle,
+} from "./plugins/stac-render";
+export {
+  OCEAN_DATA_PLATFORM_PLUGIN_ID,
+  maplibreOceanDataPlatformPlugin,
+  setOceanDataPlatformFileSaver,
+  type OceanDataPlatformFileSaver,
+} from "./plugins/maplibre-ocean-data-platform";
+export { DYNAMICAL_PLUGIN_ID, maplibreDynamicalPlugin } from "./plugins/maplibre-dynamical";
+export { JAXA_EARTH_PLUGIN_ID, maplibreJaxaEarthPlugin } from "./plugins/maplibre-jaxa-earth";
+export { registerJaxaEarthProtocol } from "./plugins/jaxa-earth-api";
+export {
   maplibreSatelliteEmbeddingsPlugin,
   SATELLITE_EMBEDDINGS_PLUGIN_ID,
   setSatelliteEmbeddingsFileSaver,
@@ -547,9 +746,12 @@ export {
   defaultOverpassEndpoint,
   downloadOsmGeoJson,
   escapeOverpassString,
+  INVALID_OVERPASS_ENDPOINT_MESSAGE,
   overpassJsonToGeoJson,
   OVERPASS_DEFAULT_ENDPOINT,
   OVERPASS_DEV_ENDPOINT,
+  OVERPASS_URL_PATTERN,
+  setOverpassEndpoint,
   type OsmDownloadFilter,
   type OsmDownloadPreset,
   type OverpassElement,
@@ -571,10 +773,15 @@ export {
 } from "./plugins/ign-lidar-hd-api";
 export {
   ARCGIS_HUB_PLUGIN_ID,
+  createArcGisHubPlugin,
   DEFAULT_ARCGIS_HUB_LABELS,
   maplibreArcGisHubPlugin,
   setArcGisHubLabels,
+  type ArcGisHubCatalog,
+  type ArcGisHubCatalogSet,
   type ArcGisHubLabels,
+  type ArcGisHubPluginConfig,
+  type ArcGisHubPluginInstance,
 } from "./plugins/maplibre-arcgis-hub";
 export {
   CATALOG_LAYER_METADATA_KEY,
@@ -697,8 +904,59 @@ export {
   type MicrozonationRecord,
 } from "./plugins/microzonation";
 export {
+  ARCGIS_PORTAL_PLUGIN_ID,
+  maplibreArcGisPortalPlugin,
+  setArcGisPortalAuth,
+  type ArcGisPortalAuth,
+  type ArcGisPortalConnection,
+} from "./plugins/maplibre-arcgis-portal";
+export {
+  DEFAULT_TENNESSEE_GIS_LABELS,
+  maplibreTennesseeGisPlugin,
+  setTennesseeGisLabels,
+  TENNESSEE_GIS_CATALOG_GROUPS,
+  TENNESSEE_GIS_PLUGIN_ID,
+  TENNESSEE_GIS_PORTAL_URL,
+  TENNESSEE_GIS_SITE_ID,
+} from "./plugins/maplibre-tennessee-gis";
+export {
+  DEFAULT_US_STATE_GIS_LABELS,
+  maplibreUsStateGisPlugin,
+  setUsStateGisLabels,
+  US_STATE_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-us-state-gis";
+export { US_STATE_GIS_CATALOGS } from "./plugins/us-state-gis-catalogs";
+export {
+  DEFAULT_US_LOCAL_GIS_LABELS,
+  maplibreUsLocalGisPlugin,
+  setUsLocalGisLabels,
+  US_LOCAL_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-us-local-gis";
+export { US_LOCAL_GIS_CATALOGS } from "./plugins/us-local-gis-catalogs";
+export {
+  DEFAULT_INDIA_GIS_LABELS,
+  maplibreIndiaGisPlugin,
+  setIndiaGisLabels,
+  INDIA_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-india-gis";
+export { INDIA_GIS_CATALOGS } from "./plugins/india-gis-catalogs";
+export {
+  DEFAULT_US_FEDERAL_GIS_LABELS,
+  maplibreUsFederalGisPlugin,
+  setUsFederalGisLabels,
+  US_FEDERAL_GIS_PLUGIN_ID,
+} from "./plugins/maplibre-us-federal-gis";
+export { US_FEDERAL_GIS_CATALOGS } from "./plugins/us-federal-gis-catalogs";
+export {
+  buildSocrataCatalogUrl,
+  searchSocrataCatalog,
+  SOCRATA_CATALOG_API_URL,
+} from "./plugins/socrata-api";
+export {
   ARCGIS_HUB_PAGE_URL,
   ARCGIS_HUB_PORTAL_URL,
+  ARCGIS_HUB_SEARCH_TYPES,
+  fetchArcGisHubSiteGroups,
   arcGisHubItemDataUrl,
   arcGisHubItemPageUrl,
   arcGisHubItemThumbnailUrl,
@@ -708,6 +966,7 @@ export {
   sanitizeArcGisHubSearchText,
   searchArcGisHub,
   type ArcGisHubItem,
+  type ArcGisHubSearchOptions,
   type ArcGisHubSearchResult,
 } from "./plugins/arcgis-hub-api";
 export {
@@ -723,10 +982,12 @@ export {
 export {
   maplibrePlanetOpenDataPlugin,
   maplibrePortolanPlugin,
+  cancelStacCatalogRequest,
   maplibreStacCatalogsPlugin,
   PLANET_DISASTER_DATA_CATALOG_URL,
   PLANET_OPEN_DATA_PLUGIN_ID,
   PORTOLAN_PLUGIN_ID,
+  requestStacCatalogUrl,
   setStacLabels,
   STAC_PLUGIN_ID,
   type StacLabels,
@@ -757,6 +1018,13 @@ export {
   type StacSearchOptions,
   type StacSearchResult,
 } from "./plugins/stac-api";
+export {
+  DEFAULT_S3_BROWSER_LABELS,
+  maplibreS3BrowserPlugin,
+  S3_BROWSER_PLUGIN_ID,
+  setS3BrowserLabels,
+  type S3BrowserLabels,
+} from "./plugins/maplibre-s3-browser";
 export {
   DEFAULT_SOURCE_COOP_LABELS,
   maplibreNaturalEarthPlugin,
@@ -823,6 +1091,31 @@ export {
   type SourceCoopProduct,
 } from "./plugins/source-coop-api";
 export { maplibreNationalMapPlugin } from "./plugins/maplibre-national-map";
+export {
+  DEFAULT_USGS_DEM_LABELS,
+  maplibreUsgsDemPlugin,
+  setUsgsDemLabels,
+  USGS_DEM_PLUGIN_ID,
+  type UsgsDemLabels,
+} from "./plugins/maplibre-usgs-dem";
+export {
+  buildUsgsDemSearchUrl,
+  extractRawDemName,
+  filterRedundantDemItems,
+  footprintCollection as usgsDemFootprintCollection,
+  footprintFeature as usgsDemFootprintFeature,
+  get24kQuadGeometry,
+  parseSearchResponse as parseUsgsDemSearchResponse,
+  searchUsgsDem,
+  USGS_24K_QUAD_ENDPOINT,
+  USGS_DEM_DATASETS,
+  USGS_TNM_PRODUCTS_ENDPOINT,
+  type UsgsDemDatasetInfo,
+  type UsgsDemFootprintProps,
+  type UsgsDemItem,
+  type UsgsDemSearchOptions,
+  type UsgsDemSearchResult,
+} from "./plugins/usgs-dem-api";
 export { maplibreOvertureMapsPlugin } from "./plugins/maplibre-overture-maps";
 export { maplibreStreetViewPlugin } from "./plugins/maplibre-streetview";
 export {

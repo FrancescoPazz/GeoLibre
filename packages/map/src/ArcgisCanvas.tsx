@@ -5,6 +5,7 @@ import {
   effectiveLayerRenderState,
   getActiveEllipsoid,
   isPopupHoverEnabled,
+  normalizeArcgisWkid,
   resolvePopupMaxWidth,
   useAppStore,
   type MapProjection,
@@ -23,7 +24,7 @@ import { createArcgisIdentify } from "./arcgis-identify";
 import { consumePendingIdentifyRestore } from "./map-identify-lifecycle";
 import { selectionFitKey } from "./map-selection";
 import { DEFAULT_IDENTIFY_ALL_LABELS, type MapCanvasIdentifyAllLabels } from "./identify-all-popup";
-import type { MapCanvasRasterIdentify } from "./MapCanvas";
+import type { MapCanvasRasterIdentify } from "./raster-identify";
 import type * as maplibregl from "maplibre-gl";
 import { CogDemError } from "./cog-dem-source";
 import {
@@ -35,6 +36,7 @@ import {
 } from "./arcgis-engine";
 import {
   ensureArcgisCss,
+  loadArcgisProjectOperator,
   loadArcgisSceneSdk,
   loadArcgisSdk,
   redactArcgisError,
@@ -143,7 +145,11 @@ export function ArcgisCanvas({
   // A split pane's toggle overrides the shared projection for that pane only.
   const [paneProjection, setPaneProjection] = useState<MapProjection | null>(null);
   const projection = (viewId ? paneProjection : null) ?? sharedProjection;
-  const sceneMode = arcgisSceneMode(projection, terrainEnabled);
+  // The flat map's projection (issue #2708); a globe ignores it, and it keeps
+  // a flat map a MapView even with terrain on.
+  const storedWkid = normalizeArcgisWkid(useAppStore((s) => s.preferences.map.arcgisWkid));
+  const sceneMode = arcgisSceneMode(projection, terrainEnabled, storedWkid !== undefined);
+  const wkid = sceneMode === "2d" ? storedWkid : undefined;
   useEffect(() => {
     let cancelled = false;
     let terrainRestoreError: string | null = null;
@@ -169,8 +175,9 @@ export function ArcgisCanvas({
       loadArcgisSdk(),
       sceneMode === "2d" ? Promise.resolve(undefined) : loadArcgisSceneSdk(),
       ensureArcgisCss(dark ? "dark" : "light"),
+      wkid === undefined ? Promise.resolve(undefined) : loadArcgisProjectOperator(),
     ])
-      .then(([sdk, scene]) => {
+      .then(([sdk, scene, , projectOperator]) => {
         if (cancelled || !element.isConnected) return;
         // Past this point the modules are in; a failure below is not one a
         // reload fixes, so it gets no Retry.
@@ -210,6 +217,7 @@ export function ArcgisCanvas({
             })
           : new sdk.MapView({
               ...common,
+              ...(wkid === undefined ? {} : { spatialReference: { wkid } }),
               rotation: bearingToRotation(view.bearing),
               // Fractional zooms are what the shared camera carries; snapping
               // would nudge every synchronized pane to the nearest level.
@@ -219,6 +227,7 @@ export function ArcgisCanvas({
           deckOverlay: !viewId,
           domControls: !viewId,
           hasApiKey: Boolean(apiKey?.trim()),
+          ...(projectOperator ? { projectOperator } : {}),
           onTerrainSourceChange: (source, band) => {
             if (!cancelled) {
               terrainSource.current = { source, band };
@@ -315,11 +324,21 @@ export function ArcgisCanvas({
         // is a box anchored above the clicked point.
         const identify = createArcgisIdentify({
           identifyFeaturesAt: (point, layerId) => current.identifyFeaturesAt(point, layerId),
-          toLngLat: (point) => {
-            const at = mapView.toMap(point);
-            return at ? [at.longitude, at.latitude] : null;
-          },
+          toLngLat: (point) => current.lngLatOf(mapView.toMap(point)),
           zoom: () => current.readView().zoom,
+          // Web Mercator metres per pixel. A Web Mercator 2D view reports that
+          // as its resolution; any other view (a scene, or a 2D view in another
+          // WKID, whose resolution is in that CRS's units) goes through its
+          // scale: ground metres at ArcGIS's 96 DPI, stretched by 1/cos(lat)
+          // as Web Mercator stretches the ground at the view's latitude.
+          resolution: () => {
+            if (mapView.type === "2d" && (wkid === undefined || wkid === 3857 || wkid === 102100))
+              return mapView.resolution;
+            // readView projects the centre to WGS84, which a projected 2D
+            // view's own center.latitude (null there) does not.
+            const latitude = Math.max(-85, Math.min(85, current.readView().center[1]));
+            return mapView.scale / (96 / 0.0254) / Math.cos((latitude * Math.PI) / 180);
+          },
           showPopup: (lngLat, content, maxWidth, onClose) => {
             removePopup();
             if (cancelled || !mapView.container) return;
@@ -375,11 +394,8 @@ export function ArcgisCanvas({
           : attachFeatureSelection(arcgisFeatureSelectionMap(current, mapView), {
               state: featureSelection,
               featureIdAtPoint: (layer, point) => {
-                const at = mapView.toMap(point);
-                return at
-                  ? (current.identifyFeatures([at.longitude, at.latitude], layer.id)[0]
-                      ?.featureId ?? null)
-                  : null;
+                const at = current.lngLatOf(mapView.toMap(point));
+                return at ? (current.identifyFeatures(at, layer.id)[0]?.featureId ?? null) : null;
               },
               onDiagnostic: (event) => diagnosticRef.current?.(event),
               onEnd: () => {
@@ -652,7 +668,7 @@ export function ArcgisCanvas({
           return {
             hover: new Map(
               visible
-                .filter((layer) => isPopupHoverEnabled(layer.popup))
+                .filter((layer) => next.hoverTooltipsEnabled && isPopupHoverEnabled(layer.popup))
                 .map((layer) => [layer.id, layer]),
             ),
             photos: new Set(
@@ -779,6 +795,7 @@ export function ArcgisCanvas({
           // A subscription of its own: `update()` above reacts to Identify for
           // its popup but is defined before these closures exist.
           const stopIdentifyWatch = useAppStore.subscribe((state, previous) => {
+            if (!state.hoverTooltipsEnabled && previous.hoverTooltipsEnabled) removeHoverTip();
             if (state.identifyLayerId && !previous.identifyLayerId) {
               removePhotoPopup();
               removeHoverTip();
@@ -801,9 +818,7 @@ export function ArcgisCanvas({
           mapView.on("pointer-move", (event) => {
             if (viewId) return;
             const point = mapView.toMap({ x: event.x, y: event.y });
-            const coords: [number, number] | null = point
-              ? [point.longitude, point.latitude]
-              : null;
+            const coords = current.lngLatOf(point);
             groundZ = typeof point?.z === "number" && Number.isFinite(point.z) ? point.z : null;
             useAppStore.getState().setPointerCoords(coords);
             pointerElevation?.update(coords);
@@ -824,8 +839,8 @@ export function ArcgisCanvas({
             if (!useAppStore.getState().identifyLayerId) {
               // A click elsewhere closes the photo popup, as MapLibre's does.
               removePhotoPopup();
-              const at = mapView.toMap({ x: event.x, y: event.y });
-              if (at) showPhotoAt([at.longitude, at.latitude]);
+              const at = current.lngLatOf(mapView.toMap({ x: event.x, y: event.y }));
+              if (at) showPhotoAt(at);
               return;
             }
             identify.click({ x: event.x, y: event.y });
@@ -878,10 +893,24 @@ export function ArcgisCanvas({
           if (terrainRestoreError && useAppStore.getState().preferences.map.terrainEnabled)
             errors.push(terrainRestoreError);
           // Each error reaches the Diagnostics log once, when it first shows;
-          // one that clears and comes back is reported again.
-          for (const message of errors)
+          // one that clears and comes back is reported again. A layer's own
+          // failure names the layer, so the app can tell the user which one;
+          // it is keyed by layer too, so two same-named layers failing the
+          // same way are each reported.
+          const layerFailures = current.getLayerLoadErrors();
+          const layerMessages = new Set(layerFailures.values());
+          const shown = new Set<string>();
+          for (const [layerId, message] of layerFailures) {
+            const key = `layer:${layerId}\u0000${message}`;
+            shown.add(key);
+            if (!reported.has(key)) diagnosticRef.current?.({ message, source: "arcgis", layerId });
+          }
+          for (const message of errors) {
+            if (layerMessages.has(message)) continue;
+            shown.add(message);
             if (!reported.has(message)) diagnosticRef.current?.({ message, source: "arcgis" });
-          reported = new Set(errors);
+          }
+          reported = shown;
           setError(errors.length ? errors.join("; ") : null);
         }, 1000);
         // The SDK ships one stylesheet per theme; follow the app's dark-mode
@@ -936,7 +965,7 @@ export function ArcgisCanvas({
         retiring.current.push({ element, engine });
       } else element.remove();
     };
-  }, [apiKey, viewId, engineRef, sceneMode]);
+  }, [apiKey, viewId, engineRef, sceneMode, wkid]);
   // Declared after the effect above so an unmount runs its cleanup (which
   // queues the last view) before this flushes every queued view.
   useEffect(

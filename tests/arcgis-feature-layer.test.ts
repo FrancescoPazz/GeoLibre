@@ -93,6 +93,8 @@ function fakeViewportMap(initial: [number, number, number, number]) {
       getEast: () => east,
       getNorth: () => north,
     }),
+    // Zoomed in far enough that viewport queries load full-resolution GeoJSON.
+    getZoom: () => 14,
     isMoving: () => false,
     on: (event: string, listener: () => void) => listeners.set(event, listener),
     off: (event: string, listener: () => void) => {
@@ -241,7 +243,7 @@ describe("addArcGISLayer (feature layer)", () => {
     app = {
       // The feature path never touches the map; only fitBounds is exercised.
       getMap: () => null,
-      fitBounds: (bounds) => {
+      fitBounds: (bounds: [number, number, number, number]) => {
         fitBoundsCalls.push(bounds);
       },
     } as unknown as GeoLibreAppAPI;
@@ -452,7 +454,7 @@ describe("addArcGISLayer (feature layer)", () => {
     const view = fakeViewportMap([144, -39, 146, -37]);
     app = {
       getMap: () => view.map,
-      fitBounds: (bounds) => fitBoundsCalls.push(bounds),
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
     } as unknown as GeoLibreAppAPI;
 
     const id = await addArcGISLayer(app, {
@@ -465,6 +467,8 @@ describe("addArcGISLayer (feature layer)", () => {
     const initial = useAppStore.getState().layers.find((layer) => layer.id === id);
     assert.equal(initial?.geojson?.features.length, 0);
     assert.equal(initial?.metadata.viewportLoading, true);
+    // Zoom to layer frames the service extent, not the (empty) view.
+    assert.deepEqual(initial?.metadata.bounds, [-160, 18, -154, 23]);
     const move = view.listeners.get("moveend");
     assert.ok(move, "expected a moveend listener");
     assert.equal(requests.length, 1);
@@ -501,6 +505,120 @@ describe("addArcGISLayer (feature layer)", () => {
     assert.deepEqual(view.offCalls, [["moveend", move]]);
   });
 
+  it("asks the server to project a projected-CRS extent without waiting on it", async () => {
+    const extentRequests: URL[] = [];
+    const extentResponses: Array<(response: Response) => void> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (!url.pathname.endsWith("/query")) {
+        return jsonResponse({
+          ...VIEWPORT_LAYER_INFO,
+          // Projected (Nevada State Plane East), but small enough to pass for
+          // degrees: only the WKID says it is not longitude and latitude.
+          extent: {
+            xmin: 10,
+            ymin: 20,
+            xmax: 30,
+            ymax: 40,
+            spatialReference: { wkid: 102707 },
+          },
+        });
+      }
+      if (url.searchParams.get("returnExtentOnly") === "true") {
+        extentRequests.push(url);
+        return new Promise<Response>((resolve) => extentResponses.push(resolve));
+      }
+      return jsonResponse({ type: "FeatureCollection", features: [] });
+    }) as typeof fetch;
+    const projectedExtent = () =>
+      jsonResponse({
+        extent: {
+          xmin: -115.4,
+          ymin: 36.0,
+          xmax: -115.0,
+          ymax: 36.3,
+          spatialReference: { wkid: 4326 },
+        },
+      });
+
+    const view = fakeViewportMap([144, -39, 146, -37]);
+    app = {
+      getMap: () => view.map,
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
+    } as unknown as GeoLibreAppAPI;
+    const add = () =>
+      addArcGISLayer(app, { layerType: "feature", sourceType: "url", url: SERVICE_URL });
+    const layerById = (id: string) => useAppStore.getState().layers.find((item) => item.id === id);
+
+    // The add resolves, fully set up, while the extent request is still out.
+    const id = await add();
+    await settle();
+    assert.equal(extentRequests.length, 1);
+    assert.equal(extentRequests[0].searchParams.get("outSR"), "4326");
+    assert.equal(layerById(id)?.metadata.viewportLoading, true);
+    assert.equal(layerById(id)?.metadata.bounds, undefined);
+    assert.deepEqual(fitBoundsCalls, []);
+
+    extentResponses[0](projectedExtent());
+    await settle();
+    assert.deepEqual(layerById(id)?.metadata.bounds, [-115.4, 36.0, -115.0, 36.3]);
+    assert.deepEqual(fitBoundsCalls, [[-115.4, 36.0, -115.0, 36.3]]);
+    useAppStore.getState().removeLayer(id);
+
+    // A layer removed before its extent lands is left alone.
+    const removed = await add();
+    await settle();
+    useAppStore.getState().removeLayer(removed);
+    extentResponses[1](projectedExtent());
+    await settle();
+    assert.equal(layerById(removed), undefined);
+    assert.equal(fitBoundsCalls.length, 1);
+
+    // The user moved the view while the extent was out: store it, but do not
+    // pull the camera back.
+    const panned = await add();
+    await settle();
+    view.setBounds([150, -35, 152, -33]);
+    extentResponses[2](projectedExtent());
+    await settle();
+    assert.deepEqual(layerById(panned)?.metadata.bounds, [-115.4, 36.0, -115.0, 36.3]);
+    assert.equal(fitBoundsCalls.length, 1);
+    useAppStore.getState().removeLayer(panned);
+  });
+
+  it("reads any geographic WKID's extent as degrees, without asking the server", async () => {
+    let extentRequests = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (!url.pathname.endsWith("/query")) {
+        return jsonResponse({
+          ...VIEWPORT_LAYER_INFO,
+          // GRS 1980 geographic: not WGS84, but degrees all the same.
+          extent: { xmin: 10, ymin: 20, xmax: 30, ymax: 40, spatialReference: { wkid: 4019 } },
+        });
+      }
+      if (url.searchParams.get("returnExtentOnly") === "true") extentRequests += 1;
+      return jsonResponse({ type: "FeatureCollection", features: [] });
+    }) as typeof fetch;
+    const view = fakeViewportMap([144, -39, 146, -37]);
+    app = {
+      getMap: () => view.map,
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
+    } as unknown as GeoLibreAppAPI;
+
+    const id = await addArcGISLayer(app, {
+      layerType: "feature",
+      sourceType: "url",
+      url: SERVICE_URL,
+    });
+    await settle();
+
+    const layer = useAppStore.getState().layers.find((item) => item.id === id);
+    assert.deepEqual(layer?.metadata.bounds, [10, 20, 30, 40]);
+    assert.equal(extentRequests, 0);
+    useAppStore.getState().removeLayer(id);
+  });
+
   it("ignores a superseded viewport query that fails for its own reasons", async () => {
     const rejections: Array<(error: Error) => void> = [];
     let pan = false;
@@ -518,7 +636,7 @@ describe("addArcGISLayer (feature layer)", () => {
     const view = fakeViewportMap([144, -39, 146, -37]);
     app = {
       getMap: () => view.map,
-      fitBounds: (bounds) => fitBoundsCalls.push(bounds),
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
     } as unknown as GeoLibreAppAPI;
 
     const id = await addArcGISLayer(app, {
@@ -562,7 +680,7 @@ describe("addArcGISLayer (feature layer)", () => {
     const view = fakeViewportMap([144, -39, 146, -37]);
     app = {
       getMap: () => view.map,
-      fitBounds: (bounds) => fitBoundsCalls.push(bounds),
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
     } as unknown as GeoLibreAppAPI;
 
     const id = await addArcGISLayer(app, {
@@ -601,7 +719,7 @@ describe("addArcGISLayer (feature layer)", () => {
     const view = fakeViewportMap([170, -20, -170, 20]);
     app = {
       getMap: () => view.map,
-      fitBounds: (bounds) => fitBoundsCalls.push(bounds),
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
     } as unknown as GeoLibreAppAPI;
 
     const id = await addArcGISLayer(app, {
@@ -616,6 +734,46 @@ describe("addArcGISLayer (feature layer)", () => {
     assert.deepEqual([...geometries].sort(), ["-180,-20,-170,20", "170,-20,180,20"]);
     const layer = useAppStore.getState().layers.find((entry) => entry.id === id);
     assert.equal(layer?.geojson?.features.length, 1, "the shared feature is published once");
+  });
+
+  it("treats an envelope that matches nothing as empty, not as a failed query", async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(typeof input === "string" ? input : input.toString());
+      if (!url.pathname.endsWith("/query")) return jsonResponse(VIEWPORT_LAYER_INFO);
+      if (Number(url.searchParams.get("resultOffset") ?? "0") > 0) {
+        return jsonResponse({ type: "FeatureCollection", features: [] });
+      }
+      // What a hosted service answers a quantized query over an empty envelope
+      // with: plain Esri JSON with no `transform`, so not a quantized set either.
+      if (url.searchParams.get("geometry")?.startsWith("170,")) {
+        return jsonResponse({
+          objectIdFieldName: "OBJECTID",
+          uniqueIdField: { name: "OBJECTID", isSystemMaintained: true },
+          globalIdFieldName: "",
+          geometryProperties: { shapeAreaFieldName: "Shape__Area" },
+          features: [],
+        });
+      }
+      return jsonResponse({ type: "FeatureCollection", features: [viewportFeature(1)] });
+    }) as typeof fetch;
+
+    const view = fakeViewportMap([170, -20, -170, 20]);
+    app = {
+      getMap: () => view.map,
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
+    } as unknown as GeoLibreAppAPI;
+
+    const id = await addArcGISLayer(app, {
+      layerType: "feature",
+      sourceType: "url",
+      url: SERVICE_URL,
+    });
+    await settle();
+
+    const layer = useAppStore.getState().layers.find((entry) => entry.id === id);
+    assert.equal(layer?.connection?.lastError ?? null, null);
+    assert.equal(layer?.geojson?.features.length, 1);
+    assert.equal((await reloadArcGISViewportLayer(id))?.features.length, 1);
   });
 
   // The exact body Vicmap_Parcel returns (with HTTP 200) when it exceeds its
@@ -650,7 +808,7 @@ describe("addArcGISLayer (feature layer)", () => {
     const view = fakeViewportMap([144, -39, 146, -37]);
     app = {
       getMap: () => view.map,
-      fitBounds: (bounds) => fitBoundsCalls.push(bounds),
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
     } as unknown as GeoLibreAppAPI;
     const id = await addArcGISLayer(app, {
       layerType: "feature",
@@ -774,7 +932,7 @@ describe("addArcGISLayer (feature layer)", () => {
     const view = fakeViewportMap([170, -20, -170, 20]);
     app = {
       getMap: () => view.map,
-      fitBounds: (bounds) => fitBoundsCalls.push(bounds),
+      fitBounds: (bounds: [number, number, number, number]) => fitBoundsCalls.push(bounds),
     } as unknown as GeoLibreAppAPI;
 
     const id = await addArcGISLayer(app, {
@@ -1190,6 +1348,63 @@ describe("addArcGISLayer (feature layer)", () => {
       fetchUrls.some((url) => url.startsWith(`${serviceUrl}/query`)),
       "expected the resolved service URL to be queried",
     );
+  });
+
+  it("queries a map service layer registered as a Feature Service item", async () => {
+    // City ArcGIS Server sites often register `MapServer/<n>` as a "Feature
+    // Service" item; that layer answers the same GeoJSON queries.
+    const serviceUrl = "https://example.gov/gisweb/rest/services/Boundaries/MapServer/2";
+    const fetchUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      fetchUrls.push(url);
+      if (url.includes("/content/items/")) return jsonResponse({ url: `${serviceUrl}/` });
+      return jsonResponse(url.includes("/query") ? QUERY_GEOJSON : LAYER_INFO);
+    }) as typeof fetch;
+
+    const id = await addArcGISLayer(app, {
+      layerType: "feature",
+      sourceType: "portal-item",
+      itemId: "fed456abc123",
+      name: "Council Districts",
+    });
+
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.type, "geojson");
+    assert.equal(layer?.geojson?.features.length, 1);
+    assert.ok(fetchUrls.some((url) => url.startsWith(`${serviceUrl}/query`)));
+  });
+
+  it("resolves the first feature layer of a MapServer root registered as a Feature Service item", async () => {
+    const mapServerUrl = "https://livingatlas.esri.in/server/rest/services/Cities/Noida/MapServer";
+    const fetchUrls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      fetchUrls.push(url);
+      if (url.includes("/content/items/")) return jsonResponse({ url: mapServerUrl });
+      if (url.startsWith(`${mapServerUrl}?`)) {
+        return jsonResponse({
+          layers: [
+            { id: 0, type: "Group Layer", subLayerIds: [1, 2] },
+            { id: 1, type: "Raster Layer", subLayerIds: null },
+            { id: 2, type: "Feature Layer", subLayerIds: null },
+          ],
+        });
+      }
+      return jsonResponse(url.includes("/query") ? QUERY_GEOJSON : LAYER_INFO);
+    }) as typeof fetch;
+
+    const id = await addArcGISLayer(app, {
+      layerType: "feature",
+      sourceType: "portal-item",
+      itemId: "29a492c3a6174bffac6a37fd134b1756",
+      name: "Noida City Boundary",
+    });
+
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.type, "geojson");
+    assert.equal(layer?.geojson?.features.length, 1);
+    assert.ok(fetchUrls.some((url) => url.startsWith(`${mapServerUrl}/2/query`)));
   });
 });
 

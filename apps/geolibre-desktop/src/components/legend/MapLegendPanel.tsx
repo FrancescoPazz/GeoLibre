@@ -66,6 +66,7 @@ import {
   toggleLegendItemHidden,
 } from "../../lib/print-legend";
 import { useMapPanelControl } from "../../hooks/useMapPanelControl";
+import { graduatedSchemeLabelKey } from "../panels/style-panel/classification-helpers";
 import { GeometrySwatch, GradientBar, MarkerSwatch } from "./LegendSwatch";
 
 /** Class the recorder's MAP_PANEL_SELECTOR matches to burn the panel into videos. */
@@ -556,7 +557,12 @@ export function MapLegendPanel({
       {panelCollapsed ? null : displayed.length === 0 ? (
         <p className="px-3 py-4 text-xs text-muted-foreground">{t("legendPanel.empty")}</p>
       ) : (
-        <ul className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto">
+        <ul
+          // Opt the entries (not the header or edit controls) into View →
+          // Color vision preview, so swatches match the filtered map.
+          data-cvd-filter=""
+          className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto"
+        >
           {displayed.map((entry) => (
             <LegendEntryRow
               key={entry.id}
@@ -741,8 +747,22 @@ function LegendEntryRow({
     0,
   );
   const editingCustom = editing && entry.custom && customEntry;
+  const schemeLabelKey = entry.classification
+    ? graduatedSchemeLabelKey(entry.classification.scheme)
+    : null;
+  const classificationLabel =
+    entry.classification && schemeLabelKey
+      ? t("legendPanel.classification", {
+          method: t(schemeLabelKey),
+          count: entry.classification.classCount,
+        })
+      : null;
   const hasBody = Boolean(
-    entry.fieldLabel || entry.gradient || editingCustom || visibleRows.length > 0,
+    entry.fieldLabel ||
+    classificationLabel ||
+    entry.gradient ||
+    editingCustom ||
+    visibleRows.length > 0,
   );
   // Sections collapse in edit mode only, to keep long legends manageable
   // while rearranging; display mode always shows everything.
@@ -835,6 +855,17 @@ function LegendEntryRow({
       {!bodyCollapsed && entry.fieldLabel && (
         <div className="ms-6 mt-1 truncate text-[10px] font-medium text-muted-foreground">
           {entry.fieldLabel}
+        </div>
+      )}
+
+      {!bodyCollapsed && classificationLabel && (
+        <div
+          className={cn(
+            "ms-6 truncate text-[10px] text-muted-foreground",
+            !entry.fieldLabel && "mt-1",
+          )}
+        >
+          {classificationLabel}
         </div>
       )}
 

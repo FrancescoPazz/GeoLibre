@@ -1,6 +1,7 @@
 import { REGIONAL_BASEMAP_GROUPS, type RegionalBasemap } from "@geolibre/core";
 import { cn } from "@geolibre/ui";
 import { useTranslation } from "react-i18next";
+import { useRegionalBasemapsEnabled } from "../../lib/regional-basemap-policy";
 import { regionalBasemapRegionKey } from "../../lib/regional-sections";
 import { CollapsibleSection } from "../CollapsibleSection";
 
@@ -8,6 +9,8 @@ interface RegionalBasemapSectionProps {
   /** Id of the currently selected basemap, so one button highlights. */
   selectedId?: string;
   onSelect: (basemap: RegionalBasemap) => void;
+  /** Double-click handler, for panels where a double-click also confirms. */
+  onActivate?: (basemap: RegionalBasemap) => void;
 }
 
 /**
@@ -23,12 +26,22 @@ interface RegionalBasemapSectionProps {
  * Collapsed by default, since most users never need a regional basemap, but
  * auto-expanded when one of them is the current selection so an active choice
  * is never hidden behind a closed heading.
+ *
+ * Renders nothing when the deployment disabled regional basemaps
+ * (`basemaps.regional: false`), which removes them from both panels.
  */
-export function RegionalBasemapSection({ selectedId, onSelect }: RegionalBasemapSectionProps) {
+export function RegionalBasemapSection({
+  selectedId,
+  onSelect,
+  onActivate,
+}: RegionalBasemapSectionProps) {
   const { t } = useTranslation();
+  const enabled = useRegionalBasemapsEnabled();
   const selectionIsRegional = REGIONAL_BASEMAP_GROUPS.some((group) =>
     group.basemaps.some((basemap) => basemap.id === selectedId),
   );
+
+  if (!enabled) return null;
 
   return (
     <CollapsibleSection
@@ -55,6 +68,7 @@ export function RegionalBasemapSection({ selectedId, onSelect }: RegionalBasemap
                       : "border-input bg-background",
                   )}
                   onClick={() => onSelect(basemap)}
+                  onDoubleClick={onActivate ? () => onActivate(basemap) : undefined}
                 >
                   {basemap.name}
                 </button>

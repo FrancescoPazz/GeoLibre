@@ -264,6 +264,29 @@ def test_apply_style_merges_rather_than_replaces(proj):
     assert merged["strokeWidth"] == project.DEFAULT_LAYER_STYLE["strokeWidth"]
 
 
+def test_apply_style_synchronizes_top_level_project_styles(proj):
+    layer_id = proj["layers"][0]["id"]
+    proj["styles"] = {layer_id: {**project.DEFAULT_LAYER_STYLE, "strokeDash": []}}
+    merged = authoring.apply_style(proj, "Cities", {"strokeDash": [4, 2], "strokeOpacity": 0.5})
+    assert merged["strokeDash"] == [4, 2]
+    assert proj["styles"][layer_id]["strokeDash"] == [4, 2]
+    assert proj["styles"][layer_id]["strokeOpacity"] == 0.5
+
+
+def test_set_labels_and_remove_layer_synchronize_top_level_project_styles(proj):
+    layer_id = proj["layers"][0]["id"]
+    proj["styles"] = {layer_id: {**project.DEFAULT_LAYER_STYLE}}
+    labels = authoring.set_labels(proj, "Cities", "name", size=14)
+    assert proj["styles"][layer_id]["labels"] == labels
+    # When layer.style["labels"] is stale, set_labels merges from the authoritative top-level entry.
+    proj["layers"][0]["style"]["labels"] = {**labels, "field": "stale_field"}
+    hidden = authoring.set_labels(proj, "Cities", enabled=False)
+    assert hidden["field"] == "name"
+    assert proj["styles"][layer_id]["labels"] == hidden
+    authoring.remove_layer(proj, "Cities")
+    assert layer_id not in proj["styles"]
+
+
 def test_apply_style_rejects_a_non_mapping(proj):
     with pytest.raises(ValueError, match="must be an object"):
         authoring.apply_style(proj, "Cities", ["fillColor", "#ff0000"])
@@ -416,6 +439,54 @@ def test_add_legend_rejects_combined_sources(proj):
 def test_add_legend_rejects_a_bad_shape(proj):
     with pytest.raises(ValueError, match="shape must be one of"):
         authoring.add_legend(proj, legend_dict={"a": "#111"}, shape="hexagon")
+
+
+def test_set_map_legend_writes_the_project_legend(proj):
+    legend = authoring.set_map_legend(proj, "Cases per 100k", position="bottom-right")
+    assert proj["legend"] is legend
+    assert legend == {
+        "title": "Cases per 100k",
+        "groupByLayer": True,
+        "order": [],
+        "overrides": {},
+        "panelPosition": "bottom-right",
+        "panelVisible": True,
+    }
+    # It is the app's own legend panel, not a Components plugin control.
+    assert project.COMPONENTS_PLUGIN_ID not in proj.get("plugins", {}).get("settings", {})
+    assert "map-legend" in authoring.describe_project(proj)["mapControls"]
+
+
+def test_set_map_legend_keeps_saved_customizations(proj):
+    proj["legend"] = {
+        "title": "Old",
+        "groupByLayer": True,
+        "order": ["a"],
+        "overrides": {"a:0": {"label": "Renamed"}},
+        "panelVisible": True,
+        "panelPosition": "top-right",
+    }
+    legend = authoring.set_map_legend(proj, group_by_layer=False, visible=False)
+    assert legend["title"] == "Old"
+    assert legend["groupByLayer"] is False
+    assert legend["order"] == ["a"]
+    assert legend["overrides"] == {"a:0": {"label": "Renamed"}}
+    assert legend["panelPosition"] == "top-right"
+    assert "panelVisible" not in legend
+
+
+def test_set_map_legend_keeps_the_panel_state_when_omitted(proj):
+    authoring.set_map_legend(proj, collapsed=True)
+    authoring.set_map_legend(proj, visible=False)
+    legend = authoring.set_map_legend(proj, "Renamed")
+    assert legend["title"] == "Renamed"
+    assert "panelVisible" not in legend
+    assert legend["panelCollapsed"] is True
+
+
+def test_set_map_legend_rejects_a_bad_position(proj):
+    with pytest.raises(ValueError, match="position must be one of"):
+        authoring.set_map_legend(proj, position="middle")
 
 
 def test_adding_a_colorbar_keeps_an_existing_legend(proj):

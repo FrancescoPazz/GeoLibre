@@ -261,6 +261,7 @@ describe("provider registry", () => {
     const ids = GEOCODING_PROVIDERS.map((p) => p.id).sort();
     assert.deepEqual(ids, [
       "arcgis",
+      "arcgis-locator",
       "cartociudad",
       "google",
       "mapbox",

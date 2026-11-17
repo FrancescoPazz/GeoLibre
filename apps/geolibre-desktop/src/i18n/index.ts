@@ -1,6 +1,7 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
+import { notify } from "../lib/notify";
 import { DESKTOP_SETTINGS_STORAGE_KEY } from "../lib/storage-keys";
 import {
   fetchLanguagePack,
@@ -15,7 +16,7 @@ import {
   loadInstalledLanguagePack,
   saveInstalledLanguagePack,
 } from "../lib/language-pack-store";
-import { DEFAULT_LANGUAGE, languageDirection, resolveLanguage } from "./languages";
+import { DEFAULT_LANGUAGE, LANGUAGE_NAMES, languageDirection, resolveLanguage } from "./languages";
 import enTranslation from "./locales/en.json";
 
 /**
@@ -332,6 +333,7 @@ export const i18nReady: Promise<unknown> = (async () => {
   // English is already bundled; preload only a non-default initial locale so its
   // strings are present on the very first paint.
   let effectiveLanguage = initialLanguage;
+  let catalogFailed = false;
   if (initialLanguage !== DEFAULT_LANGUAGE && loaders[initialLanguage]) {
     try {
       const mod = await loaders[initialLanguage]();
@@ -344,6 +346,7 @@ export const i18nReady: Promise<unknown> = (async () => {
       // (wrong RTL direction for e.g. Arabic). The user can switch once online.
       console.error("[GeoLibre] Failed to load initial locale catalog; using English", error);
       effectiveLanguage = DEFAULT_LANGUAGE;
+      catalogFailed = true;
     }
   }
 
@@ -355,6 +358,11 @@ export const i18nReady: Promise<unknown> = (async () => {
     resources,
     lng: effectiveLanguage,
     fallbackLng: DEFAULT_LANGUAGE,
+    // The active language is always a shipped catalog code (`resolveLanguage`),
+    // so skip i18next's region → base walk. Without this a key missing from
+    // `zh-TW` would show Simplified `zh` text, but only when that catalog
+    // happened to be loaded earlier in the session; with it, English.
+    load: "currentOnly",
     defaultNS: "translation",
     interpolation: {
       // React already escapes rendered values, so i18next double-escaping would
@@ -367,6 +375,16 @@ export const i18nReady: Promise<unknown> = (async () => {
     returnNull: false,
   });
   await applyPersistedLanguagePack(effectiveLanguage);
+  if (catalogFailed) {
+    // Otherwise the app simply opens in English with no hint why. Worded in
+    // English, which is what the UI is now showing.
+    notify.warning(
+      i18n.t("notifications.languageCatalogFailed", {
+        language: LANGUAGE_NAMES[initialLanguage]?.nativeName ?? initialLanguage,
+      }),
+      { dedupeKey: "initial-language-catalog" },
+    );
+  }
   return i18n;
 })();
 

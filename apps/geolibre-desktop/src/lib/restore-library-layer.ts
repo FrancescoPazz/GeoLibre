@@ -12,12 +12,14 @@
 // is exactly what the project-load path relies on, so invoking one for a single
 // new layer is safe.
 
+import i18next from "i18next";
 import {
   controlRendersLayer,
   isExternalNativeLayerRecord,
   type GeoLibreLayer,
 } from "@geolibre/core";
 import {
+  ADOPTED_VECTOR_SOURCE_KIND,
   LIDAR_SOURCE_KIND,
   PLANETARY_COMPUTER_SOURCE_KIND,
   RASTER_SOURCE_KIND,
@@ -30,6 +32,7 @@ import {
   VECTOR_SOURCE_KIND,
   type GeoLibreAppAPI,
 } from "@geolibre/plugins";
+import { notify } from "./notify";
 
 /**
  * `metadata.sourceKind` values of the control-painted layer kinds whose restore
@@ -44,6 +47,9 @@ import {
  */
 const RESTORE_BY_SOURCE_KIND: Record<string, (app: GeoLibreAppAPI) => void | Promise<void>> = {
   [VECTOR_SOURCE_KIND]: restoreVectorLayers,
+  // GeoLibre renders an adopted layer, but one re-added from a path-only entry
+  // has no features until the vector control reads the file again.
+  [ADOPTED_VECTOR_SOURCE_KIND]: restoreVectorLayers,
   [RASTER_SOURCE_KIND]: restoreRasterLayers,
   [PLANETARY_COMPUTER_SOURCE_KIND]: restorePlanetaryComputerLayers,
   [THREE_D_TILES_SOURCE_KIND]: restoreThreeDTilesLayers,
@@ -112,21 +118,41 @@ export function canRestoreLibraryLayer(layer: GeoLibreLayer): boolean {
  * project-load path shares — out of scope here, so the caller's busy flag covers
  * the dispatch window rather than the full re-ingest.
  *
- * @param layer - The layer just added from the Layer Library.
+ * Project History's "Restore this layer" re-adds a layer the same way and
+ * reuses this for the same reason.
+ *
+ * @param layer - The layer just re-added (from the Layer Library or a project
+ *   snapshot).
  * @param app - The plugin app API (from `createAppAPI`).
+ * @param options - `failureNotice` builds the error notice text shown
+ *   when the pass throws or rejects (defaults to the Layer Library's). A pass
+ *   that settles its replays internally (the vector pass) logs a failed
+ *   re-read instead, the same as on project load, so this does not fire then.
  * @returns Resolves once the pass has been dispatched (immediately when none was
  *   needed). The passes log their own per-layer failures.
  */
 export async function restoreLibraryLayer(
   layer: GeoLibreLayer,
   app: GeoLibreAppAPI,
+  options: { failureNotice?: (name: string) => string } = {},
 ): Promise<void> {
-  if (!isExternalNativeLayerRecord(layer)) return;
+  // An adopted vector entry saved by path alone carries no features, so it
+  // needs its pass even though GeoLibre, not a control, renders it.
+  const adoptedWithoutFeatures =
+    layer.metadata.sourceKind === ADOPTED_VECTOR_SOURCE_KIND && !layer.geojson;
+  if (!isExternalNativeLayerRecord(layer) && !adoptedWithoutFeatures) return;
   const restore = restorePassFor(layer);
   if (!restore) return;
   try {
     await restore(app);
   } catch (error) {
-    console.error("[GeoLibre] Failed to restore a layer added from My Data", error);
+    console.error(`[GeoLibre] Failed to redraw the re-added layer "${layer.name}"`, error);
+    notify.error(
+      options.failureNotice?.(layer.name) ??
+        i18next.t("notifications.libraryLayerRestoreFailed", {
+          name: layer.name,
+        }),
+      { error },
+    );
   }
 }

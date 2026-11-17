@@ -1,8 +1,8 @@
-import { interpolateRampColors, type GeoLibreLayer } from "@geolibre/core";
+import { interpolateRampColors, withDatumShift, type GeoLibreLayer } from "@geolibre/core";
 import proj4 from "proj4";
 import type { ArcgisRasterLayer, ArcgisSdk } from "./arcgis-sdk";
 import { assertSecureRequestHeaders } from "./kerchunk-reference-store";
-import { getZarrStore } from "./zarr-source";
+import { getZarrStore, zarrRequestHeaders } from "./zarr-source";
 import { cssToArcgisColor } from "./arcgis-layers";
 
 async function projectionFromWgs84(crs: string, signal: AbortSignal) {
@@ -16,7 +16,8 @@ async function projectionFromWgs84(crs: string, signal: AbortSignal) {
     const { toProj4 } = await import("geotiff-geokeys-to-proj4");
     signal.throwIfAborted();
     const resolved = toProj4({ ProjectedCSTypeGeoKey: Number(epsg[1]) } as never);
-    const definition = resolved.proj4?.replace(/\+axis=\w+\s*/g, "").trim();
+    const raw = resolved.proj4?.replace(/\+axis=\w+\s*/g, "").trim();
+    const definition = raw ? withDatumShift(raw, Number(epsg[1])) : raw;
     if (!definition || resolved.errors?.CRSNotSupported)
       throw new Error(`Could not resolve ${name} to a proj4 definition`);
     proj4.defs(name, definition);
@@ -33,27 +34,25 @@ export async function openArcgisZarrGrid(layer: GeoLibreLayer, signal: AbortSign
   const cache = new Map<string, Uint8Array | undefined>();
   let cacheBytes = 0;
   const refs = source.kerchunkRefs;
+  const headers = zarrRequestHeaders(layer);
   const referenceStore = refs
     ? new (await import("./kerchunk-reference-store")).KerchunkReferenceStore(
         refs as import("./kerchunk-reference-store").KerchunkRefs,
         {
-          headers: source.headers as Record<string, string> | undefined,
+          headers,
           sourceUrl: String(source.url),
         },
       )
     : undefined;
   if (!referenceStore && !getZarrStore(layer.id))
-    assertSecureRequestHeaders(
-      String(source.url),
-      source.headers as Record<string, string> | undefined,
-    );
+    assertSecureRequestHeaders(String(source.url), headers);
   const base =
     getZarrStore(layer.id) ??
     referenceStore ??
     new zarr.FetchStore(String(source.url), {
       overrides: {
-        headers: source.headers as Record<string, string> | undefined,
-        ...(source.headers && Object.keys(source.headers).length ? { redirect: "error" } : {}),
+        headers,
+        ...(headers && Object.keys(headers).length ? { redirect: "error" } : {}),
       },
     });
   const store = zarr.withByteCaching(base, {

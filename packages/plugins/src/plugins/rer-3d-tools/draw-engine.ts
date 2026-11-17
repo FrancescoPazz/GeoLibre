@@ -1,10 +1,5 @@
-import type {
-  Cartesian2,
-  Cartesian3,
-  Entity,
-  ScreenSpaceEventHandler,
-  TerrainProvider,
-} from "@cesium/engine";
+import type { Cartesian2, Cartesian3 } from "@cesium/core";
+import type { Entity, ScreenSpaceEventHandler, TerrainProvider } from "@cesium/engine";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import {
   angleArc,

@@ -13,19 +13,24 @@ import {
   MAX_ASSISTANT_GUIDANCE_LENGTH,
 } from "../packages/plugins/src/assistant-tool-registry";
 import { PluginManager } from "../packages/plugins/src/plugin-manager";
-import type { GeoLibreAppAPI, GeoLibrePlugin } from "../packages/plugins/src/types";
+import type {
+  AssistantToolSpec,
+  GeoLibreAppAPI,
+  GeoLibrePlugin,
+} from "../packages/plugins/src/types";
 
 const owners = ["test", "other", "a_b", "a"];
 afterEach(() => owners.forEach(unregisterAssistantToolsByOwner));
-const spec = (callback = (input: unknown): unknown => input) => ({
+const spec = (callback: AssistantToolSpec["callback"] = (input) => input) => ({
   name: "echo",
   description: "Echo input",
   callback,
   inputSchema: { type: "object" as const, properties: { value: { type: "string" as const } } },
 });
-async function run(registered: Tool, input: unknown) {
+async function run(registered: Tool, input: unknown, cancelSignal?: AbortSignal) {
   const stream = registered.stream({
     toolUse: { name: registered.name, toolUseId: "test-use", input },
+    cancelSignal,
   } as ToolContext);
   let result = await stream.next();
   while (!result.done) result = await stream.next();
@@ -96,6 +101,43 @@ test("scoped names cannot collide across ambiguous owner/name joins", () => {
   assert.throws(() => registerAssistantToolSpec({ ...spec(), name: "ECHO" }, "test"), /conflicts/);
 });
 
+test("spec callbacks receive the cancel signal so Stop can interrupt a running tool", async () => {
+  const controller = new AbortController();
+  let seen: AbortSignal | undefined;
+  registerAssistantToolSpec(
+    spec(
+      (_input, context) =>
+        new Promise((resolve, reject) => {
+          seen = context?.signal;
+          context?.signal.addEventListener("abort", () => reject(new Error("stopped")));
+        }),
+    ),
+    "test",
+  );
+  const [registered] = listAssistantTools();
+  const pending = run(registered, {}, controller.signal);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(seen, controller.signal);
+  controller.abort();
+  const result = await pending;
+  assert.equal(result.status, "error");
+});
+
+test("spec callbacks get a live signal even when the tool context has none", async () => {
+  let seen: AbortSignal | undefined;
+  registerAssistantToolSpec(
+    spec((_input, context) => {
+      seen = context?.signal;
+      return { aborted: context?.signal.aborted };
+    }),
+    "test",
+  );
+  const [registered] = listAssistantTools();
+  assert.equal((await run(registered, {})).status, "success");
+  assert.ok(seen instanceof AbortSignal);
+  assert.equal(seen.aborted, false);
+});
+
 const app = {
   registerAssistantTool,
   registerAssistantToolSpec,
@@ -158,7 +200,12 @@ test("registration is activation-only: an inactive plugin cannot add a tool", ()
   });
   manager.applyPluginState("test", app, { any: "state" });
   manager.restoreProjectState(
-    { activePluginIds: [], mapControlPositions: {}, settings: { test: { any: "state" } } },
+    {
+      manifestUrls: [],
+      activePluginIds: [],
+      mapControlPositions: {},
+      settings: { test: { any: "state" } },
+    },
     app,
   );
   assert.deepEqual(seen, [undefined, undefined]);

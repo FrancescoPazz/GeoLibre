@@ -224,13 +224,24 @@ export interface AnnotationLabels {
   moveToLayer: string;
   textPlaceholder: string;
   pinTitlePrompt: string;
+  /** Title label for the sticky-note and placed-image editors. */
+  titlePrompt: string;
   pinDescPrompt: string;
+  pinDescPlaceholder: string;
   stickyNotePrompt: string;
+  stickyNotePlaceholder: string;
   imageUrlPrompt: string;
   cancel: string;
   saveElement: string;
   atPoint: string;
   pinnedToExtent: string;
+  /** Label of the color picker in the element editor. */
+  editorColor: string;
+  /** Empty state of the Elements panel. */
+  noElements: string;
+  moveUp: string;
+  moveDown: string;
+  deleteElement: string;
 }
 
 let labels: AnnotationLabels = {
@@ -260,13 +271,21 @@ let labels: AnnotationLabels = {
   moveToLayer: "Move to layer",
   textPlaceholder: "Type label, Enter to place",
   pinTitlePrompt: "Pin title:",
+  titlePrompt: "Title",
   pinDescPrompt: "Pin description (optional):",
+  pinDescPlaceholder: "Optional description…",
   stickyNotePrompt: "Sticky note text:",
+  stickyNotePlaceholder: "Type note details…",
   imageUrlPrompt: "Image URL or Data URI:",
   cancel: "Cancel",
   saveElement: "Save Element",
   atPoint: "At Point",
   pinnedToExtent: "Pinned to Extent",
+  editorColor: "Color",
+  noElements: "No map elements yet.",
+  moveUp: "Move Up",
+  moveDown: "Move Down",
+  deleteElement: "Delete",
 };
 
 /**
@@ -551,14 +570,9 @@ function showElementPopup(map: maplibregl.Map, lngLat: maplibregl.LngLat, featur
     left: ${left}px;
     top: ${top}px;
     width: 200px;
-    background: var(--geolibre-bg, #ffffff);
-    color: var(--geolibre-fg, #111827);
-    border: 1px solid var(--geolibre-border, #e5e7eb);
-    border-radius: 8px;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
     padding: 10px;
     z-index: 60;
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
     font-size: 12px;
     box-sizing: border-box;
   `;
@@ -1152,14 +1166,9 @@ function openElementDialog(
     left: ${left}px;
     top: ${top}px;
     width: ${boxWidth}px;
-    background: var(--geolibre-bg, #ffffff);
-    color: var(--geolibre-fg, #111827);
-    border: 1px solid var(--geolibre-border, #e5e7eb);
-    border-radius: 8px;
-    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.15), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
     padding: 12px;
     z-index: 50;
-    font-family: system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
     font-size: 13px;
   `;
 
@@ -1190,7 +1199,7 @@ function openElementDialog(
   const titleLabel = document.createElement("label");
   titleLabel.style.cssText =
     "display: block; font-size: 11px; font-weight: 500; margin-bottom: 3px; color: var(--geolibre-fg-muted, #6b7280);";
-  titleLabel.textContent = type === "pin" ? labels.pinTitlePrompt : "Title";
+  titleLabel.textContent = type === "pin" ? labels.pinTitlePrompt : labels.titlePrompt;
   container.appendChild(titleLabel);
 
   const titleInput = document.createElement("input");
@@ -1214,7 +1223,7 @@ function openElementDialog(
       btn.dataset.mode = mode;
       btn.style.cssText = `flex: 1; padding: 5px 0; border-radius: 6px; border: 1px solid var(--geolibre-border, #d1d5db); font-size: 11px; cursor: pointer; transition: background 0.15s; ${
         mode === "point"
-          ? "background: var(--geolibre-primary, #3b82f6); color: #fff; border-color: var(--geolibre-primary, #3b82f6);"
+          ? "background: var(--geolibre-primary); color: hsl(var(--primary-foreground)); border-color: var(--geolibre-primary);"
           : "background: transparent; color: inherit;"
       }`;
       btn.onclick = (e) => {
@@ -1223,13 +1232,13 @@ function openElementDialog(
         for (const child of modeRow.children) {
           const el = child as HTMLButtonElement;
           if (el.dataset.mode === mode) {
-            el.style.background = "var(--geolibre-primary, #3b82f6)";
-            el.style.color = "#fff";
-            el.style.borderColor = "var(--geolibre-primary, #3b82f6)";
+            el.style.background = "var(--geolibre-primary)";
+            el.style.color = "hsl(var(--primary-foreground))";
+            el.style.borderColor = "var(--geolibre-primary)";
           } else {
             el.style.background = "transparent";
             el.style.color = "inherit";
-            el.style.borderColor = "var(--geolibre-border, #d1d5db)";
+            el.style.borderColor = "var(--geolibre-border)";
           }
         }
       };
@@ -1263,7 +1272,8 @@ function openElementDialog(
 
     descInput = document.createElement("textarea");
     descInput.rows = 3;
-    descInput.placeholder = type === "pin" ? "Optional description..." : "Type note details...";
+    descInput.placeholder =
+      type === "pin" ? labels.pinDescPlaceholder : labels.stickyNotePlaceholder;
     descInput.style.cssText =
       "width: 100%; box-sizing: border-box; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--geolibre-border, #d1d5db); background: var(--geolibre-bg-subtle, #f9fafb); color: inherit; font-size: 12px; resize: vertical; margin-bottom: 8px;";
     container.appendChild(descInput);
@@ -1276,7 +1286,7 @@ function openElementDialog(
   const colorLabel = document.createElement("span");
   colorLabel.style.cssText =
     "font-size: 11px; font-weight: 500; color: var(--geolibre-fg-muted, #6b7280);";
-  colorLabel.textContent = "Color";
+  colorLabel.textContent = labels.editorColor;
   colorRow.appendChild(colorLabel);
 
   const colorInput = document.createElement("input");
@@ -1308,7 +1318,7 @@ function openElementDialog(
   saveBtn.type = "button";
   saveBtn.textContent = labels.saveElement;
   saveBtn.style.cssText =
-    "padding: 5px 10px; border-radius: 6px; border: none; background: var(--geolibre-primary, #3b82f6); color: #ffffff; font-size: 12px; font-weight: 500; cursor: pointer;";
+    "padding: 5px 10px; border-radius: 6px; border: none; background: var(--geolibre-primary); color: hsl(var(--primary-foreground)); font-size: 12px; font-weight: 500; cursor: pointer;";
   saveBtn.onclick = (e) => {
     e.stopPropagation();
     const enteredTitle = titleInput.value.trim();
@@ -1320,7 +1330,7 @@ function openElementDialog(
 
     if (type === "placed_image" && !description) {
       if (descInput) {
-        descInput.style.borderColor = "var(--geolibre-error, #ef4444)";
+        descInput.style.borderColor = "hsl(var(--destructive))";
         descInput.focus();
       }
       return;
@@ -2147,7 +2157,7 @@ export function renderElementsPanel(container: HTMLElement): () => void {
   container.innerHTML = "";
   container.className = "geolibre-elements-panel";
   container.style.cssText =
-    "--geolibre-bg:hsl(var(--card)); --geolibre-bg-subtle:hsl(var(--accent)); --geolibre-fg:hsl(var(--foreground)); --geolibre-fg-muted:hsl(var(--muted-foreground)); --geolibre-border:hsl(var(--border)); padding: 12px; font-family: system-ui, -apple-system, sans-serif; font-size: 13px; color: var(--geolibre-fg, #1f2937); height: 100%; box-sizing: border-box; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;";
+    "padding: 12px; font-family: var(--font-sans); font-size: 13px; color: var(--geolibre-fg); height: 100%; box-sizing: border-box; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;";
 
   let editingId: string | null = null;
 
@@ -2258,8 +2268,8 @@ export function renderElementsPanel(container: HTMLElement): () => void {
 
     if (elements.length === 0) {
       const empty = document.createElement("div");
-      empty.style.cssText = "color: #9ca3af; text-align: center; padding: 24px 0;";
-      empty.textContent = "No map elements yet.";
+      empty.style.cssText = "color: var(--geolibre-fg-muted); text-align: center; padding: 24px 0;";
+      empty.textContent = labels.noElements;
       container.appendChild(empty);
       return;
     }
@@ -2319,7 +2329,7 @@ export function renderElementsPanel(container: HTMLElement): () => void {
         width.title = labels.width;
         for (const field of [input, description, width]) {
           field.style.cssText =
-            "width:100%; box-sizing:border-box; font-size:12px; padding:4px; border:1px solid #3b82f6; border-radius:3px;";
+            "width:100%; box-sizing:border-box; font-size:12px; padding:4px; border:1px solid hsl(var(--border)); border-radius:3px;";
         }
         const commit = () => {
           const val = input.value.trim();
@@ -2360,7 +2370,7 @@ export function renderElementsPanel(container: HTMLElement): () => void {
         save.type = "button";
         save.textContent = labels.saveElement;
         save.style.cssText =
-          "border: none; background: none; cursor: pointer; color: #2563eb; padding: 2px;";
+          "border: none; background: none; cursor: pointer; color: hsl(var(--primary)); padding: 2px;";
         save.onclick = commit;
         titleContainer.appendChild(save);
         setTimeout(() => input.focus(), 10);
@@ -2412,7 +2422,7 @@ export function renderElementsPanel(container: HTMLElement): () => void {
 
       const up = document.createElement("button");
       up.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>`;
-      up.title = "Move Up";
+      up.title = labels.moveUp;
       up.style.cssText = actionButtonStyle;
       up.disabled = index === 0;
       up.addEventListener("click", (e) => {
@@ -2423,7 +2433,7 @@ export function renderElementsPanel(container: HTMLElement): () => void {
 
       const down = document.createElement("button");
       down.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>`;
-      down.title = "Move Down";
+      down.title = labels.moveDown;
       down.style.cssText = actionButtonStyle;
       down.disabled = index === elements.length - 1;
       down.addEventListener("click", (e) => {
@@ -2492,8 +2502,8 @@ export function renderElementsPanel(container: HTMLElement): () => void {
 
       const del = document.createElement("button");
       del.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
-      del.title = "Delete";
-      del.style.cssText = `${actionButtonStyle} color:#ef4444;`;
+      del.title = labels.deleteElement;
+      del.style.cssText = `${actionButtonStyle} color:hsl(var(--destructive));`;
       del.addEventListener("click", (e) => {
         e.stopPropagation();
         deleteElementById(el.id);

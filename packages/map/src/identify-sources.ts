@@ -1,4 +1,10 @@
-import { formatPixelValue, type GeoLibreLayer } from "@geolibre/core";
+import {
+  ARCGIS_IMAGE_SERVICE_SOURCE_KIND,
+  formatPixelValue,
+  type GeoLibreLayer,
+  isPlanetaryComputerLayer,
+} from "@geolibre/core";
+import { DEFAULT_IDENTIFY_ALL_LABELS, type MapCanvasIdentifyAllLabels } from "./identify-all-popup";
 
 // Identify sources other than rendered vector features: WMS GetFeatureInfo,
 // the DuckDB and Time Slider plugin bridges, and pixel readings. Engine-neutral
@@ -12,7 +18,15 @@ const WEB_MERCATOR_WORLD_SIZE = 2 * Math.PI * WEB_MERCATOR_EARTH_RADIUS;
 const MAPLIBRE_TILE_SIZE = 512;
 const WMS_IDENTIFY_QUERY_SIZE = 101;
 const WMS_IDENTIFY_QUERY_CENTER = Math.floor(WMS_IDENTIFY_QUERY_SIZE / 2);
-const WMS_IDENTIFY_INFO_FORMATS = ["application/json", "text/html", "text/plain"];
+// application/geojson is what ArcGIS (and some MapServer) WMS servers answer in
+// JSON; it follows application/json so a server offering only that one, like
+// GeoServer, is not charged an extra round trip on every click (#2945).
+const WMS_IDENTIFY_INFO_FORMATS = [
+  "application/json",
+  "application/geojson",
+  "text/html",
+  "text/plain",
+];
 
 export interface DuckDBIdentifyBridgeResult {
   coordinate: [number, number] | null;
@@ -59,6 +73,16 @@ export function isWmsLayer(layer: GeoLibreLayer): boolean {
   return layer.type === "wms";
 }
 
+/**
+ * Whether a WMS layer answers GetFeatureInfo. Only `source.queryable: false`,
+ * written when the capabilities mark every requested layer `queryable="0"`,
+ * says no; a layer without the information (added by URL, an older project) is
+ * queried as before (#2887).
+ */
+export function isWmsQueryable(layer: GeoLibreLayer): boolean {
+  return layer.source.queryable !== false;
+}
+
 export function duckDBBridge(): GeoLibreDuckDBBridge | undefined {
   return typeof window === "undefined"
     ? undefined
@@ -82,6 +106,16 @@ export function timeSliderBridge(): GeoLibreTimeSliderBridge | undefined {
  */
 export function isPixelIdentifyLayer(layer: GeoLibreLayer): boolean {
   return layer.metadata.pixelIdentify === true;
+}
+
+/**
+ * Whether Identify reads this layer's pixel values through the application's
+ * raster bridge (`identifyRasterLayerAt`) although it is neither a COG nor a
+ * NetCDF grid. A Planetary Computer layer is drawn from rendered tiles, so its
+ * source values are read from the Data API by the plugin that owns it.
+ */
+export function isBridgedRasterIdentifyLayer(layer: GeoLibreLayer): boolean {
+  return isPlanetaryComputerLayer(layer) && layer.metadata.identifiable !== false;
 }
 
 /** Turn a pixel reading into the flat key/value rows the identify popup shows. */
@@ -148,10 +182,135 @@ function wmsIdentifyResolution(zoom: number): number {
   return WEB_MERCATOR_WORLD_SIZE / (MAPLIBRE_TILE_SIZE * 2 ** normalizedZoom);
 }
 
-function wmsIdentifyBbox3857(lngLat: [number, number], zoom: number): string {
+function wmsIdentifyBbox3857(lngLat: [number, number], zoom: number): number[] {
   const [centerX, centerY] = lngLatToWebMercator(lngLat[0], lngLat[1]);
   const halfSpan = (WMS_IDENTIFY_QUERY_SIZE * wmsIdentifyResolution(zoom)) / 2;
-  return [centerX - halfSpan, centerY - halfSpan, centerX + halfSpan, centerY + halfSpan].join(",");
+  return [centerX - halfSpan, centerY - halfSpan, centerX + halfSpan, centerY + halfSpan];
+}
+
+function webMercatorToLngLat(x: number, y: number): [number, number] {
+  const lng = (x / WEB_MERCATOR_EARTH_RADIUS) * (180 / Math.PI);
+  const lat = Math.atan(Math.sinh(y / WEB_MERCATOR_EARTH_RADIUS)) * (180 / Math.PI);
+  return [lng, lat];
+}
+
+/** A WMS layer's CRS, as the identify query box needs it. */
+export interface WmsIdentifyProjection {
+  /**
+   * Longitude/latitude to easting/northing (or longitude/latitude) in the
+   * layer's CRS, always east first: the EPSG axis order is `northFirst`'s job.
+   */
+  forward: (lngLat: [number, number]) => [number, number];
+  /** Whether the EPSG axis order is north first: WMS 1.3.0 writes the BBOX that way. */
+  northFirst: boolean;
+}
+
+/** Resolves an `EPSG:<code>` CRS, or null when it is unknown. */
+export type WmsIdentifyProjectionResolver = (crs: string) => Promise<WmsIdentifyProjection | null>;
+
+let wmsIdentifyProjectionResolver: WmsIdentifyProjectionResolver | null = null;
+
+/**
+ * Lets GetFeatureInfo reach a WMS layer drawn in a projected CRS. The desktop
+ * tile protocol reprojects such layers with its bundled EPSG tables, which this
+ * package does not carry, so the desktop installs the same lookup here.
+ *
+ * @param resolver The resolver to use, or null to remove it.
+ */
+export function setWmsIdentifyProjectionResolver(
+  resolver: WmsIdentifyProjectionResolver | null,
+): void {
+  wmsIdentifyProjectionResolver = resolver;
+}
+
+// Mirrors GEOGRAPHIC_WMS_CRS in the desktop's wms-geographic.ts: the CRSs whose
+// tiles the desktop requests in degrees without the EPSG tables.
+const GEOGRAPHIC_WMS_CRS = new Set(["EPSG:4326", "EPSG:4258", "EPSG:6706", "CRS:84"]);
+const WEB_MERCATOR_CRS = new Set(["EPSG:3857", "EPSG:900913"]);
+
+/**
+ * The CRS the layer's GetMap tiles are requested in: `source.crs`, or else the
+ * CRS/SRS of the tile template, where Python's `wms_layer` and the MCP tools
+ * write it. The desktop wraps the template as `geolibre-wms://tile?url=...`.
+ */
+function wmsLayerCrs(layer: GeoLibreLayer): string | undefined {
+  const crs = stringSource(layer.source.crs);
+  if (crs) return crs;
+  const tiles = layer.source.tiles;
+  const template = Array.isArray(tiles) ? stringSource(tiles[0]) : undefined;
+  if (!template) return undefined;
+  try {
+    const url = new URL(template);
+    const wrapped = url.protocol === "geolibre-wms:" ? url.searchParams.get("url") : null;
+    const params = wrapped ? new URL(wrapped).searchParams : url.searchParams;
+    for (const [key, value] of params) {
+      if (key.toLowerCase() === "crs" || key.toLowerCase() === "srs") return stringSource(value);
+    }
+  } catch {
+    // Not an absolute URL: no CRS to read.
+  }
+  return undefined;
+}
+
+/** The installed resolver's projection for `crs`, or null without one. */
+async function resolveWmsIdentifyProjection(crs: string): Promise<WmsIdentifyProjection | null> {
+  try {
+    return (await wmsIdentifyProjectionResolver?.(crs)) ?? null;
+  } catch {
+    // A resolver that throws, or rejects, is a CRS it cannot resolve.
+    return null;
+  }
+}
+
+/**
+ * The CRS and BBOX of the identify query, in the CRS the layer's tiles are
+ * requested in (see wmsLayerCrs): a server that offers no EPSG:3857 rejects
+ * GetFeatureInfo in it as it rejects GetMap (#2886). The box keeps the click at
+ * its center pixel and covers about the same ground as the Web Mercator one.
+ * Without a CRS, or with one that cannot be resolved, the query stays in
+ * EPSG:3857, as before.
+ */
+async function wmsIdentifyQueryBox(
+  layer: GeoLibreLayer,
+  lngLat: [number, number],
+  zoom: number,
+  isV13: boolean,
+): Promise<{ crs: string; bbox: number[] }> {
+  const mercator = wmsIdentifyBbox3857(lngLat, zoom);
+  const crs = wmsLayerCrs(layer)?.trim().toUpperCase();
+  if (!crs || WEB_MERCATOR_CRS.has(crs)) return { crs: "EPSG:3857", bbox: mercator };
+
+  // WMS 1.3.0 follows the EPSG axis order, latitude first, except for CRS:84.
+  const projection: WmsIdentifyProjection | null = GEOGRAPHIC_WMS_CRS.has(crs)
+    ? { forward: (point) => point, northFirst: crs !== "CRS:84" }
+    : await resolveWmsIdentifyProjection(crs);
+  if (!projection) return { crs: "EPSG:3857", bbox: mercator };
+
+  const [minX, minY, maxX, maxY] = mercator;
+  let bbox: number[];
+  try {
+    const corners = [
+      [minX, minY],
+      [minX, maxY],
+      [maxX, minY],
+      [maxX, maxY],
+    ].map(([x, y]) => projection.forward(webMercatorToLngLat(x, y)));
+    const xs = corners.map(([x]) => x);
+    const ys = corners.map(([, y]) => y);
+    const halfX = (Math.max(...xs) - Math.min(...xs)) / 2;
+    const halfY = (Math.max(...ys) - Math.min(...ys)) / 2;
+    const [x, y] = projection.forward(lngLat);
+    bbox =
+      isV13 && projection.northFirst
+        ? [y - halfY, x - halfX, y + halfY, x + halfX]
+        : [x - halfX, y - halfY, x + halfX, y + halfY];
+  } catch {
+    // A click the projection cannot convert (outside its domain): ask in Web Mercator.
+    return { crs: "EPSG:3857", bbox: mercator };
+  }
+  // A conversion that does not throw can still give NaN or Infinity.
+  if (!bbox.every(Number.isFinite)) return { crs: "EPSG:3857", bbox: mercator };
+  return { crs, bbox };
 }
 
 function isViteDevServer(): boolean {
@@ -164,21 +323,49 @@ function isViteDevServer(): boolean {
   );
 }
 
-// Only the Vite dev server proxies GetFeatureInfo requests (to dodge CORS in
-// the browser). Production builds target the Tauri webview, which does not
-// enforce same-origin restrictions, so the raw URL is used directly. A WMS
-// server lacking CORS headers would fail if this app were ever hosted as a
-// plain web page; such a deployment would need its own proxy.
+/**
+ * Fetches one GetFeatureInfo URL outside the webview. The desktop app installs
+ * one backed by its native HTTP client, which ignores CORS and follows
+ * cross-scheme redirects the way tile requests already do.
+ */
+export type WmsIdentifyFetcher = (url: string, signal: AbortSignal) => Promise<Response>;
+
+let wmsIdentifyFetcher: WmsIdentifyFetcher | null = null;
+
+/**
+ * Routes WMS GetFeatureInfo requests through `fetcher` instead of the webview's
+ * `fetch`. Desktop webviews do enforce CORS (WebView2 serves the app from
+ * `http://tauri.localhost`), so a server without `Access-Control-Allow-Origin`,
+ * or one that redirects without it, fails there (#2712).
+ *
+ * @param fetcher The fetcher to use, or null to restore the webview `fetch`.
+ */
+export function setWmsIdentifyFetcher(fetcher: WmsIdentifyFetcher | null): void {
+  wmsIdentifyFetcher = fetcher;
+}
+
+// Without an installed fetcher, only the Vite dev server proxies GetFeatureInfo
+// requests (to dodge CORS in the browser). A hosted web build uses the raw URL,
+// so a WMS server lacking CORS headers needs the deployment's own proxy.
 function proxyWmsRequestUrl(url: string): string {
   return isViteDevServer() ? `${WMS_PROXY_PATH}?url=${encodeURIComponent(url)}` : url;
 }
 
-function createWmsGetFeatureInfoUrl(
+function fetchWmsIdentifyResponse(url: string, signal: AbortSignal): Promise<Response> {
+  return wmsIdentifyFetcher
+    ? wmsIdentifyFetcher(url, signal)
+    : fetch(proxyWmsRequestUrl(url), { signal });
+}
+
+/**
+ * The GetFeatureInfo URL for each INFO_FORMAT probed, or null when the layer
+ * has no endpoint or layer names. The query box is resolved once per click.
+ */
+async function createWmsGetFeatureInfoUrl(
   layer: GeoLibreLayer,
   lngLat: [number, number],
   zoom: number,
-  infoFormat: string,
-): string | null {
+): Promise<((infoFormat: string) => string) | null> {
   const endpoint = stringSource(layer.source.url) ?? layer.sourcePath;
   const layers = stringSource(layer.source.layers);
   if (!endpoint || !layers) return null;
@@ -186,11 +373,11 @@ function createWmsGetFeatureInfoUrl(
   const styles = stringSource(layer.source.styles) ?? "";
   const format = stringSource(layer.source.format) ?? "image/png";
   // WMS 1.3.0 renames the SRS parameter to CRS and the pixel coordinates from
-  // X/Y to I/J. EPSG:3857 keeps easting/northing axis order across both
-  // versions, so the BBOX layout is unchanged.
+  // X/Y to I/J; wmsIdentifyQueryBox writes the BBOX in that version's axis order.
   const version = stringSource(layer.source.version) ?? "1.1.1";
   const isV13 = version.startsWith("1.3");
   const crsParam = isV13 ? "CRS" : "SRS";
+  const query = await wmsIdentifyQueryBox(layer, lngLat, zoom, isV13);
   // Treat a deliberate featureCount of 0 ("all features" on some servers) as
   // intentional; only fall back to 1 when it is unset (null/undefined), blank,
   // or non-numeric. Number(null) and Number("") are both 0, so guard those.
@@ -199,37 +386,174 @@ function createWmsGetFeatureInfoUrl(
       ? Number(layer.source.featureCount)
       : NaN;
 
-  return appendWmsQuery(endpoint, [
-    ["SERVICE", "WMS"],
-    ["REQUEST", "GetFeatureInfo"],
-    ["VERSION", version],
-    ["LAYERS", layers],
-    ["QUERY_LAYERS", layers],
-    ["STYLES", styles],
-    ["FORMAT", format],
-    ["TRANSPARENT", layer.source.transparent === false ? "FALSE" : "TRUE"],
-    [crsParam, "EPSG:3857"],
-    ["BBOX", wmsIdentifyBbox3857(lngLat, zoom)],
-    ["WIDTH", String(WMS_IDENTIFY_QUERY_SIZE)],
-    ["HEIGHT", String(WMS_IDENTIFY_QUERY_SIZE)],
-    [isV13 ? "I" : "X", String(WMS_IDENTIFY_QUERY_CENTER)],
-    [isV13 ? "J" : "Y", String(WMS_IDENTIFY_QUERY_CENTER)],
-    ["INFO_FORMAT", infoFormat],
-    ["FEATURE_COUNT", String(Number.isFinite(featureCount) ? featureCount : 1)],
-  ]);
+  return (infoFormat) =>
+    appendWmsQuery(endpoint, [
+      ["SERVICE", "WMS"],
+      ["REQUEST", "GetFeatureInfo"],
+      ["VERSION", version],
+      ["LAYERS", layers],
+      ["QUERY_LAYERS", layers],
+      ["STYLES", styles],
+      ["FORMAT", format],
+      ["TRANSPARENT", layer.source.transparent === false ? "FALSE" : "TRUE"],
+      [crsParam, query.crs],
+      ["BBOX", query.bbox.join(",")],
+      ["WIDTH", String(WMS_IDENTIFY_QUERY_SIZE)],
+      ["HEIGHT", String(WMS_IDENTIFY_QUERY_SIZE)],
+      [isV13 ? "I" : "X", String(WMS_IDENTIFY_QUERY_CENTER)],
+      [isV13 ? "J" : "Y", String(WMS_IDENTIFY_QUERY_CENTER)],
+      ["INFO_FORMAT", infoFormat],
+      ["FEATURE_COUNT", String(Number.isFinite(featureCount) ? featureCount : 1)],
+    ]);
 }
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function textFromHtml(value: string): string {
-  const document = new DOMParser().parseFromString(value, "text/html");
-  return normalizeText(document.body.textContent ?? "");
+function cellText(cell: Element): string {
+  return normalizeText(cell.textContent ?? "");
+}
+
+/**
+ * Sets `name` on `target`, as `name (2)`, `name (3)`... when it is already
+ * taken. Own keys only, and defined rather than assigned, so a field named
+ * `constructor` or `__proto__` keeps its name and its value.
+ */
+function addProperty<T>(target: Record<string, T>, name: string, value: T): void {
+  let key = name;
+  for (let copy = 2; Object.hasOwn(target, key); copy += 1) key = `${name} (${copy})`;
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+function isRowOf(cells: Element[], tag: "th" | "td"): boolean {
+  return cells.length > 0 && cells.every((cell) => cell.localName === tag);
+}
+
+/**
+ * The attributes in one HTML table: one property per `<th>name</th><td>value</td>`
+ * row or, for a table with a column header, the header naming the cells of the
+ * first data row: the first all-`<td>` row right below an all-`<th>` row of the
+ * same length, at least two cells wide (a lone `<th>` over a lone `<td>` reads
+ * as a title over free text, not as a field). Rows of any other shape, such as
+ * a title spanning the table, are skipped, and so are the rows of a table
+ * nested in a cell. Null when the table has neither shape.
+ */
+function tableProperties(table: Element): Record<string, string> | null {
+  const rows = Array.from(table.querySelectorAll("tr"))
+    .filter((row) => row.closest("table") === table)
+    .map((row) =>
+      Array.from(row.children).filter((cell) => cell.localName === "th" || cell.localName === "td"),
+    );
+
+  const pairs: Record<string, string> = {};
+  for (const cells of rows) {
+    if (cells.length !== 2 || cells[0].localName !== "th" || cells[1].localName !== "td") continue;
+    const name = cellText(cells[0]);
+    if (name) addProperty(pairs, name, cellText(cells[1]));
+  }
+  if (Object.keys(pairs).length > 0) return pairs;
+
+  const valuesIndex = rows.findIndex(
+    (cells, index) =>
+      index > 0 &&
+      cells.length > 1 &&
+      isRowOf(cells, "td") &&
+      rows[index - 1].length === cells.length &&
+      isRowOf(rows[index - 1], "th"),
+  );
+  if (valuesIndex < 0) return null;
+  const header = rows[valuesIndex - 1];
+  const values = rows[valuesIndex];
+  const columns: Record<string, string> = {};
+  header.forEach((cell, index) => {
+    const name = cellText(cell);
+    if (name) addProperty(columns, name, cellText(values[index]));
+  });
+  return Object.keys(columns).length > 0 ? columns : null;
+}
+
+/**
+ * The attributes of an HTML GetFeatureInfo answer read from its tables (#2888),
+ * see tableProperties. A request for several layers can get one table per
+ * layer: the first `layerCount` tables with a shape are merged, a name already
+ * taken getting a ` (2)`, ` (3)` suffix, as within one table. With one layer
+ * only the first is read, as the JSON branch reads the first feature: a server
+ * may give one table per feature. Null when no table has either shape.
+ */
+function propertiesFromHtmlTables(
+  document: Document,
+  layerCount: number,
+): Record<string, string> | null {
+  const merged: Record<string, string> = {};
+  // A table nested in a cell belongs to that cell's value, not to the answer.
+  const tables = Array.from(document.querySelectorAll("table")).filter(
+    (table) => !table.parentElement?.closest("table"),
+  );
+  let read = 0;
+  for (const table of tables) {
+    if (read >= layerCount) break;
+    const properties = tableProperties(table);
+    if (!properties) continue;
+    read += 1;
+    for (const [name, value] of Object.entries(properties)) addProperty(merged, name, value);
+  }
+  return Object.keys(merged).length > 0 ? merged : null;
 }
 
 function isWmsExceptionResponse(value: string): boolean {
   return /<([\w:]+)?(ServiceException|ExceptionReport)\b/i.test(value);
+}
+
+/** The text of a WMS/OWS exception report, without its XML and CDATA wrapping. */
+function wmsExceptionMessage(value: string): string {
+  const match =
+    /<(?:[\w-]+:)?(ServiceException|ExceptionText)\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?\1>/i.exec(
+      value,
+    );
+  const inner = match?.[2].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1");
+  return normalizeText(inner ?? "") || normalizeText(value);
+}
+
+/**
+ * An error page title as plain text: any tags dropped, then every character
+ * reference decoded by the HTML parser, so a named one such as `&agrave;` on an
+ * Italian server reads as the letter.
+ */
+function htmlTitleText(title: string): string {
+  const markupFree = title.replace(/<[^>]*>/g, "");
+  if (typeof DOMParser === "undefined") return markupFree;
+  const document = new DOMParser().parseFromString(
+    `<!doctype html><html><body>${markupFree}</body></html>`,
+    "text/html",
+  );
+  return document.body.textContent ?? markupFree;
+}
+
+/**
+ * A short reason for a failed GetFeatureInfo request: the status, plus the
+ * error page's title or a plain-text body. A markup page without a title adds
+ * nothing, since its body text would carry its markup and styles along.
+ */
+function wmsHttpErrorMessage(response: Response, text: string): string {
+  const status = normalizeText(`HTTP ${response.status} ${response.statusText}`);
+  const title = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
+  // Markup by its header, or by its first character for the desktop's
+  // headerless responses; a plain-text body may still mention "<value>".
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const isMarkup = /html|xml/.test(contentType) || text.trimStart().startsWith("<");
+  const characters = Array.from(
+    normalizeText(title !== undefined ? htmlTitleText(title) : isMarkup ? "" : text),
+  );
+  // Truncated by code point, so a character outside the BMP is never split.
+  const detail =
+    characters.length > 200 ? `${characters.slice(0, 200).join("")}…` : characters.join("");
+  return detail ? `${status} (${detail})` : status;
 }
 
 function parseWmsJsonProperties(value: unknown): {
@@ -292,7 +616,10 @@ function parseWmsJsonProperties(value: unknown): {
  * @param lngLat The clicked position.
  * @param zoom The map zoom, which sets the query box's resolution.
  * @param signal Aborts the request when a newer click supersedes it.
- * @returns The first feature's id and properties, a text result, or null.
+ * @returns The first feature's id and properties, a text result, or null
+ *   (also, without a request, for a layer that is not queryable).
+ * @throws Error when every format probed came back as a WMS exception or an
+ *   HTTP error, naming the exception text or the status.
  */
 export async function fetchWmsIdentifyProperties(
   layer: GeoLibreLayer,
@@ -303,41 +630,55 @@ export async function fetchWmsIdentifyProperties(
   featureId?: string | number;
   properties: Record<string, unknown>;
 } | null> {
+  if (!isWmsQueryable(layer)) return null;
   let fallbackText = "";
+  // A WMS exception is the server refusing the request, not the feature's data:
+  // kept apart so it surfaces as an error when no format gave anything else.
+  let exceptionText = "";
+  // Likewise a failed request (often an HTML error page), so the page is
+  // reported as an error rather than shown as a `result` attribute (#2945).
+  let httpErrorText = "";
 
   // Honor an explicitly configured INFO_FORMAT so we issue a single request
   // instead of probing JSON/HTML/plain-text in sequence.
   const configuredFormat = stringSource(layer.source.infoFormat);
   const infoFormats = configuredFormat ? [configuredFormat] : WMS_IDENTIFY_INFO_FORMATS;
 
-  for (const infoFormat of infoFormats) {
-    const targetUrl = createWmsGetFeatureInfoUrl(layer, lngLat, zoom, infoFormat);
-    if (!targetUrl) return null;
+  const buildUrl = await createWmsGetFeatureInfoUrl(layer, lngLat, zoom);
+  if (!buildUrl) return null;
 
-    const response = await fetch(proxyWmsRequestUrl(targetUrl), { signal });
-    const contentType = response.headers.get("content-type")?.toLowerCase() ?? infoFormat;
+  for (const infoFormat of infoFormats) {
+    const targetUrl = buildUrl(infoFormat);
+    const response = await fetchWmsIdentifyResponse(targetUrl, signal);
+    const contentTypeHeader = response.headers.get("content-type")?.toLowerCase();
+    const contentType = contentTypeHeader ?? infoFormat;
     // Response.text() cannot take a signal, so bail out as soon as the read
     // resolves if the request was aborted meanwhile, skipping parsing.
     const text = await response.text();
     if (signal.aborted) return null;
     if (!response.ok) {
-      // HTTP/2 drops the reason phrase, so statusText is often "". Fall back to
-      // the status code so a failed request never surfaces as "No attributes".
-      fallbackText = normalizeText(text) || response.statusText || `HTTP ${response.status}`;
+      // Some servers send their exception report with an error status too.
+      if (isWmsExceptionResponse(text)) exceptionText = wmsExceptionMessage(text);
+      else httpErrorText = wmsHttpErrorMessage(response, text);
       continue;
     }
 
     const trimmed = text.trim();
+    // The desktop's native fetcher returns no headers, so contentType is just
+    // the format we asked for; tell an HTML body apart by its markup, or it
+    // would be misparsed as JSON or reach the popup with its tags.
+    const headerlessHtml = !contentTypeHeader && /^<(!doctype\s+html|html|body)\b/i.test(trimmed);
     const looksLikeJson =
-      contentType.includes("json") ||
-      infoFormat.includes("json") ||
-      trimmed.startsWith("{") ||
-      trimmed.startsWith("[");
+      !headerlessHtml &&
+      (contentType.includes("json") ||
+        infoFormat.includes("json") ||
+        trimmed.startsWith("{") ||
+        trimmed.startsWith("["));
 
     // Only run the XML exception check on bodies that are not JSON, so a JSON
     // response that merely mentions "ServiceException" is not misread as one.
     if (!looksLikeJson && isWmsExceptionResponse(text)) {
-      fallbackText = normalizeText(text);
+      exceptionText = wmsExceptionMessage(text);
       continue;
     }
 
@@ -349,14 +690,29 @@ export async function fetchWmsIdentifyProperties(
         // so an unrecognized-but-real response isn't silently discarded.
         fallbackText = fallbackText || normalizeText(text);
       } catch {
-        fallbackText = normalizeText(text);
+        // A JSON probe often gets the server's XML exception back.
+        if (isWmsExceptionResponse(text)) exceptionText = wmsExceptionMessage(text);
+        else fallbackText = normalizeText(text);
       }
       continue;
     }
 
-    if (contentType.includes("html")) {
-      const resultText = textFromHtml(text);
-      if (resultText) return { properties: { result: resultText } };
+    if (headerlessHtml || contentType.includes("html")) {
+      const document = new DOMParser().parseFromString(text, "text/html");
+      const resultText = normalizeText(document.body.textContent ?? "");
+      if (!resultText) continue;
+      // HTML we did not ask for (often a server error page) is kept as a
+      // fallback so the remaining info formats are still tried.
+      if (!headerlessHtml || infoFormat.includes("html")) {
+        const layerCount = Math.max(
+          1,
+          (stringSource(layer.source.layers) ?? "").split(",").filter((name) => name.trim()).length,
+        );
+        return {
+          properties: propertiesFromHtmlTables(document, layerCount) ?? { result: resultText },
+        };
+      }
+      fallbackText = fallbackText || resultText;
       continue;
     }
 
@@ -369,7 +725,288 @@ export async function fetchWmsIdentifyProperties(
     fallbackText = resultText;
   }
 
-  return fallbackText ? { properties: { result: fallbackText } } : null;
+  if (fallbackText) return { properties: { result: fallbackText } };
+  if (exceptionText) throw new Error(`WMS GetFeatureInfo returned an error: ${exceptionText}`);
+  // Never "No attributes" for a request that failed: name the status instead.
+  if (httpErrorText) throw new Error(`WMS GetFeatureInfo failed: ${httpErrorText}`);
+  return null;
+}
+
+/** An `…/ImageServer/exportImage?…` tile template, capturing the service URL. */
+const ARCGIS_EXPORT_IMAGE_TEMPLATE = /^(https?:\/\/[^?#]*\/ImageServer)\/exportImage\?/i;
+
+/** The first tile template of a layer, if it has one. */
+function firstTileTemplate(layer: GeoLibreLayer): string | undefined {
+  const tiles = layer.source.tiles;
+  return Array.isArray(tiles) ? stringSource(tiles[0]) : undefined;
+}
+
+/**
+ * The ImageServer URL a layer draws from, or null when it is not one: a layer
+ * the ArcGIS Layer dialog added (its `sourceKind` and `sourcePath`), or any
+ * raster or WMS-style layer whose tiles come from an ImageServer's
+ * `/exportImage`, as the Earthdata GIS browser, Python, the MCP tools and older
+ * projects add them.
+ */
+function arcgisImageServiceUrl(layer: GeoLibreLayer): string | null {
+  const sourcePath = typeof layer.sourcePath === "string" ? layer.sourcePath.trim() : "";
+  if (
+    layer.metadata.sourceKind === ARCGIS_IMAGE_SERVICE_SOURCE_KIND &&
+    // http(s) only, as the template branch below requires: a project file's
+    // path must not reach the desktop's native fetcher with another scheme.
+    /^https?:\/\//i.test(sourcePath) &&
+    /\/ImageServer\/?$/i.test(sourcePath)
+  ) {
+    return sourcePath.replace(/\/+$/, "");
+  }
+  if (layer.type !== "raster" && layer.type !== "wms") return null;
+  return ARCGIS_EXPORT_IMAGE_TEMPLATE.exec(firstTileTemplate(layer) ?? "")?.[1] ?? null;
+}
+
+/**
+ * Whether a layer is an ArcGIS ImageServer, whose pixel values Identify reads
+ * through the service's `/identify` operation.
+ */
+export function isArcGISImageServiceLayer(layer: GeoLibreLayer): boolean {
+  return arcgisImageServiceUrl(layer) !== null;
+}
+
+/** A query parameter of a layer's tile template, if it carries one. */
+function tileTemplateParam(layer: GeoLibreLayer, name: string): string | undefined {
+  const template = firstTileTemplate(layer);
+  if (!template) return undefined;
+  try {
+    // The bbox placeholder's braces are tolerated by the parser, and only the
+    // other parameters are read.
+    return stringSource(new URL(template).searchParams.get(name));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether Identify reads a layer by asking its server about the clicked point:
+ * a WMS GetFeatureInfo or an ArcGIS ImageServer `/identify`.
+ */
+export function isServiceIdentifyLayer(layer: GeoLibreLayer): boolean {
+  return isWmsLayer(layer) || isArcGISImageServiceLayer(layer);
+}
+
+/** How long a service description may take before identify labels bands `Band N`. */
+const ARCGIS_BAND_NAMES_TIMEOUT_MS = 5_000;
+/** How long a failed band-name lookup is remembered before a click retries it. */
+const ARCGIS_BAND_NAMES_RETRY_MS = 60_000;
+
+/** Each ImageServer's band names, fetched once per service URL. */
+const arcgisBandNamesCache = new Map<string, Promise<string[]>>();
+
+/**
+ * An ImageServer's band names from its `?f=json` description, for a layer that
+ * was added without them (the Earthdata GIS browser, a template). Fetched once
+ * per service; a failure yields no names, so the rows fall back to `Band N`.
+ *
+ * @param serviceUrl The `…/ImageServer` URL.
+ * @param token The layer's access token, if any.
+ * @returns The band names, in band order.
+ */
+function fetchArcGISBandNames(serviceUrl: string, token: string | undefined): Promise<string[]> {
+  const cached = arcgisBandNamesCache.get(serviceUrl);
+  if (cached) return cached;
+  const query = token ? `f=json&token=${encodeURIComponent(token)}` : "f=json";
+  const url = `${serviceUrl}?${query}`;
+  const request = (async () => {
+    // Bounded, so a stalled description is dropped (and retried next click)
+    // rather than holding every later identify of this service.
+    const signal = AbortSignal.timeout(ARCGIS_BAND_NAMES_TIMEOUT_MS);
+    const response = wmsIdentifyFetcher
+      ? await wmsIdentifyFetcher(url, signal)
+      : await fetch(url, { signal });
+    // Thrown so the catch below drops it from the cache and a later click retries.
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const info = JSON.parse(await response.text()) as { bandNames?: unknown; error?: unknown };
+    // ArcGIS reports a refused request (an expired token, say) in a 200 body.
+    if (info.error) throw new Error("ArcGIS error");
+    return Array.isArray(info.bandNames)
+      ? info.bandNames.filter((name): name is string => typeof name === "string")
+      : [];
+  })().catch(() => {
+    // Remember the failure briefly, so a stalled or refusing service does not
+    // hold every click for the timeout, then let a later click try again.
+    setTimeout(() => {
+      if (arcgisBandNamesCache.get(serviceUrl) === request) arcgisBandNamesCache.delete(serviceUrl);
+    }, ARCGIS_BAND_NAMES_RETRY_MS);
+    return [];
+  });
+  arcgisBandNamesCache.set(serviceUrl, request);
+  return request;
+}
+
+/** What a service identify needs beyond the clicked point and zoom. */
+export interface ServiceIdentifyOptions {
+  /**
+   * The view's displayed resolution in Web Mercator metres per pixel, for an
+   * engine whose zoom does not follow MapLibre's 512 px ladder.
+   */
+  resolution?: number;
+  /** Translated row labels for an ImageServer's unnamed bands. */
+  labels?: Pick<MapCanvasIdentifyAllLabels, "pixelValue" | "pixelBand">;
+}
+
+/** One band value from an ImageServer `/identify` answer, as a number when it is one. */
+function arcgisPixelValue(value: string): string | number {
+  const number = Number(value);
+  return value !== "" && Number.isFinite(number) ? formatPixelValue(number) : value;
+}
+
+/**
+ * The pixel values an ArcGIS ImageServer reports at a point, as the identify
+ * popup's properties. The request carries the layer's rendering rule, so a
+ * processing template (NDVI, a hillshade...) reports its own output values, and
+ * the map's pixel size, so a mosaic answers from the same overview or source
+ * raster it draws at that zoom.
+ *
+ * @param layer The ImageServer layer to query.
+ * @param lngLat The clicked position.
+ * @param zoom The map zoom, which sets the pixel size asked about when
+ *   `resolution` is not given.
+ * @param signal Aborts the request when a newer click supersedes it.
+ * @param options `resolution`: the view's displayed Web Mercator metres per
+ *   pixel, for an engine whose zoom does not follow MapLibre's 512 px ladder;
+ *   `labels`: the translated row labels for unnamed bands.
+ * @returns One row per band (named after the service's bands when the count
+ *   matches), or null for a layer that is not an ImageServer.
+ * @throws Error carrying the service's own error message, or the HTTP status,
+ *   when the request fails. The canvases show it as is, so the message adds
+ *   no GeoLibre-authored English; the row labels come from `options.labels`.
+ */
+export async function fetchArcGISImageIdentifyProperties(
+  layer: GeoLibreLayer,
+  lngLat: [number, number],
+  zoom: number,
+  signal: AbortSignal,
+  options: ServiceIdentifyOptions = {},
+): Promise<{ properties: Record<string, unknown> } | null> {
+  const { resolution } = options;
+  const rowLabels = options.labels ?? DEFAULT_IDENTIFY_ALL_LABELS;
+  const serviceUrl = arcgisImageServiceUrl(layer);
+  if (!serviceUrl) return null;
+  const pixelSize =
+    resolution !== undefined && Number.isFinite(resolution) && resolution > 0
+      ? resolution
+      : wmsIdentifyResolution(zoom);
+  const params: Array<[string, string]> = [
+    ["geometry", JSON.stringify({ x: lngLat[0], y: lngLat[1], spatialReference: { wkid: 4326 } })],
+    ["geometryType", "esriGeometryPoint"],
+    ["pixelSize", JSON.stringify({ x: pixelSize, y: pixelSize, spatialReference: { wkid: 3857 } })],
+    ["returnGeometry", "false"],
+    ["returnCatalogItems", "false"],
+  ];
+  // A layer added from a template carries its rendering rule only in the URL.
+  const renderingRule =
+    stringSource(layer.metadata.arcgisRenderingRule) ?? tileTemplateParam(layer, "renderingRule");
+  if (renderingRule) params.push(["renderingRule", renderingRule]);
+  const token = tileTemplateParam(layer, "token");
+  if (token) params.push(["token", token]);
+  params.push(["f", "json"]);
+  const query = params
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join("&");
+
+  // ArcGIS REST answers cross-origin requests, and the layer's own `/exportImage`
+  // tiles already reach the server directly, so only the desktop's native
+  // fetcher (for its webview origin) is used, never the dev server's WMS proxy,
+  // whose 30 s cap a busy image server can exceed.
+  const url = `${serviceUrl}/identify?${query}`;
+  const storedBandNames = Array.isArray(layer.metadata.arcgisBandNames)
+    ? layer.metadata.arcgisBandNames.filter((name): name is string => typeof name === "string")
+    : [];
+  // Labels for the service's own bands, asked for alongside the pixel values so
+  // the popup does not wait on them in turn; cached per service, so only a
+  // first click pays for it. Skipped under a rule, which remaps the bands.
+  const bandNamesRequest =
+    storedBandNames.length > 0 || renderingRule ? null : fetchArcGISBandNames(serviceUrl, token);
+  const response = wmsIdentifyFetcher
+    ? await wmsIdentifyFetcher(url, signal)
+    : await fetch(url, { signal });
+  const text = await response.text();
+  if (signal.aborted) return null;
+  if (!response.ok) throw new Error(wmsHttpErrorMessage(response, text));
+  let body: {
+    error?: { code?: unknown; message?: unknown; details?: unknown };
+    value?: unknown;
+  };
+  try {
+    body = JSON.parse(text) as typeof body;
+  } catch {
+    throw new Error(wmsHttpErrorMessage(response, text));
+  }
+  // ArcGIS reports errors in a 200 JSON body; its message is the server's own.
+  if (body?.error) {
+    const details = Array.isArray(body.error.details) ? body.error.details.join(" ") : "";
+    const message = normalizeText(
+      `${typeof body.error.message === "string" ? body.error.message : ""} ${details}`,
+    );
+    throw new Error(message || `ArcGIS ${String(body.error.code ?? "")}`.trim());
+  }
+
+  const raw = typeof body?.value === "string" ? body.value.trim() : "";
+  // Off the image, or a masked pixel.
+  if (!raw || /^nodata$/i.test(raw)) return { properties: {} };
+  // Current servers separate bands with ", ", older ones with spaces.
+  const values = raw.split(/\s*,\s*|\s+/).filter((value) => value !== "");
+  const bandNames =
+    !bandNamesRequest || values.length < 2
+      ? storedBandNames
+      : // A superseded click stops waiting for the names at once.
+        await Promise.race([
+          bandNamesRequest,
+          new Promise<string[]>((resolve) =>
+            signal.addEventListener("abort", () => resolve([]), { once: true }),
+          ),
+        ]);
+  if (signal.aborted) return null;
+  // A rendering rule usually changes the band count and meaning, so the
+  // service's own band names only label the values when nothing remapped them.
+  const names =
+    !renderingRule && bandNames.length === values.length
+      ? bandNames
+      : values.length === 1
+        ? [rowLabels.pixelValue]
+        : values.map((_, index) => rowLabels.pixelBand(index + 1));
+  const properties: Record<string, unknown> = {};
+  // A service may repeat a band name; each value still gets its own row.
+  values.forEach((value, index) => {
+    addProperty(
+      properties,
+      names[index] ?? rowLabels.pixelBand(index + 1),
+      arcgisPixelValue(value),
+    );
+  });
+  return { properties };
+}
+
+/**
+ * Identify through the layer's server: ImageServer `/identify` for an ArcGIS
+ * image service, WMS GetFeatureInfo otherwise.
+ *
+ * @param layer The WMS or ImageServer layer to query.
+ * @param lngLat The clicked position.
+ * @param zoom The map zoom.
+ * @param signal Aborts the request when a newer click supersedes it.
+ * @param options The view resolution and row labels an ImageServer identify
+ *   uses; see {@link fetchArcGISImageIdentifyProperties}.
+ * @returns The identify popup's properties, or null.
+ */
+export function fetchServiceIdentifyProperties(
+  layer: GeoLibreLayer,
+  lngLat: [number, number],
+  zoom: number,
+  signal: AbortSignal,
+  options: ServiceIdentifyOptions = {},
+): Promise<{ featureId?: string | number; properties: Record<string, unknown> } | null> {
+  return isArcGISImageServiceLayer(layer)
+    ? fetchArcGISImageIdentifyProperties(layer, lngLat, zoom, signal, options)
+    : fetchWmsIdentifyProperties(layer, lngLat, zoom, signal);
 }
 
 export function isAbortError(error: unknown): boolean {

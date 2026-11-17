@@ -1,22 +1,39 @@
-import { useAppStore, type GeoLibreLayer } from "@geolibre/core";
+import { useAppStore } from "@geolibre/core";
 import { applyMapboxStyleImport, parseMapboxStyle } from "@geolibre/map";
 import {
   addLidarLayerFromUrl,
   addPMTilesLayerFromUrl,
   addRasterToMap,
   addVectorLayerFromUrl,
+  findFileHandlerByDataType,
+  isRecoverableNonTiledRasterError,
+  listFileHandlers,
+  routeKmlFileSelection,
 } from "@geolibre/plugins";
+import i18next from "i18next";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   dataUrlParameters,
   type DataTypeHint,
   fetchRemoteData,
   fetchRemoteStyle,
+  layerPointsAt,
+  loadDataUrlBatch,
   mapboxStyleForDataLayer,
   parseRasterUrlStyle,
 } from "../lib/data-url";
 import { deepLinkCogDefaults } from "../lib/cog-render-engine";
-import type { createAppAPI } from "./usePlugins";
+import { queueDataLoad } from "../lib/data-load-queue";
+import {
+  discardHandledLayers,
+  fetchStyleUnlessHandlerHint,
+  finishHandledLoad,
+  trackHandlerLayers,
+  urlFileHandlers,
+} from "../lib/data-url-file-handlers";
+import { notify } from "../lib/notify";
+import { isViewerLayout } from "./useLayoutOptions";
+import { type createAppAPI, whenPluginsSettled } from "./usePlugins";
 import type { ProjectUrlLoadState } from "./useProjectUrlLoader";
 
 /** `fitLayerIds` carries the layers the shell still has to frame. */
@@ -27,11 +44,22 @@ export interface DataUrlLoadResult {
   fitLayerIds: string[];
 }
 
-/** Whether a store layer records the given URL as the data it was loaded from. */
-function layerPointsAt(layer: GeoLibreLayer, url: string): boolean {
-  if (layer.sourcePath === url) return true;
-  const source = layer.source as { url?: unknown };
-  return source.url === url;
+/**
+ * The plugin file handlers a URL load may use, or undefined where the drop path
+ * is closed too: the read-only viewer and a deployment without `data:add`. Plugin
+ * activation is awaited (bounded) before the first offer, since `?data=` loads at
+ * startup while plugins register their handlers asynchronously.
+ */
+function fileHandlersForLoad() {
+  return urlFileHandlers({
+    isViewer: () => typeof window !== "undefined" && isViewerLayout(window.location.search),
+    canAddData: () => useAppStore.getState().deploymentCapabilities.has("data:add"),
+    source: {
+      list: listFileHandlers,
+      forDataType: findFileHandlerByDataType,
+      ready: whenPluginsSettled,
+    },
+  });
 }
 
 /** Load one URL through the same remote-data pipeline used by the `?data=` deep link. */
@@ -46,25 +74,87 @@ export async function loadDataUrl(
   } = {},
 ): Promise<DataUrlLoadResult> {
   const fit = options.fit ?? true;
-  const [remote, rawStyle] = await Promise.all([
-    fetchRemoteData(dataUrl, { signal: options.signal, dataType: options.dataType }),
-    options.styleUrl ? fetchRemoteStyle(options.styleUrl, { signal: options.signal }) : null,
-  ]);
+  const layerStore = {
+    layerIds: () => useAppStore.getState().layers.map((layer) => layer.id),
+    removeLayer: (id: string) => useAppStore.getState().removeLayer(id),
+  };
+  // Only the layers added while a handler's `open` runs are the handler's.
+  const gated = fileHandlersForLoad();
+  const tracking = gated ? trackHandlerLayers(gated, layerStore) : null;
+  // One failing request ends the other at once, so its error shows without
+  // waiting for a download that can no longer be used.
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  if (options.signal?.aborted) stop();
+  else options.signal?.addEventListener("abort", stop, { once: true });
+  const remotePromise = fetchRemoteData(dataUrl, {
+    signal: controller.signal,
+    dataType: options.dataType,
+    fileHandlers: tracking?.source,
+    hasStyle: Boolean(options.styleUrl),
+  });
+  const stylePromise = options.styleUrl
+    ? fetchStyleUnlessHandlerHint({
+        handlers: tracking?.source,
+        dataType: options.dataType,
+        fetchStyle: () => fetchRemoteStyle(options.styleUrl!, { signal: controller.signal }),
+        signal: controller.signal,
+      })
+    : Promise.resolve(null);
+  remotePromise.catch(stop);
+  stylePromise.catch(stop);
+  let remote: Awaited<typeof remotePromise>;
+  let rawStyle: Awaited<ReturnType<typeof fetchRemoteStyle>> | null;
+  try {
+    [remote, rawStyle] = await Promise.all([remotePromise, stylePromise]);
+  } catch (error) {
+    // The style failed after a handler already ran: take its layers back.
+    const handled = await remotePromise.catch(() => null);
+    if (handled?.kind === "handled") discardHandledLayers(layerStore, tracking?.added ?? []);
+    throw error;
+  } finally {
+    options.signal?.removeEventListener("abort", stop);
+  }
+  if (remote.kind === "handled") {
+    const layerIds = finishHandledLoad({
+      remote,
+      hasStyle: rawStyle !== null,
+      added: tracking?.added ?? new Set(),
+      store: layerStore,
+      signal: options.signal,
+    });
+    // Framed like the built-in GeoJSON path: the shell fits the set once.
+    return { layerIds, fitLayerIds: layerIds };
+  }
   if (options.signal?.aborted) throw new DOMException("The operation was aborted", "AbortError");
   const store = useAppStore.getState();
   const layerIds: string[] = [];
   const fitLayerIds: string[] = [];
   if (remote.kind === "cog") {
     const rasterStyle = rawStyle === null ? null : parseRasterUrlStyle(rawStyle);
-    const id = await addRasterToMap(mapAppAPI, remote.url, {
-      name: remote.name,
-      // A URL loader starts an empty workspace, whose raster control defaults
-      // to the native, globe-compatible WASM renderer. Do not override the
-      // control-wide engine when adding this layer.
-      defaults: deepLinkCogDefaults(),
-      zoomTo: fit,
-      ...(rasterStyle ? { state: rasterStyle } : {}),
-    });
+    let id: string;
+    try {
+      id = await addRasterToMap(mapAppAPI, remote.url, {
+        name: remote.name,
+        // A URL loader starts an empty workspace, whose raster control defaults
+        // to the native, globe-compatible WASM renderer. Do not override the
+        // control-wide engine when adding this layer.
+        defaults: deepLinkCogDefaults(),
+        zoomTo: fit,
+        ...(rasterStyle ? { state: rasterStyle } : {}),
+      });
+    } catch (error) {
+      // A striped GeoTIFF is not a failure: the raster control hands it to the
+      // convert-to-COG offer, which owns the layer from here (it adds the
+      // converted raster or, when declined, removes the striped one).
+      if (isRecoverableNonTiledRasterError(error)) {
+        if (options.signal?.aborted) {
+          throw new DOMException("The operation was aborted", "AbortError");
+        }
+        return { layerIds, fitLayerIds };
+      }
+      throw error;
+    }
     if (options.signal?.aborted) {
       store.removeLayer(id);
       throw new DOMException("The operation was aborted", "AbortError");
@@ -81,6 +171,28 @@ export async function loadDataUrl(
       throw new DOMException("The operation was aborted", "AbortError");
     }
     layerIds.push(id);
+  } else if (remote.kind === "kml") {
+    if (rawStyle !== null) throw new Error(i18next.t("kml.dataUrlStyleUnsupported"));
+    const previousIds = new Set(store.layers.map((layer) => layer.id));
+    // The host importer frames the import itself (honouring the zoom-to-new-layers
+    // preference), even in a `fit: false` batch, which then reframes the whole
+    // set. It reports its own failures, so an empty result is the only signal
+    // here that nothing was added.
+    if (!(await routeKmlFileSelection([{ file: remote.file }]))) {
+      throw new Error(i18next.t("kml.dataUrlNoImporter", { name: remote.name }));
+    }
+    const added = useAppStore
+      .getState()
+      .layers.filter((layer) => !previousIds.has(layer.id))
+      .map((layer) => layer.id);
+    if (options.signal?.aborted) {
+      for (const id of added) store.removeLayer(id);
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
+    // Nothing added: the importer already showed why in the import banner, so
+    // a second message here would only repeat it.
+    if (!added.length) return { layerIds, fitLayerIds };
+    layerIds.push(...added);
   } else if (remote.kind === "pmtiles" || remote.kind === "vector") {
     const styleResult = rawStyle === null ? null : parseMapboxStyle(rawStyle);
     if (styleResult && styleResult.matchedLayerCount === 0) {
@@ -159,7 +271,7 @@ export function useDataUrlLoader(
   useEffect(() => {
     if (!params || !mapAppAPI) return;
     const controller = new AbortController();
-    setState({ error: null, message: "Loading data from URL...", status: "loading" });
+    setState({ error: null, message: "Loading data from URL…", status: "loading" });
     const load = async () => {
       // Preserve the established one-dataset behavior. For a batch, prevent
       // each format-specific loader from moving the camera and let the shell
@@ -172,25 +284,33 @@ export function useDataUrlLoader(
           signal: controller.signal,
         });
       }
-      const layerIds: string[] = [];
-      try {
-        for (const entry of params) {
-          const result = await loadDataUrl(mapAppAPI, entry.dataUrl, {
-            styleUrl: entry.styleUrl,
-            dataType: entry.dataType,
-            signal: controller.signal,
-            fit: false,
-          });
-          layerIds.push(...result.layerIds);
-        }
-      } catch (error) {
-        const store = useAppStore.getState();
-        for (const layerId of layerIds) store.removeLayer(layerId);
-        throw error;
-      }
+      // One entry that fails (an unreachable host, an unsupported file) must
+      // not take the rest of the link down with it: load every entry that can
+      // be loaded, report each failure, and fail the link only when nothing
+      // loaded at all.
+      const layerIds = await loadDataUrlBatch(
+        params,
+        async (entry) =>
+          (
+            await loadDataUrl(mapAppAPI, entry.dataUrl, {
+              styleUrl: entry.styleUrl,
+              dataType: entry.dataType,
+              signal: controller.signal,
+              fit: false,
+            })
+          ).layerIds,
+        {
+          removeLayer: (id) => useAppStore.getState().removeLayer(id),
+          onEntryError: (error) => {
+            const message =
+              error instanceof Error ? error.message : i18next.t("notifications.dataUrlLoadFailed");
+            notify.error(message, { dedupeKey: `url-load:data:${message}` });
+          },
+        },
+      );
       return { layerIds, fitLayerIds: layerIds };
     };
-    void load()
+    void queueDataLoad(load)
       .then(({ layerIds, fitLayerIds }) => {
         if (controller.signal.aborted) return;
         setState({

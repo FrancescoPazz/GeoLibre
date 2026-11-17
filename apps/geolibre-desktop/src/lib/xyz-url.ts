@@ -1,10 +1,12 @@
-import type { GeoLibreLayer, GeoLibreProject } from "@geolibre/core";
+import { resolveTileAddress, type GeoLibreLayer, type GeoLibreProject } from "@geolibre/core";
 import { invoke } from "@tauri-apps/api/core";
 import { addProtocol, type RequestParameters } from "maplibre-gl";
 import { fetchUrlBytes, resolveUrlRedirect } from "./native-http";
 import { isHttpWmsUrl, nativeWmsTileUrl, WMS_TILE_PROTOCOL } from "./native-wms-url";
 import { geographicTileToMercator, geographicWmsRequest } from "./wms-geographic";
+import { projectedTileToMercator, projectedWmsRequest } from "./wms-projected";
 import { sanitizeAttributionHtml } from "./sanitize-html";
+import { fetchTileWithRetry } from "./tile-retry";
 import { isTauri } from "./tauri-io";
 
 const XYZ_TILE_PROTOCOL = "geolibre-xyz";
@@ -33,6 +35,8 @@ export interface XyzTileJsonSource {
 
 export function normalizeTileUrlTemplate(url: string): string {
   return url
+    .replace(/%7B-y%7D/gi, "{-y}")
+    .replace(/\{-y\}/gi, "{-y}")
     .replace(/%7B([xyz])%7D/gi, (_, placeholder: string) => {
       return `{${placeholder.toLowerCase()}}`;
     })
@@ -42,14 +46,18 @@ export function normalizeTileUrlTemplate(url: string): string {
 }
 
 export function hasXyzTilePlaceholders(url: string): boolean {
-  return ["x", "y", "z"].every((placeholder) => url.includes(`{${placeholder}}`));
+  return (
+    url.includes("{z}") && url.includes("{x}") && (url.includes("{y}") || url.includes("{-y}"))
+  );
 }
 
 export function createXyzTileUrlTemplate(url: string): ResolvedXyzTileUrl {
   const originalUrl = normalizeTileUrlTemplate(url.trim());
   if (!hasXyzTilePlaceholders(originalUrl)) {
-    throw new Error("Enter an XYZ tile URL template with {z}, {x}, and {y} placeholders.");
+    throw new Error("Enter an XYZ tile URL template with {z}, {x}, and {y} or {-y} placeholders.");
   }
+  // {-y} is a row flip, validated here and applied when the layer is drawn.
+  resolveTileAddress([originalUrl]);
 
   return {
     originalUrl,
@@ -66,12 +74,9 @@ export async function resolveXyzTileUrlTemplate(
   signal?.throwIfAborted();
   const originalUrl = normalizeTileUrlTemplate(url.trim());
   if (hasXyzTilePlaceholders(originalUrl)) {
-    return {
-      originalUrl,
-      redirected: false,
-      renderUrl: renderableXyzTileUrl(originalUrl),
-      url: originalUrl,
-    };
+    // Same check as addTileLayer: a template that names both row tokens is
+    // rejected here, before the form stores the layer.
+    return createXyzTileUrlTemplate(originalUrl);
   }
 
   return resolveShortXyzUrl(originalUrl, signal);
@@ -80,34 +85,50 @@ export async function resolveXyzTileUrlTemplate(
 export function registerXyzTileProtocol(): void {
   if (protocolRegistered || !isTauri()) return;
 
-  addProtocol(XYZ_TILE_PROTOCOL, async (request) => fetchNativeTile(parseXyzTileRequest(request)));
-  addProtocol(WMS_TILE_PROTOCOL, async (request) =>
-    fetchNativeWmsTile(parseWmsTileRequest(request)),
+  addProtocol(XYZ_TILE_PROTOCOL, async (request, abortController) =>
+    fetchNativeTile(parseXyzTileRequest(request), abortController.signal),
+  );
+  addProtocol(WMS_TILE_PROTOCOL, async (request, abortController) =>
+    fetchNativeWmsTile(parseWmsTileRequest(request), abortController.signal),
   );
   protocolRegistered = true;
 }
 
-async function fetchNativeWmsTile(url: string): Promise<{ data: ArrayBuffer }> {
+async function fetchNativeWmsTile(
+  url: string,
+  signal: AbortSignal,
+): Promise<{ data: ArrayBuffer }> {
   // A WMS without EPSG:3857 is stored with a geographic SRS/CRS: fetch the
   // tile's lon/lat extent in that CRS and redraw it into Web Mercator.
   const geographic = geographicWmsRequest(url);
-  // Every EPSG:3857 tile takes this path. A geographic one that cannot be
-  // converted (e.g. a degenerate BBOX) is sent as is, so the server's own
-  // exception reaches the diagnostics panel instead of a client-side guess.
-  if (!geographic) return fetchNativeTile(url);
-  const { data } = await fetchNativeTile(geographic.url);
-  return { data: await geographicTileToMercator(data, geographic) };
+  if (geographic) {
+    const { data } = await fetchNativeTile(geographic.url, signal);
+    return { data: await geographicTileToMercator(data, geographic) };
+  }
+  // A projected CRS (UTM, a national grid) is requested over an extent that
+  // covers the tile and warped into Web Mercator.
+  const projected = await projectedWmsRequest(url);
+  // Every EPSG:3857 tile takes this path. One in another CRS that cannot be
+  // converted (an unknown EPSG code, a degenerate BBOX) is sent as is, so the
+  // server's own exception reaches the diagnostics panel instead of a
+  // client-side guess.
+  if (!projected) return fetchNativeTile(url, signal);
+  const { data } = await fetchNativeTile(projected.url, signal);
+  return { data: await projectedTileToMercator(data, projected) };
 }
 
-async function fetchNativeTile(url: string): Promise<{ data: ArrayBuffer }> {
+async function fetchNativeTile(url: string, signal: AbortSignal): Promise<{ data: ArrayBuffer }> {
   // This handler runs once per tile, so — unlike the one-shot native calls
   // routed through native-http — it deliberately calls `invoke` directly and
   // is NOT recorded in diagnostics: a fast pan over a tile server's coverage
   // edge returns 404s in bulk, and recording each would re-render the panel
   // per tile and evict more relevant entries from the 500-record ring buffer.
-  const bytes = await invoke<number[] | Uint8Array>("fetch_url_bytes", {
-    url,
-  });
+  // A transient 5xx or 429 is retried: MapLibre would not ask for the tile
+  // again until the view changes.
+  const bytes = await fetchTileWithRetry(
+    () => invoke<number[] | Uint8Array>("fetch_url_bytes", { url }),
+    { signal },
+  );
   const array = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   return { data: array.slice().buffer };
 }
@@ -208,13 +229,6 @@ function getSavedXyzUrl(layer: GeoLibreLayer): string | null {
   }
 
   return null;
-}
-
-function renderableXyzTileUrl(url: string): string {
-  // Tauri allows HTTPS image tiles via CSP, so keep the browser/WebView tile
-  // path. Routing every XYZ tile through IPC makes slow tile servers affect
-  // desktop responsiveness.
-  return url;
 }
 
 function parseXyzTileRequest(request: RequestParameters): string {
@@ -350,7 +364,7 @@ export function parseXyzTileJson(value: unknown): XyzTileJsonSource {
     if (typeof tile !== "string") throw new Error("Invalid TileJSON tile URL.");
     const url = normalizeTileUrlTemplate(tile.trim());
     if (!isHttpUrl(url) || !hasXyzTilePlaceholders(url)) {
-      throw new Error("TileJSON tile URLs must use HTTP(S) and contain {z}, {x}, and {y}.");
+      throw new Error("TileJSON tile URLs must use HTTP(S) and contain {z}, {x}, and {y} or {-y}.");
     }
     // Check syntax as well as the protocol prefix.
     try {
@@ -360,6 +374,10 @@ export function parseXyzTileJson(value: unknown): XyzTileJsonSource {
     }
     return url;
   });
+  // One scheme covers every template, so the list cannot mix {y} and {-y}.
+  // The stored tiles and scheme stay as written. "tms" and {-y} are two flips
+  // and cancel to an XYZ row when the layer is drawn.
+  resolveTileAddress(tiles, record.scheme === "tms" ? "tms" : "xyz");
   const source: XyzTileJsonSource = { tiles };
   const bounds = record.bounds;
   if (

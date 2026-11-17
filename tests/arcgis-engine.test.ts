@@ -7,6 +7,7 @@ import {
   DEFAULT_LAYER_STYLE,
   useAppStore,
   type MapPreferences,
+  type StoryChapterLocation,
 } from "@geolibre/core";
 import {
   ARCGIS_WORLD_ELEVATION_URL,
@@ -33,6 +34,16 @@ import { geojsonLayer } from "./helpers/layer-fixtures";
 // orders them, how camera state maps between MapLibre and SDK conventions, and
 // how a hit test resolves back to the app's feature identity.
 
+/**
+ * A story chapter location with no bearing or pitch. The engine leaves the
+ * camera's orientation alone when they are absent, which is what these tests
+ * rely on.
+ */
+const chapterAt = (center: [number, number], zoom: number): StoryChapterLocation => ({
+  center,
+  zoom,
+});
+
 interface FakeLayer extends ArcgisLayer {
   kind: string;
   props: Record<string, unknown>;
@@ -42,7 +53,12 @@ interface FakeLayer extends ArcgisLayer {
 function makeSdk() {
   const created: FakeLayer[] = [];
   const basemaps: { destroyed: boolean }[] = [];
-  const widgets: { kind: string; props: Record<string, unknown>; destroyed: boolean }[] = [];
+  const widgets: {
+    kind: string;
+    props: Record<string, unknown>;
+    destroyed: boolean;
+    label?: string;
+  }[] = [];
   const goTo: unknown[] = [];
   let watchers: (() => void)[] = [];
   const viewHandlers = new Map<string, Set<(event: Record<string, unknown>) => void>>();
@@ -92,6 +108,7 @@ function makeSdk() {
       kind = kind;
       label: unknown;
       destroyed = false;
+      viewModel = { reset: () => {} };
       constructor(public props: Record<string, unknown> = {}) {
         this.label = props.label;
         widgets.push(this as never);
@@ -145,7 +162,7 @@ function makeSdk() {
     },
     destroy: () => {},
   };
-  const uiAdds: { component: unknown; position: unknown }[] = [];
+  const uiAdds: { component: unknown; position: unknown; index?: number }[] = [];
   const view = {
     type: "2d" as "2d" | "3d",
     viewingMode: "global" as "global" | "local",
@@ -170,7 +187,12 @@ function makeSdk() {
     height: 600,
     ui: {
       components: ["attribution", "zoom"],
-      add: (component: unknown, position: unknown) => uiAdds.push({ component, position }),
+      add: (component: unknown, position: unknown) =>
+        uiAdds.push(
+          typeof position === "object" && position
+            ? { component, ...(position as { position: string; index?: number }) }
+            : { component, position },
+        ),
       remove: (component: unknown) => {
         const i = uiAdds.findIndex((entry) => entry.component === component);
         if (i >= 0) uiAdds.splice(i, 1);
@@ -211,7 +233,15 @@ function makeSdk() {
       x: p.x ?? p.longitude ?? 0,
       y: p.y ?? p.latitude ?? 0,
     }),
-    toMap: (p: { x: number; y: number }) => ({ longitude: p.x, latitude: p.y, x: p.x, y: p.y }),
+    toMap: (p: {
+      x: number;
+      y: number;
+    }): { longitude: number; latitude: number; x: number; y: number } | null => ({
+      longitude: p.x,
+      latitude: p.y,
+      x: p.x,
+      y: p.y,
+    }),
     // As the SDK does, only graphics of the included layers are reported.
     hitTest: async (_point: unknown, options?: { include?: unknown[] }) => ({
       results: hitResults.filter(
@@ -499,11 +529,11 @@ describe("ArcgisEngine camera moves", () => {
   });
   it("turns a story chapter once, and not when a later chapter superseded it", async () => {
     const { engine, goTo } = makeEngine();
-    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 5 }, "flyTo", true);
-    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 6 }, "flyTo", false);
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true);
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo", false);
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(goTo.length, 2);
-    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 6 }, "flyTo", true);
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo", true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const turns = goTo.filter((call) => "rotation" in (call as { target: object }).target);
     assert.equal(turns.length, 1);
@@ -512,21 +542,137 @@ describe("ArcgisEngine camera moves", () => {
       options: { duration: 30000, easing: "linear" },
     });
   });
+  it("reports arrival before rotating and allows a pause in that callback", async () => {
+    const { engine, goTo } = makeEngine();
+    let arrived = 0;
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true, () => {
+      arrived++;
+      engine.stopStoryCamera();
+    });
+    assert.equal(arrived, 0);
+    await Promise.resolve();
+    assert.equal(arrived, 1);
+    assert.equal(goTo.length, 1, "pause prevents the pending rotation");
+    engine.destroy();
+  });
+  it("continues after camera failures but ignores aborted, stopped, and superseded failures", async (t) => {
+    t.mock.method(console, "warn", () => {});
+    for (const scenario of ["failed", "aborted", "interrupted", "stopped", "superseded"] as const) {
+      const { engine, rawView } = makeEngine();
+      const error = new Error("Camera move failed");
+      if (scenario === "aborted") error.name = "AbortError";
+      if (scenario === "interrupted") error.name = "view:goto-interrupted";
+      rawView.goTo = () => Promise.reject(error);
+      let arrived = 0;
+      engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true, () => arrived++);
+      if (scenario === "stopped") engine.stopStoryCamera();
+      if (scenario === "superseded") engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.equal(arrived, scenario === "failed" ? 1 : 0, scenario);
+      engine.destroy();
+    }
+  });
+  it("cancels a paused or superseded chapter's pending arrival and rotation", async () => {
+    const { engine, goTo } = makeEngine();
+    let arrived = 0;
+    engine.restoreLayerStyles = () => assert.fail("pausing must not restore styles");
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5), "flyTo", true, () => arrived++);
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6), "flyTo", true, () => arrived++);
+    engine.stopStoryCamera();
+    await Promise.resolve();
+    assert.equal(arrived, 0);
+    assert.equal(goTo.length, 2);
+    engine.destroy();
+  });
   it("marks the settle that ends a story move as scripted", async () => {
     const { engine, fireWatchers, fireViewEvent } = makeEngine();
     const seen: (boolean | undefined)[] = [];
     engine.onCameraIdle((event) => seen.push(event?.storyCamera));
     fireWatchers();
-    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 5 });
+    engine.applyStoryChapterCamera(chapterAt([1, 2], 5));
     fireWatchers();
     await Promise.resolve();
     fireWatchers();
     // A drag during a story move makes the next settle the user's.
-    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 6 });
+    engine.applyStoryChapterCamera(chapterAt([3, 4], 6));
     fireViewEvent("drag", { x: 1, y: 1, action: "start" });
     fireWatchers();
     engine.destroy();
     assert.deepEqual(seen, [false, true, false, false]);
+  });
+  it("rotates and tilts on a Ctrl drag at MapLibre's rates, and leaves plain drags alone", () => {
+    const { engine, goTo, fireViewEvent, rawView } = makeSceneEngine();
+    let stopped = 0;
+    const drag = (action: string, x: number, y: number, ctrlKey: boolean) =>
+      fireViewEvent("drag", {
+        action,
+        x,
+        y,
+        button: 0,
+        native: { ctrlKey },
+        stopPropagation: () => stopped++,
+      });
+    drag("start", 100, 100, false);
+    drag("update", 150, 50, false);
+    drag("end", 150, 50, false);
+    assert.equal(goTo.length, 0);
+    assert.equal(stopped, 0);
+    // The fake camera looks at heading 30, tilt 45: right 10px turns 8
+    // degrees, up 20px tilts 10 degrees further.
+    drag("start", 100, 100, true);
+    drag("update", 110, 80, true);
+    assert.deepEqual(goTo.at(-1), {
+      target: { heading: 38, tilt: 55 },
+      options: { animate: false },
+    });
+    // The next update builds on that target even when the camera has not
+    // landed there yet (an unanimated goTo may still be pending).
+    rawView.camera = { heading: 30, tilt: 45, position: { z: 1500 } };
+    drag("update", 120, 60, true);
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { heading: 46, tilt: 65 });
+    // Movement made while navigation is suspended is discarded, so resuming
+    // does not jump the camera by it.
+    const resume = engine.suspendNavigation();
+    drag("update", 170, 10, true);
+    resume();
+    const moves = goTo.length;
+    drag("update", 180, 0, true);
+    assert.equal(goTo.length, moves + 1);
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { heading: 54, tilt: 70 });
+    drag("end", 180, 0, true);
+    // Every Ctrl-drag event is swallowed, the suspended one twice (the
+    // suspension swallows drags too).
+    assert.equal(stopped, 7);
+  });
+  it("does not steer the camera on a Ctrl drag while navigation is suspended", () => {
+    const { engine, goTo, fireViewEvent } = makeSceneEngine();
+    const drag = (action: string, x: number, y: number) =>
+      fireViewEvent("drag", {
+        action,
+        x,
+        y,
+        button: 0,
+        native: { ctrlKey: true },
+        stopPropagation: () => {},
+      });
+    const resume = engine.suspendNavigation();
+    drag("start", 100, 100);
+    drag("update", 110, 80);
+    drag("end", 110, 80);
+    assert.equal(goTo.length, 0);
+    resume();
+    resume();
+    drag("start", 100, 100);
+    drag("update", 110, 80);
+    assert.equal(goTo.length, 1);
+  });
+  it("resets both heading and pitch from the compass, as MapLibre's does", () => {
+    const { goTo, widgets } = makeSceneEngine();
+    const compass = widgets.find((w) => w.kind === "Compass") as unknown as {
+      viewModel: { reset(): void };
+    };
+    compass.viewModel.reset();
+    assert.deepEqual((goTo.at(-1) as { target: unknown }).target, { heading: 0, tilt: 0 });
   });
   it("reads and steps the zoom of a view with no tiling scheme through its scale", () => {
     const { engine, goTo, rawView } = makeEngine();
@@ -770,7 +916,7 @@ describe("ArcgisEngine camera conventions", () => {
         ],
       ],
     });
-    assert.equal((multi as { rings: unknown[] }).rings.length, 2);
+    assert.equal((multi as unknown as { rings: unknown[] }).rings.length, 2);
     assert.equal(geojsonToArcgisGeometry({ type: "GeometryCollection", geometries: [] }), null);
   });
 });
@@ -848,8 +994,39 @@ describe("ArcgisEngine controls", () => {
     assert.equal(engine.getBuiltInControlPosition("scale"), "bottom-right");
     assert.equal(uiAdds.at(-1)?.position, "bottom-right");
     // Missing controls are rejected before consulting the plugin control host.
-    assert.equal(engine.addControl(), false);
+    assert.equal(engine.addControl(undefined as never), false);
     assert.equal(engine.capabilities.domControls, true);
+  });
+  it("keeps MapLibre's corner order when a control mounts after its neighbours", () => {
+    const { document } = parseHTML("<html><body></body></html>");
+    const previous = globalThis.document;
+    (globalThis as { document: unknown }).document = document;
+    try {
+      const { engine, uiAdds } = makeSceneEngine("global", {
+        onProjectionToggle: () => {},
+        onLayerVisibilityChange: () => {},
+      });
+      const topRight = () =>
+        uiAdds.filter((entry) => entry.position === "top-right").map((entry) => entry.index);
+      // Fullscreen, compass, globe, then the layer list, as on MapLibre.
+      assert.deepEqual(topRight(), [0, 1, 2, 3]);
+      // Shown again from the Controls menu, the globe slots back in before
+      // the layer list instead of being appended after it.
+      engine.setBuiltInControlVisible("globe", false);
+      engine.setBuiltInControlVisible("globe", true);
+      assert.equal(uiAdds.at(-1)?.index, 2);
+      // A control in another corner does not count towards the index.
+      engine.setBuiltInControlPosition("compass", "bottom-left");
+      engine.setBuiltInControlVisible("globe", false);
+      engine.setBuiltInControlVisible("globe", true);
+      assert.equal(uiAdds.at(-1)?.index, 1);
+      // Moved into the same corner, the scale bar goes before the layer list,
+      // which MapLibre mounts only once the style loads.
+      engine.setBuiltInControlPosition("scale", "top-right");
+      assert.equal(uiAdds.at(-1)?.index, 2);
+    } finally {
+      (globalThis as { document: unknown }).document = previous;
+    }
   });
   it("mounts moved controls in the corners an earlier view reported", () => {
     using _document = withDocument();
@@ -919,10 +1096,10 @@ describe("ArcgisEngine layer sync", () => {
         ],
       },
     });
-    // Store order is topmost first: A above B.
+    // Store order is bottom to top: B above A.
     engine.syncLayers([SQUARE, other]);
     const kinds = layers.items.map((l) => `${l.kind}:${l.title}`);
-    assert.deepEqual(kinds, ["geojson:Layer B", "geojson:Layer A", "geojson:Layer A"]);
+    assert.deepEqual(kinds, ["geojson:Layer A", "geojson:Layer A", "geojson:Layer B"]);
     const square = created.filter((l) => l.title === "Layer A");
     assert.deepEqual(
       square.map((l) => l.props.geometryType),
@@ -934,7 +1111,7 @@ describe("ArcgisEngine layer sync", () => {
     engine.syncLayers([other, SQUARE]);
     assert.deepEqual(
       layers.items.map((l) => l.title),
-      ["Layer A", "Layer A", "Layer B"],
+      ["Layer B", "Layer A", "Layer A"],
     );
     assert.equal(created.length, 3);
   });
@@ -998,10 +1175,10 @@ describe("ArcgisEngine layer sync", () => {
     ]);
     assert.deepEqual(
       layers.items.map((l) => l.kind),
-      ["feature", "web-tile"],
+      ["web-tile", "feature"],
     );
-    assert.equal(layers.items[1].props.urlTemplate, "https://t/{level}/{col}/{row}.png");
-    assert.equal(layers.items[1].props.copyright, "© T");
+    assert.equal(layers.items[0].props.urlTemplate, "https://t/{level}/{col}/{row}.png");
+    assert.equal(layers.items[0].props.copyright, "© T");
     // Story exports rebuild the layer in MapLibre, so they get the store template.
     assert.deepEqual(engine.getLayerRasterSource("xyz"), {
       type: "raster",
@@ -1085,6 +1262,43 @@ describe("ArcgisEngine layer sync", () => {
       String((engine.getLayerRasterSource("imagery")?.tiles as string[])[0]),
       /ImageServer\/exportImage\?/,
     );
+  });
+  it("draws a raw-LERC image service with ImageryTileLayer", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([
+      {
+        ...geojsonLayer({ id: "wind", name: "wind", geojson: undefined }),
+        type: "arcgis" as const,
+        source: { url: "https://h/rest/services/W/ImageServer" },
+        metadata: { arcgisRawTiles: true },
+      },
+    ]);
+    const native = created.find((layer) => layer.kind === "imagery-tile");
+    assert.ok(native, "an ImageryTileLayer was created");
+    assert.equal(native.props.url, "https://h/rest/services/W/ImageServer");
+    assert.ok(!created.some((layer) => layer.kind === "imagery"));
+    // Its LERC tiles have no plain raster template to hand an export.
+    assert.equal(engine.getLayerRasterSource("wind"), null);
+    assert.equal(native.props.customParameters, undefined);
+  });
+  it("sends a tiled imagery layer's token as a custom request parameter", () => {
+    const { engine, created } = makeEngine();
+    engine.syncLayers([
+      {
+        ...geojsonLayer({ id: "secured", name: "secured", geojson: undefined }),
+        type: "raster" as const,
+        source: {
+          type: "raster",
+          tiles: ["https://h/rest/services/W/ImageServer/tile/{z}/{y}/{x}?token=abc"],
+        },
+        sourcePath: "https://h/rest/services/W/ImageServer",
+        metadata: { sourceKind: "arcgis-image-service", arcgisRawTiles: true },
+      },
+    ]);
+    const native = created.find((layer) => layer.kind === "imagery-tile");
+    assert.ok(native, "an ImageryTileLayer was created");
+    assert.equal(native.props.url, "https://h/rest/services/W/ImageServer");
+    assert.deepEqual(native.props.customParameters, { token: "abc" });
   });
   it("fades a story chapter's layer opacity over the transition", () => {
     const { engine, created } = makeEngine();
@@ -1432,7 +1646,7 @@ describe("ArcgisEngine picking and highlight", () => {
     const selection = layers.items.at(-1);
     const clearPoint = engine.showSearchResult({ type: "Point", coordinates: [-77.0365, 38.8977] });
     const point = layers.items.at(-1)!;
-    assert.deepEqual(point.graphics!.getItemAt(0).geometry, {
+    assert.deepEqual(point.graphics!.getItemAt(0)!.geometry, {
       type: "point",
       x: -77.0365,
       y: 38.8977,
@@ -1446,7 +1660,7 @@ describe("ArcgisEngine picking and highlight", () => {
     ];
     const clearCell = engine.showSearchResult({ type: "Polygon", coordinates: [ring] });
     const cell = layers.items.at(-1)!;
-    assert.equal(cell.graphics!.getItemAt(0).geometry?.type, "polygon");
+    assert.equal(cell.graphics!.getItemAt(0)!.geometry?.type, "polygon");
     clearPoint();
     clearPoint();
     assert.ok(point.destroyed);
@@ -1921,7 +2135,7 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
     facade.easeTo({ zoom: 10 });
     assert.equal((goTo.at(-1) as { options: { duration: number } }).options.duration, 500);
     const events: string[] = [];
-    for (const event of ["movestart", "moveend", "idle", "remove"])
+    for (const event of ["movestart", "moveend", "idle", "remove"] as const)
       facade.on(event, () => events.push(event));
     rawView.stationary = false;
     fireWatchers();
@@ -1944,6 +2158,11 @@ it("hosts DOM controls with instant jumps, navigation events and complete cleanu
     events.splice(3);
     fireViewEvent("click", { x: 5, y: 6 });
     assert.deepEqual(clicked, [5, 6]);
+    // A box-drawing control calls `preventDefault` on mousedown, as on MapLibre.
+    let prevented = 0;
+    facade.on("mousedown", (event: { preventDefault(): void }) => event.preventDefault());
+    fireViewEvent("pointer-down", { x: 1, y: 2, native: { preventDefault: () => prevented++ } });
+    assert.equal(prevented, 1);
     engine.removeControl(control);
     assert.equal(facade.hasControl(control), false);
     assert.equal(removed, 1);

@@ -1,9 +1,23 @@
+import { useAppStore, type DeploymentCapability } from "@geolibre/core";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
+import {
+  arePanelsHidden,
+  isDrawRequested,
+  isMapOnly,
+  isToolbarHidden,
+  isViewerLayoutParams,
+  normalizedParam,
+} from "../lib/layout-params";
 import { useDesktopSettingsStore, type DesktopLayoutSettings } from "./useDesktopSettings";
 
 export interface LayoutOptions {
   attributePanelVisible: boolean;
+  /**
+   * Whether the bottom panels sit under the map column (the side docks keep the
+   * full height) instead of spanning the window. A persisted layout setting.
+   */
+  bottomPanelsUnderMap: boolean;
   compact: boolean;
   layerPanelVisible: boolean;
   /**
@@ -23,22 +37,46 @@ export interface LayoutOptions {
   toolbarVisible: boolean;
   /** Read-only embed chrome with Layers and map navigation, but no authoring UI. */
   viewer: boolean;
+  /**
+   * Whether the read-only viewer lets the geometry editor run (`?layout=viewer`
+   * with `?draw`), so a host page can offer drawing without the authoring
+   * chrome. Needs the deployment's `project:edit` capability; always false
+   * outside the viewer, where the editor is not blocked in the first place.
+   */
+  viewerDrawing: boolean;
 }
 
 const COMPACT_LAYOUT_VALUES = new Set(["compact", "embed", "iframe"]);
 const ICON_TOOLBAR_VALUES = new Set(["icon", "icons", "icon-only"]);
-const HIDDEN_TOOLBAR_VALUES = new Set(["hidden", "hide", "none", "off"]);
-const HIDDEN_PANEL_VALUES = new Set(["hidden", "hide", "none", "off"]);
-const MAP_ONLY_VALUES = new Set(["", "true", "1", "yes", "on"]);
 
 export function useLayoutOptions(): LayoutOptions {
   // Shallow equality keeps unrelated desktop-settings updates (which always
   // rebuild the layout object) from re-rendering every layout consumer.
   const layoutSettings = useDesktopSettingsStore(useShallow((s) => s.desktopSettings.layout));
-  return useMemo(() => layoutOptionsFromLocation(layoutSettings), [layoutSettings]);
+  const capabilities = useAppStore((s) => s.deploymentCapabilities);
+  return useMemo(
+    () => layoutOptionsFromLocation(layoutSettings, capabilities),
+    [layoutSettings, capabilities],
+  );
 }
 
-export function layoutOptionsFromLocation(layoutSettings: DesktopLayoutSettings): LayoutOptions {
+/**
+ * Whether a query string asks for the read-only `layout=viewer` chrome.
+ *
+ * Args:
+ *   search: The URL's query string.
+ *
+ * Returns:
+ *   True for a viewer launch.
+ */
+export function isViewerLayout(search: string): boolean {
+  return isViewerLayoutParams(new URLSearchParams(search));
+}
+
+export function layoutOptionsFromLocation(
+  layoutSettings: DesktopLayoutSettings,
+  capabilities: ReadonlySet<DeploymentCapability>,
+): LayoutOptions {
   if (typeof window === "undefined") {
     return {
       attributePanelVisible: true,
@@ -48,6 +86,7 @@ export function layoutOptionsFromLocation(layoutSettings: DesktopLayoutSettings)
       statusBarVisible: true,
       toolbarVisible: true,
       viewer: false,
+      viewerDrawing: false,
       ...layoutSettings,
     };
   }
@@ -57,20 +96,15 @@ export function layoutOptionsFromLocation(layoutSettings: DesktopLayoutSettings)
   const panels = normalizedParam(params.get("panels"));
   const toolbar = normalizedParam(params.get("toolbar"));
   // `maponly` hides the entire chrome (toolbar, panels, status bar), leaving
-  // only the map. The param can be a bare flag (`?maponly`) or an explicit
-  // truthy value (`?maponly=true`).
-  const mapOnly =
-    params.has("maponly") && MAP_ONLY_VALUES.has(normalizedParam(params.get("maponly")));
-  const viewer = layout === "viewer";
+  // only the map.
+  const mapOnly = isMapOnly(params);
+  const viewer = isViewerLayout(window.location.search);
   // `maponly` implies `compact` so the map fills its container (the `<main>`
   // element gets `min-h-0`). This also forces `toolbarLabels` and
   // `showProjectInfo` to false below, which is harmless since the toolbar is
   // hidden, but any other consumer of `compact` sees `true` in map-only mode.
   const compact = mapOnly || viewer || COMPACT_LAYOUT_VALUES.has(layout);
-  const panelsHidden =
-    mapOnly ||
-    HIDDEN_PANEL_VALUES.has(panels) ||
-    normalizedParam(params.get("hidePanels")) === "true";
+  const panelsHidden = arePanelsHidden(params);
   const panelsCollapsed = !panelsHidden && panels === "collapsed";
   const toolbarLabels =
     !compact && !ICON_TOOLBAR_VALUES.has(toolbar) ? layoutSettings.toolbarLabels : false;
@@ -84,6 +118,7 @@ export function layoutOptionsFromLocation(layoutSettings: DesktopLayoutSettings)
 
   return {
     attributePanelVisible,
+    bottomPanelsUnderMap: layoutSettings.bottomPanelsUnderMap,
     compact,
     layerPanelVisible,
     panelsHidden,
@@ -92,11 +127,8 @@ export function layoutOptionsFromLocation(layoutSettings: DesktopLayoutSettings)
     statusBarVisible: !mapOnly,
     stylePanelVisible,
     toolbarLabels,
-    toolbarVisible: !mapOnly && !HIDDEN_TOOLBAR_VALUES.has(toolbar),
+    toolbarVisible: !isToolbarHidden(params),
     viewer,
+    viewerDrawing: viewer && isDrawRequested(params) && capabilities.has("project:edit"),
   };
-}
-
-function normalizedParam(value: string | null): string {
-  return value?.trim().toLowerCase() ?? "";
 }

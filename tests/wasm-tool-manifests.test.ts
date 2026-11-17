@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  PREBUILT_TOOL_MANIFESTS_FILE,
+  fetchPrebuiltToolManifests,
   fileOutputTargetExtension,
+  lidarBytesExtension,
+  lidarOutputTargetExtension,
   manifestScalarDefaults,
   mergeWasmToolManifests,
   normalizeVectorOutputFormat,
+  outputTextFormatHint,
+  resetPrebuiltToolManifestsCache,
   type ToolManifest,
   type WhiteboxTool,
 } from "@geolibre/processing";
@@ -86,10 +92,10 @@ describe("mergeWasmToolManifests", () => {
     // greater_than_or_equal_to, less_than_or_equal_to). They run through the
     // WASM runner like any other, so dropping them left the dialog listing
     // fewer tools than the binary provides.
+    // Whitebox provenance is an unset `source` once a manifest is converted.
     const wasmOnlyWhitebox: WhiteboxTool = {
       id: "buffer_vector",
       display_name: "Buffer Vector",
-      source: "whitebox",
       params: [{ name: "input", data_kind: "vector", io_role: "input" }],
     };
     const merged = mergeWasmToolManifests(
@@ -247,6 +253,7 @@ describe("mergeWasmToolManifests", () => {
     // variogram/cokriging tools and the >=/<= comparisons, which the snapshot
     // has never listed. They execute through the WASM runner (buffer_vector
     // turns 2 points into 2 polygons), so dropping them hid working tools.
+    // Whitebox provenance is an unset `source` once a manifest is converted.
     const wasmOnlyWhitebox: WhiteboxTool = {
       id: "some_wasm_only_whitebox_tool",
       params: [{ name: "input", data_kind: "raster", io_role: "input" }],
@@ -352,6 +359,145 @@ describe("mergeWasmToolManifests", () => {
     };
     const [tool] = mergeWasmToolManifests([catalog], [wasm]);
     assert.equal(tool.params?.[0].default, "wasm");
+  });
+
+  // geolibre-wasm describes many single-dataset outputs only as a generic file
+  // (`slope`, `wetness_index`, …), which hid them from Model Builder and made
+  // the runner write an opaque `.dat` instead of a GeoTIFF.
+  const genericOutput = (name: string) => ({
+    name,
+    io_role: "output",
+    data_kind: "file",
+    schema: { dataset: { kind: "file" }, kind: "output", mode: "new" },
+  });
+
+  it("types a generic WASM output from the catalog's dataset kind", () => {
+    const catalog: WhiteboxTool = {
+      id: "slope",
+      params: [
+        { name: "input", kind: "raster_in" },
+        { name: "output", kind: "raster_out" },
+      ],
+    };
+    const wasm: WhiteboxTool = {
+      id: "slope",
+      return_type: "Raster",
+      params: [{ name: "input", io_role: "input", data_kind: "raster" }, genericOutput("output")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[1].kind, "raster_out");
+  });
+
+  it("types each generic output of a multi-output tool", () => {
+    const catalog: WhiteboxTool = {
+      id: "ridge_and_valley_vectors",
+      params: [
+        { name: "output_ridges", kind: "vector_out" },
+        { name: "output_valleys", kind: "vector_out" },
+      ],
+    };
+    const wasm: WhiteboxTool = {
+      id: "ridge_and_valley_vectors",
+      return_type: "tuple[Vector, Vector]",
+      params: [genericOutput("output_ridges"), genericOutput("output_valleys")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.deepEqual(
+      tool.params?.map((param) => param.kind),
+      ["vector_out", "vector_out"],
+    );
+  });
+
+  it("keeps a prefix or directory output generic", () => {
+    const catalog: WhiteboxTool = {
+      id: "lidar_tile",
+      params: [{ name: "output_directory", kind: "lidar_out" }],
+    };
+    const wasm: WhiteboxTool = {
+      id: "lidar_tile",
+      return_type: "Lidar",
+      params: [genericOutput("output_directory")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[0].kind, undefined);
+    const prefixCatalog: WhiteboxTool = {
+      id: "segment_multiresolution_hierarchical",
+      params: [{ name: "output_prefix", kind: "raster_out" }],
+    };
+    const prefixWasm: WhiteboxTool = {
+      id: "segment_multiresolution_hierarchical",
+      params: [genericOutput("output_prefix")],
+    };
+    const [prefixTool] = mergeWasmToolManifests([prefixCatalog], [prefixWasm]);
+    assert.equal(prefixTool.params?.[0].kind, undefined);
+  });
+
+  it("keeps a list-returning tool's output generic", () => {
+    const catalog: WhiteboxTool = {
+      id: "principal_component_analysis",
+      params: [{ name: "output", kind: "raster_out" }],
+    };
+    const wasm: WhiteboxTool = {
+      id: "principal_component_analysis",
+      return_type: "list[Raster]",
+      params: [genericOutput("output")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[0].kind, undefined);
+  });
+
+  it("types a flow-direction output whose name contains `dir`", () => {
+    const catalog: WhiteboxTool = {
+      id: "flow_tool",
+      params: [{ name: "flow_dir_output_path", kind: "raster_out" }],
+    };
+    const wasm: WhiteboxTool = {
+      id: "flow_tool",
+      return_type: "Raster",
+      params: [genericOutput("flow_dir_output_path")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[0].kind, "raster_out");
+  });
+
+  it("types a single-file LiDAR output", () => {
+    const catalog: WhiteboxTool = {
+      id: "lidar_shift",
+      params: [{ name: "output", kind: "lidar_out" }],
+    };
+    const wasm: WhiteboxTool = {
+      id: "lidar_shift",
+      return_type: "Lidar",
+      params: [genericOutput("output")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[0].kind, "lidar_out");
+  });
+
+  it("falls back to the catalog's return type when the manifest has none", () => {
+    // Manifests built from the binary (manifestToWhiteboxTool) carry no
+    // return_type, so the catalog's list return type must still exclude it.
+    const catalog: WhiteboxTool = {
+      id: "inverse_pca",
+      return_type: "list[Raster]",
+      params: [{ name: "output", kind: "raster_out" }],
+    };
+    const wasm: WhiteboxTool = { id: "inverse_pca", params: [genericOutput("output")] };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[0].kind, undefined);
+  });
+
+  it("leaves a generic output alone when the catalog types it as a file", () => {
+    const catalog: WhiteboxTool = {
+      id: "vector_summary_statistics",
+      params: [{ name: "output", kind: "file_out" }],
+    };
+    const wasm: WhiteboxTool = {
+      id: "vector_summary_statistics",
+      params: [genericOutput("output")],
+    };
+    const [tool] = mergeWasmToolManifests([catalog], [wasm]);
+    assert.equal(tool.params?.[0].kind, undefined);
   });
 });
 
@@ -482,5 +628,138 @@ describe("fileOutputTargetExtension", () => {
       io_role: "output",
     };
     assert.equal(fileOutputTargetExtension(decimalProse, undefined), "csv");
+  });
+});
+
+describe("outputTextFormatHint name words", () => {
+  it("reads a format named by one word of a snake/kebab/camelCase name", () => {
+    // directional_variogram's `output_json`, as the WASM manifest reports it:
+    // its description never says JSON, and `_` is a word character, so the
+    // old `\bjson\b` rule missed the name and the tool wrote an opaque `.dat`.
+    const variogram = {
+      name: "output_json",
+      description: "Output file path for directional variogram results",
+      data_kind: "file",
+      io_role: "output",
+    };
+    assert.equal(outputTextFormatHint(variogram), "json");
+    assert.equal(fileOutputTargetExtension(variogram, undefined), "json");
+    assert.equal(outputTextFormatHint({ name: "report-html" }), "html");
+    assert.equal(outputTextFormatHint({ name: "summaryCsv" }), "csv");
+    assert.equal(outputTextFormatHint({ name: "CSVOutput" }), "csv");
+  });
+
+  it("does not match a format buried inside a longer word", () => {
+    assert.equal(outputTextFormatHint({ name: "csvlike_output" }), null);
+    assert.equal(outputTextFormatHint({ name: "jsonish" }), null);
+  });
+});
+
+describe("lidarOutputTargetExtension", () => {
+  it("honours a user-typed .laz path", () => {
+    assert.equal(lidarOutputTargetExtension("classified.laz"), "laz");
+    assert.equal(lidarOutputTargetExtension(" /data/OUT.LAZ "), "laz");
+  });
+
+  it("honours a user-typed .copc.laz path", () => {
+    assert.equal(lidarOutputTargetExtension("thinned.copc.laz"), "copc.laz");
+    assert.equal(lidarOutputTargetExtension(" /data/OUT.COPC.LAZ "), "copc.laz");
+  });
+
+  it("keeps uncompressed .las for anything else", () => {
+    assert.equal(lidarOutputTargetExtension("classified.las"), "las");
+    assert.equal(lidarOutputTargetExtension("classified.laz.bak"), "las");
+    assert.equal(lidarOutputTargetExtension(""), "las");
+    assert.equal(lidarOutputTargetExtension(undefined), "las");
+    assert.equal(lidarOutputTargetExtension(42), "las");
+  });
+});
+
+/**
+ * A minimal LAS 1.4 header (375 bytes) plus room for one VLR header.
+ *
+ * @param pointFormatByte - The point data format byte (offset 104).
+ * @param firstVlrUserId - The first VLR's user id, if any.
+ * @returns The header bytes.
+ */
+function lasHeader(pointFormatByte: number, firstVlrUserId = "", recordId = 0): Uint8Array {
+  const bytes = new Uint8Array(375 + 54);
+  const view = new DataView(bytes.buffer);
+  bytes.set([0x4c, 0x41, 0x53, 0x46], 0); // "LASF"
+  view.setUint16(94, 375, true);
+  bytes[104] = pointFormatByte;
+  bytes.set(
+    Array.from(firstVlrUserId, (char) => char.charCodeAt(0)),
+    375 + 2,
+  );
+  view.setUint16(375 + 18, recordId, true);
+  return bytes;
+}
+
+describe("lidarBytesExtension", () => {
+  it("names uncompressed LAS records .las", () => {
+    assert.equal(lidarBytesExtension(lasHeader(6, "LASF_Projection")), "las");
+  });
+
+  it("names LASzip-compressed records .laz (bit 7, or bit 6 in old files)", () => {
+    assert.equal(lidarBytesExtension(lasHeader(0x86, "laszip encoded")), "laz");
+    assert.equal(lidarBytesExtension(lasHeader(0x43)), "laz");
+  });
+
+  it("names a cloud whose first VLR is the COPC info .copc.laz", () => {
+    assert.equal(lidarBytesExtension(lasHeader(0x86, "copc", 1)), "copc.laz");
+  });
+
+  it("does not mistake a look-alike first VLR for the COPC info", () => {
+    assert.equal(lidarBytesExtension(lasHeader(0x86, "copc_custom", 1)), "laz");
+    assert.equal(lidarBytesExtension(lasHeader(0x86, "copc", 1000)), "laz");
+  });
+
+  it("falls back to .las for bytes that are not LAS", () => {
+    assert.equal(lidarBytesExtension(new Uint8Array([0x49, 0x49, 0x2a, 0x00])), "las");
+    assert.equal(lidarBytesExtension(new Uint8Array()), "las");
+  });
+});
+
+describe("fetchPrebuiltToolManifests (issue #3472)", () => {
+  const BASE = "https://app.example/sub/index.html";
+  const json = (body: unknown, status = 200) =>
+    (async () =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+  it("reads the build-time manifests next to the document", async () => {
+    resetPrebuiltToolManifestsCache();
+    let requested = "";
+    const fake = (async (url: string) => {
+      requested = url;
+      return new Response(JSON.stringify([{ id: "slope", params: [] }]));
+    }) as unknown as typeof fetch;
+    const manifests = await fetchPrebuiltToolManifests(BASE, fake);
+    assert.deepEqual(manifests, [{ id: "slope", params: [] }]);
+    assert.equal(requested, `https://app.example/sub/${PREBUILT_TOOL_MANIFESTS_FILE}`);
+    resetPrebuiltToolManifestsCache();
+  });
+
+  it("returns null so the caller asks the runner when the file is missing or bad", async () => {
+    for (const fake of [
+      json([], 200),
+      json({ error: "nope" }, 404),
+      json([{ name: "no id" }]),
+      json([{ id: "slope", params: {} }]),
+      json([{ id: "slope", source: 42 }]),
+      (async () => new Response("<!doctype html>", { status: 200 })) as unknown as typeof fetch,
+      (async () => {
+        throw new Error("offline");
+      }) as unknown as typeof fetch,
+    ]) {
+      resetPrebuiltToolManifestsCache();
+      assert.equal(await fetchPrebuiltToolManifests(BASE, fake), null);
+    }
+    resetPrebuiltToolManifestsCache();
+    assert.equal(await fetchPrebuiltToolManifests(undefined, json([{ id: "x" }])), null);
+    resetPrebuiltToolManifestsCache();
   });
 });

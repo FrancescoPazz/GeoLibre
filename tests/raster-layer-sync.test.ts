@@ -5,12 +5,14 @@ import type { RasterLayerInfo, RasterLayerState } from "maplibre-gl-raster";
 import {
   createRasterStoreLayer,
   isRasterControlStoreLayer,
+  isUnsavableLocalRaster,
   localRasterPath,
   rememberLocalRasterPath,
   removeRasterStoreLayers,
   rendersNativeMapLibreLayer,
   runWithRasterStoreSyncSuspended,
   savedRasterState,
+  serializeBandNames,
   setTransientRasterVisibility,
   syncRasterLayersToStore,
   syncRasterLayersToStoreWithOptions,
@@ -26,6 +28,7 @@ function rasterState(patch: Partial<RasterLayerState> = {}): RasterLayerState {
     bands: [1, 2, 3],
     rescale: null,
     colormap: "gray",
+    reversed: false,
     nodata: "auto",
     opacity: 1,
     gamma: 1,
@@ -40,6 +43,8 @@ function rasterInfo(patch: Partial<RasterLayerInfo> = {}): RasterLayerInfo {
     id: "raster-1",
     name: "dem.tif",
     source: { kind: "url", url: "https://example.com/dem.tif" },
+    memberUrls: null,
+    attribution: null,
     bandCount: 3,
     bandNames: null,
     beforeId: null,
@@ -62,6 +67,11 @@ function fakeControl(infos: RasterLayerInfo[] = [], options: { collapsed?: boole
     getState: () => ({ collapsed: options.collapsed ?? true }),
     getRasters: () => infos,
     removeRaster: (id) => calls.push({ method: "removeRaster", args: [id] }),
+    reorderRaster: (id, toIndex) => {
+      calls.push({ method: "reorderRaster", args: [id, toIndex] });
+      const from = infos.findIndex((info) => info.id === id);
+      infos.splice(toIndex, 0, ...infos.splice(from, 1));
+    },
     setRasterState: (id, patch) => calls.push({ method: "setRasterState", args: [id, patch] }),
     setVisible: (id, visible) => calls.push({ method: "setVisible", args: [id, visible] }),
   };
@@ -163,6 +173,7 @@ describe("createRasterStoreLayer", () => {
       bands: [2],
       rescale: [[0, 4000]],
       colormap: "viridis",
+      reversed: false,
       nodata: 0,
       gamma: 1,
       stretch: "sqrt",
@@ -298,6 +309,36 @@ describe("createRasterStoreLayer", () => {
   });
 });
 
+// GeoLibre#3120: the save flow warns about rasters whose data a project file
+// cannot reload, rather than letting them vanish on reopen.
+describe("isUnsavableLocalRaster", () => {
+  const fileInfo = rasterInfo({
+    source: { kind: "file", fileName: "local.tif", objectUrl: "blob:x" },
+  });
+
+  it("flags a browser-file raster on every host", () => {
+    const layer = createRasterStoreLayer(fileInfo);
+    assert.equal(isUnsavableLocalRaster(layer, false), true);
+    assert.equal(isUnsavableLocalRaster(layer, true), true);
+  });
+
+  it("flags a raster with a recorded path only where paths cannot be reopened", () => {
+    rememberLocalRasterPath("raster-1", "/data/local.tif");
+    try {
+      const layer = createRasterStoreLayer(fileInfo);
+      assert.equal(isUnsavableLocalRaster(layer, true), false);
+      assert.equal(isUnsavableLocalRaster(layer, false), true);
+    } finally {
+      rememberLocalRasterPath("raster-1", undefined);
+    }
+  });
+
+  it("never flags a remote raster or a non-raster layer", () => {
+    assert.equal(isUnsavableLocalRaster(createRasterStoreLayer(rasterInfo()), false), false);
+    assert.equal(isUnsavableLocalRaster(otherStoreLayer(), false), false);
+  });
+});
+
 describe("syncRasterLayersToStore", () => {
   beforeEach(() => {
     useAppStore.setState({ layers: [] });
@@ -354,6 +395,26 @@ describe("syncRasterLayersToStore", () => {
     } finally {
       rememberLocalRasterPath("raster-1", undefined);
     }
+  });
+
+  // A plugin tags the layer addCogLayer returned (the Sentinel-2 Explorer's
+  // scene id drives its Add/Remove button); the header-load sync that follows
+  // must not wipe the tag, while control-owned keys still rebuild.
+  it("keeps metadata keys the control does not own across repeated syncs", () => {
+    syncRasterLayersToStore(fakeControl([rasterInfo({ error: new Error("stale") })]).control);
+    const layer = useAppStore.getState().layers[0];
+    useAppStore.getState().updateLayer(layer.id, {
+      metadata: { ...layer.metadata, sentinel2Scene: "S2B_10SEG", attribution: "ESA" },
+    });
+
+    // The header load: the error clears and the band count arrives.
+    syncRasterLayersToStore(fakeControl([rasterInfo({ bandCount: 1 })]).control);
+
+    const synced = useAppStore.getState().layers[0];
+    assert.equal(synced.metadata.bandCount, 1);
+    assert.equal(synced.metadata.sentinel2Scene, "S2B_10SEG");
+    assert.equal(synced.metadata.attribution, "ESA");
+    assert.equal(synced.metadata.error, undefined);
   });
 
   it("keeps STAC access metadata across repeated syncs", () => {
@@ -477,6 +538,7 @@ describe("syncRasterLayersToStore", () => {
       getState: () => ({ collapsed }),
       getRasters: () => [rasterInfo()],
       removeRaster: () => {},
+      reorderRaster: () => {},
       setRasterState: () => {},
       setVisible: () => {},
     };
@@ -546,6 +608,111 @@ describe("wireRasterStoreSync", () => {
     useAppStore.getState().removeLayer("raster-1");
 
     assert.deepEqual(calls, [{ method: "removeRaster", args: ["raster-1"] }]);
+  });
+
+  it("moves the control's rasters to follow a Layers panel reorder", () => {
+    const { control, calls } = fakeControl([
+      rasterInfo({ id: "raster-a" }),
+      rasterInfo({ id: "raster-b" }),
+      rasterInfo({ id: "raster-c" }),
+    ]);
+    syncRasterLayersToStore(control);
+    wireRasterStoreSync(control);
+
+    useAppStore.getState().moveLayer("raster-a", 2);
+
+    assert.deepEqual(calls, [
+      { method: "reorderRaster", args: ["raster-b", 0] },
+      { method: "reorderRaster", args: ["raster-c", 1] },
+    ]);
+    assert.deepEqual(
+      control.getRasters().map(({ id }) => id),
+      ["raster-b", "raster-c", "raster-a"],
+    );
+  });
+
+  it("does not reorder when only a non-raster layer moved around the rasters", () => {
+    const { control, calls } = fakeControl([
+      rasterInfo({ id: "raster-a" }),
+      rasterInfo({ id: "raster-b" }),
+    ]);
+    syncRasterLayersToStore(control);
+    useAppStore.getState().addLayer(otherStoreLayer());
+    wireRasterStoreSync(control);
+
+    useAppStore.getState().moveLayer("unrelated", 0);
+
+    assert.deepEqual(calls, []);
+  });
+
+  it("keeps a raster the store does not know about in its slot", () => {
+    const { control, calls } = fakeControl([
+      rasterInfo({ id: "raster-a" }),
+      rasterInfo({ id: "raster-b" }),
+    ]);
+    syncRasterLayersToStore(control);
+    wireRasterStoreSync(control);
+    const infos = control.getRasters();
+    infos.splice(1, 0, rasterInfo({ id: "raster-pending" }));
+
+    useAppStore.getState().moveLayer("raster-a", 1);
+
+    assert.deepEqual(
+      infos.map(({ id }) => id),
+      ["raster-b", "raster-pending", "raster-a"],
+    );
+    assert.deepEqual(calls, [
+      { method: "reorderRaster", args: ["raster-b", 0] },
+      { method: "reorderRaster", args: ["raster-pending", 1] },
+    ]);
+  });
+
+  it("mirrors a move made in the raster panel, keeping other layers in place", () => {
+    const { control, calls } = fakeControl([
+      rasterInfo({ id: "raster-a" }),
+      rasterInfo({ id: "raster-b" }),
+    ]);
+    syncRasterLayersToStore(control);
+    useAppStore.getState().addLayer(otherStoreLayer());
+    useAppStore.getState().moveLayer("unrelated", 1);
+    wireRasterStoreSync(control);
+
+    control.getRasters().reverse();
+    syncRasterLayersToStore(control);
+
+    assert.deepEqual(
+      useAppStore.getState().layers.map(({ id }) => id),
+      ["raster-b", "unrelated", "raster-a"],
+    );
+
+    // A later store change must not undo the panel's move.
+    useAppStore.getState().updateLayer("unrelated", { visible: false });
+    assert.deepEqual(calls, []);
+  });
+
+  it("does not mirror a raster panel move that would split a layer group", () => {
+    const { control } = fakeControl([
+      rasterInfo({ id: "raster-a" }),
+      rasterInfo({ id: "raster-b" }),
+      rasterInfo({ id: "raster-c" }),
+    ]);
+    syncRasterLayersToStore(control);
+    useAppStore.getState().updateLayer("raster-a", { groupId: "group" });
+    useAppStore.getState().updateLayer("raster-b", { groupId: "group" });
+
+    const infos = control.getRasters();
+    infos.splice(1, 0, ...infos.splice(2, 1));
+    syncRasterLayersToStore(control);
+
+    assert.deepEqual(
+      useAppStore.getState().layers.map(({ id }) => id),
+      ["raster-a", "raster-b", "raster-c"],
+    );
+    // The refused move is undone on the control too, not left to the next store change.
+    assert.deepEqual(
+      control.getRasters().map(({ id }) => id),
+      ["raster-a", "raster-b", "raster-c"],
+    );
   });
 
   it("does not echo control-driven syncs back at the control", () => {
@@ -895,6 +1062,7 @@ describe("savedRasterState", () => {
       bands: [4],
       rescale: [[100, 2000]],
       colormap: "terrain",
+      reversed: false,
       nodata: "off",
       gamma: 1.4,
       stretch: "log",
@@ -906,6 +1074,7 @@ describe("savedRasterState", () => {
       bands: [4],
       rescale: [[100, 2000]],
       colormap: "terrain",
+      reversed: false,
       nodata: "off",
       gamma: 1.4,
       stretch: "log",
@@ -954,5 +1123,21 @@ describe("savedRasterState", () => {
     const layer = createRasterStoreLayer(rasterInfo());
     delete layer.metadata.rasterState;
     assert.deepEqual(savedRasterState(layer), {});
+  });
+});
+
+describe("serializeBandNames", () => {
+  it("drops the '*' placeholder Esri tools write for an unnamed band", () => {
+    assert.equal(serializeBandNames(new Map([[1, "*"]])), null);
+    assert.deepEqual(
+      serializeBandNames(
+        new Map([
+          [1, "B02"],
+          [2, " * "],
+        ]),
+      ),
+      [[1, "B02"]],
+    );
+    assert.equal(serializeBandNames(null), null);
   });
 });

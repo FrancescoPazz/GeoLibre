@@ -12,6 +12,7 @@ import { Fragment, useMemo, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuickFilterProfiles } from "../../hooks/useQuickFilterProfiles";
 import { layerFilteredHintKey } from "../../lib/layer-filter-hint";
+import { LayerHoverControls } from "./layer-panel/LayerHoverControls";
 import { QuickFilterControl } from "./QuickFilterControl";
 
 /** Indent per group nesting level, in rem, mirroring the Layers panel's tree. */
@@ -47,7 +48,11 @@ function ViewerQuickFilters({
 }: ViewerQuickFiltersProps) {
   const { t } = useTranslation();
   const setLayerQuickFilters = useAppStore((s) => s.setLayerQuickFilters);
-  const { byField } = useQuickFilterProfiles(layer, mapControllerRef, mapReadyGeneration);
+  const { byField, loadingFields } = useQuickFilterProfiles(
+    layer,
+    mapControllerRef,
+    mapReadyGeneration,
+  );
   const filters = useMemo(() => layer.quickFilters ?? [], [layer.quickFilters]);
   const active = hasActiveQuickFilter(layer);
 
@@ -60,6 +65,7 @@ function ViewerQuickFilters({
           key={filter.id}
           filter={filter}
           profile={byField.get(filter.field)}
+          loading={loadingFields.has(filter.field)}
           idPrefix={`viewer-${layer.id}`}
           onChange={(next) =>
             update(filters.map((current) => (current.id === filter.id ? next : current)))
@@ -131,6 +137,7 @@ export function ViewerLayerPanel({ mapControllerRef, mapReadyGeneration }: Viewe
         <Layers className="h-4 w-4" />
         {t("sharedRail.layers")}
       </h2>
+      <LayerHoverControls className="mb-2 border-b pb-2" />
       <div className="space-y-1">
         {rows.map(({ layer, headers, depth }) => (
           <Fragment key={layer.id}>

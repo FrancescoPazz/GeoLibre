@@ -3,7 +3,10 @@ import { afterEach, describe, it } from "node:test";
 import type { Feature, FeatureCollection } from "geojson";
 import { useAppStore } from "@geolibre/core";
 import {
+  arcGISEditCapabilities,
   arcGISGeometry,
+  describeArcGISEditError,
+  identifyArcGISFeatures,
   reconcileArcGISRefresh,
   planArcGISEdits,
   type ArcGISEditInfo,
@@ -81,6 +84,49 @@ describe("ArcGIS edit validation", () => {
       /geometry updates/,
     );
   });
+  it("saves attribute edits and deletions, but no shapes, on an M-aware layer", () => {
+    const mInfo: ArcGISEditInfo = { ...info, geometryType: "esriGeometryPoint", hasM: true };
+    assert.deepEqual(arcGISEditCapabilities(mInfo), { create: false, update: true, delete: true });
+    const plan = planArcGISEdits(fc(feature(1), feature(2)), fc(feature(1, "after")), mInfo);
+    assert.deepEqual(plan.updates[0].payload, { attributes: { OBJECTID: 1, name: "after" } });
+    assert.deepEqual(plan.deletes, [2]);
+    const moved = feature(1);
+    moved.geometry = { type: "Point", coordinates: [1, 2] };
+    assert.throws(() => planArcGISEdits(fc(feature(1)), fc(moved), mInfo), /measure \(M\)/);
+    assert.throws(() => planArcGISEdits(fc(), fc(feature()), mInfo), /measure \(M\)/);
+  });
+  it("names the problem when the baseline lacks or repeats an object ID", () => {
+    assert.throws(() => planArcGISEdits(fc(feature()), fc(), info), /record has no OBJECTID value/);
+    assert.throws(
+      () => planArcGISEdits(fc(feature(1), feature(1)), fc(), info),
+      /OBJECTID 1 more than once/,
+    );
+  });
+  it("recovers object IDs and drops repeated records when features are loaded", () => {
+    const loaded = identifyArcGISFeatures(
+      fc(
+        // Only in the GeoJSON id.
+        { ...feature(), id: 1, properties: { name: "a" } },
+        // Under a name that differs in case.
+        { ...feature(), properties: { objectid: 2 } },
+        feature(3),
+        // The same record from an overlapping page.
+        feature(3, "again"),
+      ),
+      "OBJECTID",
+    );
+    assert.deepEqual(
+      loaded.features.map((f) => [f.id, f.properties?.OBJECTID, f.properties?.name]),
+      [
+        [1, 1, "a"],
+        [2, 2, undefined],
+        [3, 3, "before"],
+      ],
+    );
+    // The case-variant ID is moved, not copied.
+    assert.deepEqual(loaded.features[1].properties, { OBJECTID: 2 });
+    assert.equal(planArcGISEdits(loaded, loaded, info).updates.length, 0);
+  });
   it("tags WGS84 and orients polygon shells clockwise and holes counterclockwise", () => {
     const shell = [
       [0, 0],
@@ -127,13 +173,14 @@ async function load(
     }
     if (requestUrl.pathname.endsWith("/query")) {
       const ids = requestUrl.searchParams.get("objectIds");
+      if (ids) refreshGeometry.push(requestUrl.searchParams.get("returnGeometry"));
       return Response.json(
         ids ? fc(...ids.split(",").map((id) => feature(Number(id), "server"))) : initial,
       );
     }
     return Response.json(info);
   });
-  const id = await addArcGISLayer({ fitBounds() {} } as GeoLibreAppAPI, {
+  const id = await addArcGISLayer({ fitBounds() {} } as unknown as GeoLibreAppAPI, {
     layerType: "feature",
     sourceType: "url",
     url,
@@ -169,6 +216,81 @@ it("reconciles partial results and server IDs; retry does not repeat successful 
   assert.equal(arcGISLayerHasPendingEdits(connection.id), false);
   await saveArcGISLayerEdits(connection.id);
   assert.equal(connection.posts(), 2);
+});
+
+it("explains an insert the geodatabase refused for lack of a database permission", async () => {
+  // The response reported against ArcGIS Enterprise 11.1 on SQL Server (#3022).
+  const denied =
+    "Internal error during object insert. Insufficient permissions [42000:[Microsoft][ODBC Driver 18 for SQL Server][SQL Server]The EXECUTE permission was denied on the object 'i12_get_ids', database 'gis', schema 'dbo'.] [HYDRANT]";
+  const connection = await load(() => ({
+    addResults: [{ success: false, error: { code: 1000, description: denied } }],
+  }));
+  useAppStore
+    .getState()
+    .updateLayer(connection.id, { geojson: fc(feature(1), feature(2), feature()) });
+  const result = await saveArcGISLayerEdits(connection.id);
+  assert.equal(result.inserted, 0);
+  assert.equal(result.errors.length, 1);
+  assert.ok(result.errors[0].startsWith(`Add 1: ${denied} `));
+  assert.match(result.errors[0], /database account lacks a permission/);
+  assert.equal(arcGISLayerHasPendingEdits(connection.id), true, "the new feature stays local");
+});
+
+it("leaves other edit failures as the service words them", () => {
+  assert.equal(describeArcGISEditError("Locked"), "Locked");
+  assert.match(
+    describeArcGISEditError("ORA-01031: insufficient privileges"),
+    /database account lacks a permission/,
+  );
+});
+
+const refreshGeometry: Array<string | null> = [];
+it("never writes back geometry that was loaded generalized", async () => {
+  const { id, posts } = await load(
+    (body) => {
+      assert.equal(body.has("adds"), false);
+      const [update] = JSON.parse(body.get("updates")!);
+      assert.equal(update.geometry, undefined, "an attribute edit leaves geometry out");
+      return { updateResults: [{ success: true, objectId: 1 }] };
+    },
+    fc(feature(1)),
+  );
+  // As the viewport loader leaves a layer whose shapes it loaded simplified.
+  const markGeneralized = () =>
+    useAppStore.getState().updateLayer(id, {
+      metadata: {
+        ...layer(id).metadata,
+        arcgisEditInfo: { ...info, geometryGeneralized: true },
+      },
+    });
+  markGeneralized();
+  const moved = feature(1);
+  moved.geometry = { type: "Point", coordinates: [-83, 36] };
+  useAppStore.getState().updateLayer(id, { geojson: fc(moved) });
+  await assert.rejects(saveArcGISLayerEdits(id), /Zoom in to edit/);
+  assert.equal(posts(), 0);
+
+  // The loaded (simplified) shape differs from the service's full one.
+  const simplified = (name: string): Feature => ({
+    ...feature(1, name),
+    geometry: { type: "Point", coordinates: [-84.5, 35.5] },
+  });
+  useAppStore.getState().updateLayer(id, {
+    geojson: fc(simplified("after")),
+    metadata: { ...layer(id).metadata, arcgisEditBaseline: fc(simplified("before")) },
+  });
+  assert.equal((await saveArcGISLayerEdits(id)).updated, 1);
+  assert.equal(posts(), 1);
+  assert.equal(
+    (layer(id).metadata.arcgisEditInfo as ArcGISEditInfo).geometryGeneralized,
+    true,
+    "the save keeps the marker for the shapes still loaded",
+  );
+  // The post-save refresh reads attributes only and keeps the loaded shape,
+  // rather than mixing a full-resolution copy into a generalized layer.
+  assert.equal(refreshGeometry.at(-1), "false");
+  assert.deepEqual(layer(id).geojson!.features[0].geometry, simplified("x").geometry);
+  assert.equal(layer(id).geojson!.features[0].properties!.name, "server");
 });
 
 it("supports deleting the last feature", async () => {

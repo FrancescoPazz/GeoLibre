@@ -9,7 +9,7 @@
  * for the reader, such as the on-map Legend, reads that record through these
  * helpers so a faded-out layer disappears everywhere at once.
  */
-import type { GeoLibreLayer } from "./types";
+import type { GeoLibreLayer, MapViewState, StoryChapterLocation } from "./types";
 
 /** The clamped opacity recorded for a layer, or undefined when untouched. */
 function recordedStoryOpacity(
@@ -40,10 +40,11 @@ export function storyLayerOpacityFactor(
  * A layer whose opacity reflects the story presentation's fade.
  *
  * A chapter's opacity *replaces* the layer's own opacity rather than scaling
- * it, matching `MapController.setStoryLayerOpacity`, which writes the chapter
- * value as the absolute paint opacity; otherwise a layer set to 0.7 in the
- * Layers panel and faded to 0.4 by a chapter would draw its diagrams at 0.28
- * while its MapLibre layers draw at 0.4.
+ * it, matching `MapController.setStoryLayerOpacity`, which redraws the paint
+ * with the chapter value in place of the layer opacity (the style's own fill
+ * opacity still applies); otherwise a layer set to 0.7 in the Layers panel and
+ * faded to 0.4 by a chapter would draw its diagrams at 0.28 while its MapLibre
+ * layers draw at 0.4.
  *
  * Returns the same object when the presentation has not touched the layer (or
  * recorded the opacity it already has), so identity-keyed caches downstream
@@ -91,4 +92,29 @@ export function storyVisibleLayers(
   if (!presenting) return layers;
   if (!layers.some((layer) => isStoryHiddenLayer(opacities, layer.id))) return layers;
   return layers.filter((layer) => !isStoryHiddenLayer(opacities, layer.id));
+}
+
+/**
+ * Resolve a story chapter location to a full camera view.
+ *
+ * A location's `pitch` and `bearing` are optional in memory (a project file
+ * fills them with 0 on load). An absent value keeps the camera's current one,
+ * the same as MapLibre's camera methods do for an omitted option, so engines
+ * whose camera API needs every field (Cesium, `MapEngine.applyView`) behave
+ * like the MapLibre map.
+ *
+ * @param location The chapter's camera target.
+ * @param current The camera's current view, used for an absent pitch/bearing.
+ * @returns The location with `pitch` and `bearing` filled in.
+ */
+export function storyLocationView(
+  location: StoryChapterLocation,
+  current: Pick<MapViewState, "pitch" | "bearing">,
+): MapViewState {
+  return {
+    center: location.center,
+    zoom: location.zoom,
+    pitch: location.pitch ?? current.pitch,
+    bearing: location.bearing ?? current.bearing,
+  };
 }

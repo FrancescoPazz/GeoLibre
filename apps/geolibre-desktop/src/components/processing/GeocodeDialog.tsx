@@ -1,4 +1,5 @@
 import {
+  shouldZoomToNewLayers,
   csvRowsToGeocodeRequests,
   geocodeForward,
   geocodeMatchToFeature,
@@ -105,6 +106,8 @@ export function GeocodeDialog({ mapControllerRef }: GeocodeDialogProps): ReactEl
   const [log, setLog] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [picking, setPicking] = useState(false);
+  // An organization locator's own result fields (parcel or asset IDs, ...).
+  const [keepAttributes, setKeepAttributes] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -212,8 +215,13 @@ export function GeocodeDialog({ mapControllerRef }: GeocodeDialogProps): ReactEl
             signal,
             config,
             limit: 1,
+            attributes: providerId === "arcgis-locator" && keepAttributes,
           });
-          const feature = results[0] ? geocodeMatchToFeature(results[0], request.row) : null;
+          const feature = results[0]
+            ? geocodeMatchToFeature(results[0], request.row, {
+                attributes: providerId === "arcgis-locator" && keepAttributes,
+              })
+            : null;
           if (feature) features.push(feature);
           else failed.push(request.index + 1);
         } catch (requestError) {
@@ -237,7 +245,7 @@ export function GeocodeDialog({ mapControllerRef }: GeocodeDialogProps): ReactEl
       };
       const layerId = addGeoJsonLayer(layerNameFromFile(csv.fileName), fc);
       const layer = useAppStore.getState().layers.find((item) => item.id === layerId);
-      if (layer) mapControllerRef.current?.fitLayer(layer);
+      if (layer && shouldZoomToNewLayers()) mapControllerRef.current?.fitLayer(layer);
     }
 
     if (cancelled) {
@@ -266,6 +274,8 @@ export function GeocodeDialog({ mapControllerRef }: GeocodeDialogProps): ReactEl
     willCap,
     config,
     provider,
+    providerId,
+    keepAttributes,
     appendLog,
     addGeoJsonLayer,
     mapControllerRef,
@@ -358,6 +368,19 @@ export function GeocodeDialog({ mapControllerRef }: GeocodeDialogProps): ReactEl
                 ))}
               </Select>
             </div>
+          ) : null}
+
+          {providerId === "arcgis-locator" ? (
+            <label className="flex items-start gap-2 text-xs">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={keepAttributes}
+                disabled={running}
+                onChange={(event) => setKeepAttributes(event.target.checked)}
+              />
+              <span>{t("geocode.keepLocatorAttributes")}</span>
+            </label>
           ) : null}
 
           {csv && willCap ? (

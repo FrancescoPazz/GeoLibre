@@ -1,4 +1,5 @@
-import type { Cartesian3, CesiumWidget, Scene } from "@cesium/engine";
+import type { Cartesian3 } from "@cesium/core";
+import type { CesiumWidget, Scene } from "@cesium/engine";
 
 type CesiumNs = typeof import("@cesium/engine");
 

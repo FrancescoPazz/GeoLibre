@@ -112,6 +112,7 @@ function makeGlobe(startingMultiplier = 0) {
     },
   };
   let handles = 0;
+  const credentialValues = new Map<string, string>();
   // The panel is plain DOM, so it renders only when the host calls `render`.
   const { document } = parseHTML('<html><body><div id="panel"></div></body></html>');
   const panel = document.getElementById("panel") as unknown as HTMLElement;
@@ -153,6 +154,15 @@ function makeGlobe(startingMultiplier = 0) {
     },
     openRightPanel: () => {},
     onLocaleChange: () => () => {},
+    credentials: {
+      get: (name: string) => credentialValues.get(name) ?? "",
+      set: (name: string, value: string) => {
+        if (value) credentialValues.set(name, value);
+        else credentialValues.delete(name);
+        return true;
+      },
+      location: () => "browser" as const,
+    },
   } as unknown as GeoLibreAppAPI;
   return {
     app,
@@ -160,6 +170,7 @@ function makeGlobe(startingMultiplier = 0) {
     panel,
     points,
     handleCount: () => handles,
+    credentialValues,
     setViewBounds: (bounds: [number, number, number, number]) => {
       viewBounds = bounds;
     },
@@ -699,12 +710,16 @@ describe("God's Eye View feed refresh", () => {
         '[data-feed-id="satellites"] input[type=checkbox]',
       ) as HTMLInputElement;
       checkbox.checked = false;
-      checkbox.dispatchEvent(new (globe.panel.ownerDocument.defaultView as Window).Event("change"));
+      checkbox.dispatchEvent(
+        new (globe.panel.ownerDocument.defaultView as Window & typeof globalThis).Event("change"),
+      );
       const back = globe.panel.querySelector(
         '[data-feed-id="satellites"] input[type=checkbox]',
       ) as HTMLInputElement;
       back.checked = true;
-      back.dispatchEvent(new (globe.panel.ownerDocument.defaultView as Window).Event("change"));
+      back.dispatchEvent(
+        new (globe.panel.ownerDocument.defaultView as Window & typeof globalThis).Event("change"),
+      );
       for (let i = 0; i < 8; i++) await flush();
       const clock = globe.viewer.clock;
       assert.ok((clock.currentTime as number) <= (clock.stopTime as number));
@@ -838,7 +853,7 @@ describe("God's Eye View feed refresh", () => {
   it("restores the current viewport when an intervening request is still in flight", async () => {
     const originalFetch = globalThis.fetch;
     let overpassCalls = 0;
-    let resolveSecond: ((response: Response) => void) | null = null;
+    let resolveSecond = null as ((response: Response) => void) | null;
     globalThis.fetch = (async (input: string | URL | Request) => {
       if (!String(input).includes("tiles.geolibre.app/overpass")) {
         return new Response(JSON.stringify({ elements: [] }), { status: 200 });
@@ -923,7 +938,7 @@ describe("God's Eye View clock speed", () => {
       );
 
       // The panel's select re-times the live globe without reloading a feed.
-      const select = globe.panel.querySelector("select") as HTMLSelectElement;
+      const select = globe.panel.querySelector("#gods-eye-view-speed") as HTMLSelectElement;
       assert.deepEqual(
         [...select.options].map((option) => option.value),
         ["1", "10", "60", "600"],
@@ -936,12 +951,20 @@ describe("God's Eye View clock speed", () => {
       const sixty = [...select.options].find((option) => option.value === "60");
       assert.ok(sixty);
       sixty.selected = true;
-      select.dispatchEvent(new (globe.panel.ownerDocument.defaultView as Window).Event("change"));
+      select.dispatchEvent(
+        new (globe.panel.ownerDocument.defaultView as Window & typeof globalThis).Event("change"),
+      );
       // The panel re-renders on a setting change; the fresh select shows it.
-      assert.equal((globe.panel.querySelector("select") as HTMLSelectElement).value, "60");
+      assert.equal(
+        (globe.panel.querySelector("#gods-eye-view-speed") as HTMLSelectElement).value,
+        "60",
+      );
       assert.equal(globe.viewer.clock.multiplier, 60);
       assert.equal(net.calls(), afterActivate, "changing speed refetches nothing");
-      assert.equal(godsEyeViewPlugin.getProjectState?.().speed, 60);
+      assert.equal(
+        (godsEyeViewPlugin.getProjectState?.() as { speed?: unknown } | undefined)?.speed,
+        60,
+      );
 
       // A project carrying a speed re-times a globe that is already running;
       // a hand-edited one carrying nonsense falls back to real time.
@@ -956,6 +979,135 @@ describe("God's Eye View clock speed", () => {
     } finally {
       godsEyeViewPlugin.deactivate?.(globe.app);
       godsEyeViewPlugin.applyProjectState?.(globe.app, {});
+      net.restore();
+    }
+  });
+});
+
+describe("God's Eye View feed options", () => {
+  /** Pick a choice the way a user does; linkedom's `select.value` is read-only. */
+  function choose(panel: HTMLElement, id: string, value: string): void {
+    const select = panel.querySelector(`#${id}`) as HTMLSelectElement;
+    // Clear first: in linkedom, deselecting any option deselects them all.
+    for (const option of select.options) if (option.selected) option.selected = false;
+    const choice = [...select.options].find((option) => option.value === value);
+    assert.ok(choice, value);
+    choice.selected = true;
+    select.dispatchEvent(
+      new (panel.ownerDocument.defaultView as Window & typeof globalThis).Event("change"),
+    );
+  }
+
+  const radioIds = () =>
+    useAppStore
+      .getState()
+      .layers.find((layer) => layer.metadata?.[GODS_EYE_VIEW_RADIO_FLAG] === true)
+      ?.geojson?.features.map((feature) => feature.id);
+
+  it("filters radio by category, persisting only a non-default choice", async () => {
+    const originalFetch = globalThis.fetch;
+    let radioCalls = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (!String(input).includes("radio-browser.info")) throw new Error("offline");
+      radioCalls += 1;
+      return new Response(
+        JSON.stringify([
+          { stationuuid: "news", name: "News", tags: "news", geo_long: 1, geo_lat: 2 },
+          { stationuuid: "jazz", name: "Jazz", tags: "jazz", geo_long: 3, geo_lat: 4 },
+        ]),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+    const originalWarn = console.warn;
+    console.warn = () => {};
+    const globe = makeGlobe();
+    try {
+      useAppStore.setState({ layers: [] });
+      // A hand-edited project: only an offered, non-default choice of a real
+      // option survives normalization.
+      godsEyeViewPlugin.applyProjectState?.(globe.app, {
+        earthquakes: false,
+        satellites: false,
+        radio: true,
+        options: {
+          radio: { category: "news", volume: "11" },
+          cctv: { previews: "sometimes" },
+          nowhere: { category: "news" },
+        },
+      });
+      assert.deepEqual((godsEyeViewPlugin.getProjectState?.() as { options?: unknown }).options, {
+        radio: { category: "news" },
+      });
+
+      godsEyeViewPlugin.activate?.(globe.app);
+      for (let i = 0; i < 6; i++) await flush();
+      assert.deepEqual(radioIds(), ["radio-news"]);
+      assert.equal(
+        (globe.panel.querySelector("#gods-eye-view-option-radio-category") as HTMLSelectElement)
+          .value,
+        "news",
+      );
+
+      // A new category refilters the stations already fetched.
+      choose(globe.panel, "gods-eye-view-option-radio-category", "music");
+      for (let i = 0; i < 6; i++) await flush();
+      assert.deepEqual(radioIds(), ["radio-jazz"]);
+      assert.equal(radioCalls, 1, "a category change does not re-read the directory");
+
+      // Back to the default: the project blob loses its options entirely.
+      choose(globe.panel, "gods-eye-view-option-radio-category", "all");
+      for (let i = 0; i < 6; i++) await flush();
+      assert.deepEqual(radioIds(), ["radio-news", "radio-jazz"]);
+      assert.equal(
+        "options" in ((godsEyeViewPlugin.getProjectState?.() ?? {}) as Record<string, unknown>),
+        false,
+      );
+
+      // A project load inside the refresh interval still applies its own
+      // category, rather than keeping rows fetched under another one.
+      godsEyeViewPlugin.applyProjectState?.(globe.app, {
+        earthquakes: false,
+        satellites: false,
+        radio: true,
+        options: { radio: { category: "news" } },
+      });
+      for (let i = 0; i < 6; i++) await flush();
+      assert.deepEqual(radioIds(), ["radio-news"]);
+    } finally {
+      godsEyeViewPlugin.deactivate?.(globe.app);
+      godsEyeViewPlugin.applyProjectState?.(globe.app, {});
+      useAppStore.setState({ layers: [] });
+      globalThis.fetch = originalFetch;
+      console.warn = originalWarn;
+    }
+  });
+
+  it("offers each feed's options under its own row", () => {
+    const net = stubFetch();
+    const globe = makeGlobe();
+    try {
+      godsEyeViewPlugin.activate?.(globe.app);
+      const options = (feed: string) =>
+        [
+          ...globe.panel.querySelectorAll<HTMLElement>(
+            `[data-feed-id="${feed}"] [data-feed-option] option`,
+          ),
+        ].map((option) => (option as HTMLOptionElement).value);
+      assert.deepEqual(options("cctv"), ["auto", "always", "off"]);
+      assert.deepEqual(options("radio"), [
+        "all",
+        "news",
+        "talk",
+        "weather",
+        "public-safety",
+        "aviation-marine",
+        "traffic-transit",
+        "music",
+        "other",
+      ]);
+      assert.deepEqual(options("flights"), []);
+    } finally {
+      godsEyeViewPlugin.deactivate?.(globe.app);
       net.restore();
     }
   });
@@ -999,16 +1151,6 @@ describe("God's Eye View reattach", () => {
 
 describe("God's Eye View keyed feeds", () => {
   it("streams AIS vessels only once a key is saved in the panel, never into the project", async () => {
-    const values = new Map<string, string>();
-    const storageDescriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: {
-        getItem: (key: string) => values.get(key) ?? null,
-        setItem: (key: string, value: string) => void values.set(key, value),
-        removeItem: (key: string) => void values.delete(key),
-      },
-    });
     const sockets: Array<{
       url: string;
       readyState: number;
@@ -1039,7 +1181,7 @@ describe("God's Eye View keyed feeds", () => {
     } as unknown as typeof WebSocket;
     const net = stubFetch();
     const globe = makeGlobe();
-    const Event = () => (globe.panel.ownerDocument.defaultView as Window).Event;
+    const Event = () => (globe.panel.ownerDocument.defaultView as Window & typeof globalThis).Event;
     try {
       useAppStore.setState({ layers: [] });
       globe.setViewBounds([-75, 40, -73, 41.5]);
@@ -1068,7 +1210,7 @@ describe("God's Eye View keyed feeds", () => {
       save?.dispatchEvent(new (Event())("click"));
       for (let i = 0; i < 4; i++) await flush();
 
-      assert.equal(values.get("geolibre.godsEyeView.apiKey.aisstream"), "secret-ais-key");
+      assert.equal(globe.credentialValues.get("aisstream"), "secret-ais-key");
       assert.equal(sockets.length, 1);
       assert.equal(sockets[0].url, "wss://stream.aisstream.io/v0/stream");
       assert.match(row()?.textContent ?? "", /Connecting to AISStream/);
@@ -1107,7 +1249,13 @@ describe("God's Eye View keyed feeds", () => {
             time_utc: new Date().toISOString().replace("T", " "),
           },
           Message: {
-            PositionReport: { UserID: 123456789, Latitude: 40.7, Longitude: -74, Sog: 5, Cog: 90 },
+            PositionReport: {
+              UserID: 123456789,
+              Latitude: 40.7,
+              Longitude: -74,
+              Sog: 5,
+              Cog: 90,
+            },
           },
         }),
       });
@@ -1128,7 +1276,7 @@ describe("God's Eye View keyed feeds", () => {
       for (let i = 0; i < 4; i++) await flush();
       assert.equal(sockets.length, 2);
 
-      const state = godsEyeViewPlugin.getProjectState?.(globe.app);
+      const state = godsEyeViewPlugin.getProjectState?.();
       assert.equal((state as Record<string, unknown>).vessels, true);
       assert.doesNotMatch(JSON.stringify(state), /secret-ais-key/);
       assert.ok(
@@ -1138,8 +1286,6 @@ describe("God's Eye View keyed feeds", () => {
       godsEyeViewPlugin.deactivate?.(globe.app);
       net.restore();
       globalThis.WebSocket = originalWebSocket;
-      if (storageDescriptor) Object.defineProperty(globalThis, "localStorage", storageDescriptor);
-      else delete (globalThis as { localStorage?: unknown }).localStorage;
     }
   });
 });

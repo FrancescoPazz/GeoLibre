@@ -1,5 +1,6 @@
 import { disposeArcgisControlAdapters, identifyArcgisControls } from "./arcgis-control-adapters";
-import { ArcgisControlHost } from "./arcgis-control-host";
+import { ArcgisControlHost, type ArcgisControlHostHooks } from "./arcgis-control-host";
+import { controlLayerMirrors } from "./shadow-style";
 import { createArcgisZarrLayer } from "./arcgis-zarr";
 import { createArcgisArchiveLayer } from "./arcgis-tile-archives";
 import { createArcgisTemplateTileLayer } from "./arcgis-template-tiles";
@@ -39,10 +40,12 @@ import {
   type MapRenderSurface,
 } from "./map-engine";
 import {
+  ARCGIS_BASE_FIELD,
   ARCGIS_HEIGHT_FIELD,
   ARCGIS_ID_FIELD,
   ARCGIS_LABEL_CLASS_FIELD,
   ARCGIS_LABEL_FIELD,
+  ARCGIS_SUPPORTED_LAYER_KINDS,
   arcgisBlendMode,
   isArcgisRasterPlan,
   ARCGIS_SYMBOL_FIELD,
@@ -73,6 +76,7 @@ import {
   type ArcgisLayer,
   type ArcgisMap,
   type ArcgisPoint,
+  type ArcgisProjectOperator,
   type ArcgisSceneSdk,
   type ArcgisSceneView,
   type ArcgisSdk,
@@ -109,6 +113,18 @@ export const ARCGIS_CAPABILITIES: MapEngineCapabilities = Object.freeze({
   screenOverlays: false,
   flatProjection: true,
   terrainSource: true,
+  ionTerrain: false,
+  // The SDK draws Zarr from the record. The raster and PMTiles panels are
+  // MapLibre controls this view does not host, so those formats go through the
+  // Add Data forms; the measure control draws through the MapLibre/Mapbox style
+  // API, which the SDK has no equivalent of.
+  nativeZarr: true,
+  nativeDataSources: false,
+  // The engine is published once its view is ready.
+  deferredEngineReady: true,
+  measureTool: false,
+  controlLayerPanels: false,
+  supportedLayerKinds: ARCGIS_SUPPORTED_LAYER_KINDS,
 });
 
 export const ARCGIS_DECK_CAPABILITIES: MapEngineCapabilities = Object.freeze({
@@ -134,15 +150,19 @@ const HOSTED_CONTROLS: ReadonlySet<BuiltInMapControl> = new Set<BuiltInMapContro
   "attribution",
 ]);
 
-/** Mount order within a corner, matching `MapController.init`. */
+/**
+ * Order within a corner, matching MapLibre: `MapController.init` adds the
+ * built-ins in this order, and the layer control mounts after them once the
+ * style loads.
+ */
 const HOSTED_CONTROL_ORDER: readonly BuiltInMapControl[] = [
-  "layer-control",
   "fullscreen",
   "compass",
   "navigation",
   "geolocate",
   "globe",
   "scale",
+  "layer-control",
 ];
 
 /**
@@ -165,15 +185,18 @@ export type ArcgisSceneMode = "2d" | "global" | "local";
  * `MapView` cannot tilt, draw a globe or drape terrain, and a `SceneView`
  * does all three. So the globe projection selects a global scene, terrain on
  * a Mercator map selects a local (projected) scene, and only a Mercator map
- * without terrain stays a `MapView`. The canvas rebuilds the view when the
+ * without terrain stays a `MapView`. A flat map in a projection other than
+ * Web Mercator (issue #2708) is always a `MapView`: a local scene cannot use
+ * it, so terrain is set aside there. The canvas rebuilds the view when the
  * answer changes.
  */
 export function arcgisSceneMode(
   projection: MapProjection,
   terrainEnabled: boolean,
+  customProjection = false,
 ): ArcgisSceneMode {
   if (projection === "globe") return "global";
-  return terrainEnabled ? "local" : "2d";
+  return terrainEnabled && !customProjection ? "local" : "2d";
 }
 
 /** User-facing error messages the engine reports, which the app translates. */
@@ -263,6 +286,7 @@ const ARCGIS_GEOJSON_FIELDS = [
   { name: ARCGIS_LABEL_FIELD, type: "string", length: 4000 },
   { name: ARCGIS_LABEL_CLASS_FIELD, type: "string", length: 16 },
   { name: ARCGIS_HEIGHT_FIELD, type: "double" },
+  { name: ARCGIS_BASE_FIELD, type: "double" },
   { name: ARCGIS_WEIGHT_FIELD, type: "double" },
 ];
 
@@ -300,10 +324,38 @@ function mapRendererSymbols(
       };
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** A 16px outline globe, the size of the SDK's own widget icons. */
+function createGlobeGlyph(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("aria-hidden", "true");
+  const circle = document.createElementNS(SVG_NS, "circle");
+  circle.setAttribute("cx", "8");
+  circle.setAttribute("cy", "8");
+  circle.setAttribute("r", "6.5");
+  const meridians = document.createElementNS(SVG_NS, "ellipse");
+  meridians.setAttribute("cx", "8");
+  meridians.setAttribute("cy", "8");
+  meridians.setAttribute("rx", "2.75");
+  meridians.setAttribute("ry", "6.5");
+  const parallels = document.createElementNS(SVG_NS, "path");
+  parallels.setAttribute("d", "M1.5 8h13M2.6 4.75h10.8M2.6 11.25h10.8");
+  svg.append(circle, meridians, parallels);
+  return svg;
+}
+
 /**
  * The on-map globe/Mercator toggle. The SDK has no such widget, so this is a
- * plain button carrying MapLibre's `GlobeControl` classes, as the Mapbox
- * engine's toggle does, so the same glyph and "enabled" styling apply.
+ * plain button carrying MapLibre's `GlobeControl` state classes, as the Mapbox
+ * engine's toggle does. It wears Esri's widget classes and draws its glyph in
+ * `currentColor`, so the SDK theme sizes and colours it like the widgets
+ * beside it in both light and dark mode.
  * Toggling rebuilds the view (a `MapView` cannot become a globe), which is the
  * canvas's job; the button only reports the click.
  */
@@ -312,16 +364,13 @@ function createGlobeToggle(
   onToggle: (projection: MapProjection) => void,
 ): ArcgisWidget {
   const container = document.createElement("div");
-  container.className = "maplibregl-ctrl maplibregl-ctrl-group geolibre-arcgis-globe";
+  container.className = "esri-widget geolibre-arcgis-globe";
   const button = document.createElement("button");
   button.type = "button";
-  const icon = document.createElement("span");
-  icon.className = "maplibregl-ctrl-icon";
-  icon.setAttribute("aria-hidden", "true");
-  button.append(icon);
+  button.append(createGlobeGlyph());
   let globe = projection === "globe";
   const paint = () => {
-    button.className = globe ? "maplibregl-ctrl-globe-enabled" : "maplibregl-ctrl-globe";
+    button.className = `esri-widget--button ${globe ? "maplibregl-ctrl-globe-enabled" : "maplibregl-ctrl-globe"}`;
     const label = globe ? "Disable globe" : "Enable globe";
     button.title = label;
     button.setAttribute("aria-label", label);
@@ -409,6 +458,45 @@ export function geojsonToArcgisGeometry(geometry: Geometry): ArcgisGeometryJson 
     default:
       return null;
   }
+}
+
+/**
+ * Project a geometry with the project operator, or null when it cannot be
+ * projected (a point outside the projection's domain).
+ */
+function safeProject<T>(operator: ArcgisProjectOperator, geometry: T): T | null {
+  try {
+    return operator.execute(geometry, { wkid: 4326 });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A view point as `[lng, lat]`, or null when there is no point or it has no
+ * finite geographic position. Points in Web Mercator or WGS 84 carry
+ * longitude/latitude; any other projection's are projected with
+ * `projectOperator` (issue #2708).
+ *
+ * Args:
+ *   point: A point from the view (`center`, `toMap`).
+ *   projectOperator: The loaded project operator, when the view needs one.
+ *
+ * Returns:
+ *   The point's longitude and latitude, or null.
+ */
+export function arcgisPointLngLat(
+  point: ArcgisPoint | null | undefined,
+  projectOperator?: ArcgisProjectOperator,
+): [number, number] | null {
+  if (!point) return null;
+  if (Number.isFinite(point.longitude) && Number.isFinite(point.latitude))
+    return [point.longitude, point.latitude];
+  if (!projectOperator) return null;
+  const projected = safeProject(projectOperator, point);
+  return projected && Number.isFinite(projected.x) && Number.isFinite(projected.y)
+    ? [projected.x, projected.y]
+    : null;
 }
 
 /**
@@ -514,7 +602,15 @@ export class ArcgisEngine implements MapEngine {
   private companions = new WeakSet<ArcgisLayer>();
   /** Whether {@link settleView} has placed the stored camera. */
   private placed = false;
+  /**
+   * The last centre `readView` could convert to longitude/latitude. A view in
+   * another projection can fail to convert a point outside the projection's
+   * domain, and the shared camera must not jump to [0, 0] when it does.
+   */
+  private lastCenter: [number, number] = [0, 0];
   private errors = new Map<string, string>();
+  /** Store ids last seen as plugin layers, whose `layer:` error means "unsupported". */
+  private pluginLayerIds = new Set<string>();
   private preferences: MapPreferences | null = null;
   private basemapPlan: ArcgisBasemapPlan | null = null;
   private basemapVisible = true;
@@ -537,6 +633,8 @@ export class ArcgisEngine implements MapEngine {
   private storyCameraToken = 0;
   /** Whether the camera move in progress is a story chapter's or preview's. */
   private storyMove = false;
+  /** Open `suspendNavigation` holds; Ctrl-drag steering waits for none. */
+  private navigationSuspensions = 0;
   private storyMoveLapse: ReturnType<typeof setTimeout> | undefined;
   /** Integer zoom the zoom-dependent plans were compiled at. */
   private compiledZoom: number;
@@ -577,6 +675,13 @@ export class ArcgisEngine implements MapEngine {
       domControls?: boolean;
       /** Whether an API key is configured, so Esri basemap styles are usable. */
       hasApiKey?: boolean;
+      /**
+       * The loaded project operator, given when the flat view is in a
+       * projection other than Web Mercator (issue #2708). Its points carry no
+       * longitude/latitude, so every map position is projected through it,
+       * and tiled basemaps (which the SDK cannot reproject) are not drawn.
+       */
+      projectOperator?: ArcgisProjectOperator;
       /**
        * The 3D modules, required when `view` is a `SceneView`: terrain builds
        * its elevation layers from them.
@@ -630,8 +735,8 @@ export class ArcgisEngine implements MapEngine {
         return screen ? { x: screen.x, y: screen.y } : { x: 0, y: 0 };
       },
       unproject: (p) => {
-        const point = this.view?.toMap({ x: p[0], y: p[1] });
-        return point ? { lng: point.longitude, lat: point.latitude } : null;
+        const lngLat = this.lngLatOf(this.view?.toMap({ x: p[0], y: p[1] }));
+        return lngLat ? { lng: lngLat[0], lat: lngLat[1] } : null;
       },
       redraw: () => {},
     };
@@ -668,6 +773,7 @@ export class ArcgisEngine implements MapEngine {
           this.storyMove = false;
         }),
       );
+    this.handles.add(this.bindCtrlDragRotate(view));
     // Only the keys that move the camera; a Shift press does not.
     this.handles.add(
       view.on("key-down", (event) => {
@@ -756,6 +862,52 @@ export class ArcgisEngine implements MapEngine {
       ...(pitch === undefined ? {} : { tilt: this.clampPitch(pitch) }),
     };
   }
+  /**
+   * MapLibre's Ctrl+drag: horizontal movement rotates and vertical movement
+   * tilts, at MapLibre's rates. The SDK binds neither to a modifier (a scene
+   * orbits on right-drag), so a Ctrl drag steers the camera itself. A flat
+   * `MapView` only rotates.
+   *
+   * @param view The view whose drags to steer.
+   * @returns The handle that removes the listener.
+   */
+  private bindCtrlDragRotate(view: ArcgisView): ArcgisHandle {
+    // The camera the drag steers to, accumulated from the drag's start: an
+    // unanimated goTo may not have landed before the next update, so reading
+    // the live camera each time would drop part of the movement.
+    let drag: { x: number; y: number; bearing: number; pitch: number } | null = null;
+    return view.on("drag", (event) => {
+      if (event.action === "start") {
+        const native = event.native as MouseEvent | undefined;
+        drag =
+          native?.ctrlKey && (event.button ?? 0) === 0 && this.navigationSuspensions === 0
+            ? {
+                x: event.x,
+                y: event.y,
+                bearing: this.bearing(),
+                pitch: this.sceneView()?.camera?.tilt ?? 0,
+              }
+            : null;
+      }
+      if (!drag) return;
+      event.stopPropagation();
+      const dx = event.x - drag.x;
+      const dy = event.y - drag.y;
+      const steer = drag;
+      if (event.action === "end") drag = null;
+      if (dx === 0 && dy === 0) return;
+      steer.x = event.x;
+      steer.y = event.y;
+      // Suspended mid-drag: keep the gesture from reaching the SDK and hold
+      // the camera, discarding the movement so resuming does not jump.
+      if (this.navigationSuspensions > 0) return;
+      steer.bearing += dx * 0.8;
+      // Clamped as it accumulates, so reversing from the limit responds at once.
+      steer.pitch = this.clampPitch(steer.pitch - dy * 0.5);
+      const target = this.orientation(steer.bearing, steer.pitch);
+      void this.view?.goTo(target, { animate: false }).catch(reportGoToFailure);
+    });
+  }
   private clampPitch(pitch: number): number {
     const max = this.preferences ? Math.min(85, Math.max(0, this.preferences.maxPitch)) : 85;
     return Math.min(max, Math.max(0, pitch));
@@ -776,6 +928,14 @@ export class ArcgisEngine implements MapEngine {
       latitude: lngLat[1],
       spatialReference: { wkid: 4326 },
     });
+  }
+  /**
+   * A point from the view (`center`, `toMap`) as `[lng, lat]`, or null. A
+   * view in Web Mercator or WGS 84 reports longitude and latitude itself; one
+   * in any other projection does not, so the point is projected to WGS 84.
+   */
+  lngLatOf(point: ArcgisPoint | null | undefined): [number, number] | null {
+    return arcgisPointLngLat(point, this.options.projectOperator);
   }
   private storeIdFor(native: ArcgisLayer): string | undefined {
     for (const [id, entry] of this.natives) if (entry.layers.includes(native)) return id;
@@ -823,10 +983,11 @@ export class ArcgisEngine implements MapEngine {
   readView(): MapViewState {
     const view = this.view;
     if (!view) return { center: [0, 0], zoom: 2, bearing: 0, pitch: 0 };
-    const center = view.center;
+    const center = this.lngLatOf(view.center) ?? this.lastCenter;
+    this.lastCenter = center;
     const bounds = this.getViewBounds();
     return {
-      center: [center.longitude, center.latitude],
+      center,
       zoom: viewZoom(view),
       bearing: this.bearing(),
       // A MapView has no pitch.
@@ -960,10 +1121,14 @@ export class ArcgisEngine implements MapEngine {
     location: StoryChapterLocation,
     animation: StoryChapterAnimation = "flyTo",
     rotate = false,
+    onArrive?: () => void,
   ): void {
     this.stopCamera();
     const view = this.view;
-    if (!view) return;
+    if (!view) {
+      onArrive?.();
+      return;
+    }
     this.markStoryMove();
     const token = this.storyCameraToken;
     void view
@@ -978,9 +1143,19 @@ export class ArcgisEngine implements MapEngine {
       .then(() => {
         // A later chapter (or any camera stop) superseded this move while it
         // flew; its rotation would otherwise orbit the wrong chapter.
+        if (!this.view || token !== this.storyCameraToken) return;
+        onArrive?.();
         if (rotate && this.view && token === this.storyCameraToken) this.rotate();
       })
-      .catch(reportGoToFailure);
+      .catch((error: unknown) => {
+        reportGoToFailure(error);
+        if (
+          this.view &&
+          token === this.storyCameraToken &&
+          !isAbortError(error as Parameters<typeof isAbortError>[0])
+        )
+          onArrive?.();
+      });
   }
   /**
    * One half turn at MapLibre's story pace (180° over 30 s), as the MapLibre
@@ -1061,7 +1236,7 @@ export class ArcgisEngine implements MapEngine {
     });
     void view.goTo(extent, { duration: 800 }).catch(reportGoToFailure);
   }
-  fitLayer(layer: GeoLibreLayer): void {
+  fitLayer(layer: GeoLibreLayer): boolean {
     const center = layer.metadata.center;
     const hasCenter =
       Array.isArray(center) &&
@@ -1076,7 +1251,7 @@ export class ArcgisEngine implements MapEngine {
         zoom: Math.max(viewZoom(this.view), 14),
         ...(this.view.type === "3d" ? { pitch: Math.max(this.view.camera?.tilt ?? 0, 60) } : {}),
       });
-      return;
+      return true;
     }
     const bounds = getLayerBounds(layer);
     if (bounds) {
@@ -1093,22 +1268,23 @@ export class ArcgisEngine implements MapEngine {
           center: [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2],
           zoom: minRenderZoom,
         });
-        return;
+        return true;
       }
       this.fitBounds(bounds);
-      return;
+      return true;
     }
     if (hasCenter) {
       this.flyTo({
         center: [center[0] as number, center[1] as number],
         zoom: typeof layer.metadata.zoom === "number" ? layer.metadata.zoom : 16,
       });
-      return;
+      return true;
     }
     // A service layer knows its own extent once loaded.
     const native = this.natives.get(layer.id)?.layers[0];
-    if (native?.fullExtent)
-      void this.view?.goTo(native.fullExtent, { duration: 800 }).catch(reportGoToFailure);
+    if (!native?.fullExtent) return false;
+    void this.view?.goTo(native.fullExtent, { duration: 800 }).catch(reportGoToFailure);
+    return true;
   }
   /**
    * The zoom at which `bounds` fills the view, in Web Mercator, or null before
@@ -1228,8 +1404,10 @@ export class ArcgisEngine implements MapEngine {
     const { minZoom, maxZoom } = this.zoomRange();
     const zoom = viewZoom(view);
     const bounds = p.restrictBounds ? normalizeMapBounds(p.bounds) : null;
-    const lng = view.center.longitude ?? 0;
-    const lat = view.center.latitude ?? 0;
+    const settled = this.lngLatOf(view.center);
+    // No geographic centre to clamp; correcting towards a substitute would move the map.
+    if (!settled) return;
+    const [lng, lat] = settled;
     const center: [number, number] = bounds
       ? [
           Math.min(bounds[2], Math.max(bounds[0], lng)),
@@ -1272,18 +1450,22 @@ export class ArcgisEngine implements MapEngine {
     for (const id of [...this.natives.keys()]) if (!ids.has(id)) this.removeLayer(id);
     for (const key of [...this.errors.keys()])
       if (key.startsWith("layer:") && !ids.has(key.slice(6))) this.errors.delete(key);
-    // Store order is topmost first; the SDK draws index 0 at the bottom.
+    // Store order is bottom to top (the last layer is the topmost, as the
+    // Layers panel lists it and MapLibre's sync stacks it), which is also the
+    // SDK's: it draws index 0 at the bottom.
     const ordered: ArcgisLayer[] = [];
-    for (const original of [...layers].reverse()) {
+    for (const original of layers) {
       const opacity = this.storyOpacities.get(original.id);
       const layer = opacity === undefined ? original : { ...original, opacity };
       if (isArcgisPluginLayer(original)) {
+        this.pluginLayerIds.add(original.id);
         this.removeLayer(original.id);
         // The layer panels badge it too; the banner says why it is missing.
         if (original.visible)
           this.errors.set(`layer:${original.id}`, this.messages.pluginLayer(original.name));
         continue;
       }
+      this.pluginLayerIds.delete(original.id);
       try {
         let entry = this.natives.get(layer.id);
         const compileKey = layer.geojson ? geojsonCompileKey(layer) : undefined;
@@ -1378,6 +1560,9 @@ export class ArcgisEngine implements MapEngine {
     });
     if (this.highlight && map.layers.indexOf(this.highlight) !== map.layers.length - 1)
       map.layers.reorder(this.highlight, map.layers.length - 1);
+    // A record registered or dropped changes which control layers the store
+    // mirrors, and so what the controls' own overlay has to draw.
+    this.controlHost?.refreshOverlay();
   }
   /** Build the SDK layers for a plan, recording blob URLs to revoke on removal. */
   private instantiate(
@@ -1419,7 +1604,19 @@ export class ArcgisEngine implements MapEngine {
         return [];
       case "cog":
         return [
-          createArcgisCogLayer(this.sdk, plan.source, common, () => this.loadCachedCogTiler()),
+          createArcgisCogLayer(
+            this.sdk,
+            plan.source,
+            common,
+            () => this.loadCachedCogTiler(),
+            // A projected map warps the tiles into its projection (issue #2708).
+            this.options.projectOperator && this.view
+              ? {
+                  operator: this.options.projectOperator,
+                  spatialReference: this.view.spatialReference,
+                }
+              : undefined,
+          ),
         ];
       case "geojson":
         return plan.parts.map((part) => {
@@ -1527,6 +1724,17 @@ export class ArcgisEngine implements MapEngine {
         return [new layers.MapImageLayer({ ...common, url: plan.url })];
       case "imagery":
         return [new layers.ImageryLayer({ ...common, url: plan.url })];
+      case "imagery-tile":
+        return [
+          new layers.ImageryTileLayer({
+            ...common,
+            url: plan.url,
+            // ImageryTileLayer has no `apiKey` (SDK 5.1 omits APIKeyMixin);
+            // custom parameters ride on every request it makes, the raster
+            // tile fetches included.
+            ...(plan.token ? { customParameters: { token: plan.token } } : {}),
+          }),
+        ];
       case "media-image": {
         // The four corners are an arbitrary quad (the georeferencer fits an
         // affine transform), which only a control-point georeference can
@@ -1738,7 +1946,11 @@ export class ArcgisEngine implements MapEngine {
    * The canvas calls this on mount and whenever either preference changes.
    */
   setBasemap(styleUrl: string | undefined, arcgisBasemap: string | undefined): void {
-    const plan = planArcgisBasemap(styleUrl, arcgisBasemap, this.options.hasApiKey === true);
+    // The SDK cannot reproject tiled layers, so a map in a projection other
+    // than Web Mercator has no basemap: the Blank background shows instead.
+    const plan: ArcgisBasemapPlan = this.options.projectOperator
+      ? { kind: "none" }
+      : planArcgisBasemap(styleUrl, arcgisBasemap, this.options.hasApiKey === true);
     if (this.basemapPlan && sameArcgisBasemapPlan(this.basemapPlan, plan)) return;
     this.basemapPlan = plan;
     const map = this.map;
@@ -1955,13 +2167,43 @@ export class ArcgisEngine implements MapEngine {
       });
     }
     try {
-      const mapPoint = view.toMap(screenPoint);
-      if (mapPoint) this.lastHit = { lngLat: [mapPoint.longitude, mapPoint.latitude], features };
+      const lngLat = this.lngLatOf(view.toMap(screenPoint));
+      if (lngLat) this.lastHit = { lngLat, features };
     } catch {
       // A view torn down between the hit test and the conversion has no
       // location to remember; the features are still the answer.
     }
     return features;
+  }
+  /**
+   * Hits on the store layers that mirror a plugin control's native layer, by
+   * the ids the control registered (`nativeLayerIds`) or the source it reads.
+   * The control's own layer is only recorded on this renderer (its facade's
+   * shadow style), so its mirror is what the user sees and clicks.
+   */
+  private pickNativeLayer(
+    lngLat: [number, number],
+    nativeLayerId: string,
+    sourceId: string | undefined,
+  ): IdentifiedFeature[] {
+    return this.mirrorsOf(nativeLayerId, sourceId).flatMap((layer) =>
+      this.identifyFeatures(lngLat, layer.id),
+    );
+  }
+  /** The store layers that mirror a control's native layer or source. */
+  private mirrorsOf(nativeLayerId: string, sourceId: string | undefined): GeoLibreLayer[] {
+    return controlLayerMirrors(this.layers, nativeLayerId, sourceId);
+  }
+
+  /** What the control host borrows from the engine to pick and draw. */
+  private controlHostHooks(): ArcgisControlHostHooks {
+    return {
+      pick: (lngLat, nativeLayerId, sourceId) =>
+        this.pickNativeLayer(lngLat, nativeLayerId, sourceId),
+      isMirrored: (nativeLayerId, sourceId) => this.mirrorsOf(nativeLayerId, sourceId).length > 0,
+      tolerance: (lngLat) => this.degreesPerPixel(lngLat[1]) * HIT_TOLERANCE_PX,
+      toGeometry: geojsonToArcgisGeometry,
+    };
   }
   /**
    * Features under `lngLat`, answered synchronously. The SDK's own hit test is
@@ -1983,8 +2225,8 @@ export class ArcgisEngine implements MapEngine {
     const tolerance = this.degreesPerPixel(lngLat[1]) * HIT_TOLERANCE_PX;
     const zoom = this.compiledZoom;
     const features: IdentifiedFeature[] = [];
-    // Store order is topmost first, which is the order a click should report.
-    for (const layer of this.layers) {
+    // A click reports the topmost layer first; store order is bottom to top.
+    for (const layer of [...this.layers].reverse()) {
       if (layerId && layer.id !== layerId) continue;
       if (!layer.visible || !layer.geojson || !this.natives.has(layer.id)) continue;
       // The pick runs per pointer frame for hover tips, so only the features
@@ -2338,9 +2580,9 @@ export class ArcgisEngine implements MapEngine {
       }
       if (!dragging) return;
       event.stopPropagation();
-      const point = view.toMap({ x: event.x, y: event.y });
-      if (point) {
-        position = [point.longitude, point.latitude];
+      const lngLat = this.lngLatOf(view.toMap({ x: event.x, y: event.y }));
+      if (lngLat) {
+        position = lngLat;
         pin.geometry = geojsonToArcgisGeometry({ type: "Point", coordinates: position });
       }
       if (event.action === "end") {
@@ -2369,8 +2611,9 @@ export class ArcgisEngine implements MapEngine {
     const stop = drawExtentOnCanvas(
       this.canvas(),
       (p) => {
-        const point = view.toMap({ x: p.x, y: p.y });
-        return point ? [point.longitude, point.latitude] : [0, 0];
+        // A corner outside the projection's domain is no location; the
+        // drawing ignores it (or cancels, on release) rather than using one.
+        return this.lngLatOf(view.toMap({ x: p.x, y: p.y }));
       },
       () => this.suspendNavigation(),
       options,
@@ -2385,11 +2628,15 @@ export class ArcgisEngine implements MapEngine {
   getViewBounds(): MapExtent | null {
     const view = this.view;
     if (!view?.extent) return null;
+    const projectOperator = this.options.projectOperator;
     const extent = view.spatialReference?.isWebMercator
       ? this.sdk.webMercatorUtils.webMercatorToGeographic(view.extent)
-      : view.extent;
+      : projectOperator && !view.spatialReference?.isWGS84
+        ? safeProject(projectOperator, view.extent)
+        : view.extent;
     if (!extent) return null;
-    return [extent.xmin, extent.ymin, extent.xmax, extent.ymax];
+    const bounds: MapExtent = [extent.xmin, extent.ymin, extent.xmax, extent.ymax];
+    return bounds.every(Number.isFinite) ? bounds : null;
   }
   showExtent(extent: MapExtent): () => void {
     const map = this.map;
@@ -2438,6 +2685,23 @@ export class ArcgisEngine implements MapEngine {
         }
     return { pending, errors: [...this.errors.values()] };
   }
+  /**
+   * The store layers that failed to load, as the last {@link getRenderStatus}
+   * call left them. A plugin layer the SDK cannot draw is left out: it is
+   * unsupported here, not broken, and the banner already says so.
+   *
+   * @returns Each failing layer's store id mapped to its render-status message.
+   */
+  getLayerLoadErrors(): Map<string, string> {
+    const failures = new Map<string, string>();
+    for (const [key, message] of this.errors) {
+      if (!key.startsWith("layer:")) continue;
+      const id = key.slice(6);
+      if (this.pluginLayerIds.has(id)) continue;
+      failures.set(id, message);
+    }
+    return failures;
+  }
   async captureImage(): Promise<Blob> {
     const view = this.view;
     if (!view) throw new Error("ArcGIS map is not available");
@@ -2449,8 +2713,8 @@ export class ArcgisEngine implements MapEngine {
     const view = this.view;
     if (!view) return () => {};
     const handle = view.on("click", (event) => {
-      const point = view.toMap({ x: event.x, y: event.y });
-      if (point) listener([point.longitude, point.latitude]);
+      const lngLat = this.lngLatOf(view.toMap({ x: event.x, y: event.y }));
+      if (lngLat) listener(lngLat);
     });
     this.handles.add(handle);
     return () => {
@@ -2537,6 +2801,9 @@ export class ArcgisEngine implements MapEngine {
     };
   }
   stopCamera(): void {
+    this.stopStoryCamera();
+  }
+  stopStoryCamera(): void {
     this.storyCameraToken++;
     // Stopping the animation settles an in-flight goTo where it is.
     (this.view?.animation as { stop?: () => void } | null | undefined)?.stop?.();
@@ -2555,7 +2822,13 @@ export class ArcgisEngine implements MapEngine {
       view.on("key-down", swallow),
       view.on("mouse-wheel", swallow),
     ];
+    this.navigationSuspensions++;
+    let released = false;
     return () => {
+      if (!released) {
+        released = true;
+        this.navigationSuspensions--;
+      }
       for (const handle of handles) handle.remove();
       if (this.view) {
         this.view.navigation.mouseWheelZoomEnabled = wheel;
@@ -2568,11 +2841,21 @@ export class ArcgisEngine implements MapEngine {
 
   addControl(control: maplibregl.IControl, position?: maplibregl.ControlPosition): boolean {
     if (!control || !this.view || this.options.domControls === false) return false;
-    this.controlHost ??= new ArcgisControlHost(this, this.view, this.sdk);
+    this.controlHost ??= new ArcgisControlHost(this, this.view, this.sdk, this.controlHostHooks());
     return this.controlHost.addControl(control, position);
   }
   removeControl(control: maplibregl.IControl): void {
     this.controlHost?.removeControl(control);
+  }
+  /**
+   * The MapLibre-shaped map controls on this view receive: camera, events and
+   * DOM through the view, and a style that is recorded but never drawn. Null
+   * before the view exists or when DOM controls are disabled.
+   */
+  getControlMap(): maplibregl.Map | null {
+    if (!this.view || this.options.domControls === false) return null;
+    this.controlHost ??= new ArcgisControlHost(this, this.view, this.sdk, this.controlHostHooks());
+    return this.controlHost.getControlMap();
   }
   private createBuiltInControl(id: BuiltInMapControl): ArcgisWidget | null {
     const view = this.view;
@@ -2595,11 +2878,17 @@ export class ArcgisEngine implements MapEngine {
         return new widgets.Zoom({ view });
       case "fullscreen":
         return new widgets.Fullscreen({ view, element: view.container ?? undefined });
-      case "compass":
-        return new widgets.Compass({
+      case "compass": {
+        const compass = new widgets.Compass({
           view,
           ...(this.compassLabel ? { label: this.compassLabel } : {}),
         });
+        // The SDK's compass only restores the heading; MapLibre's also levels
+        // the pitch, so a click resets both.
+        const viewModel = (compass as { viewModel?: { reset?: () => void } }).viewModel;
+        if (viewModel) viewModel.reset = () => this.resetNorthPitch();
+        return compass;
+      }
       case "geolocate":
         return new widgets.Locate({ view });
       case "globe":
@@ -2624,7 +2913,19 @@ export class ArcgisEngine implements MapEngine {
     if (!this.view || this.builtInControls.has(id)) return;
     const widget = this.createBuiltInControl(id);
     if (!widget) return;
-    this.view.ui.add(widget.uiComponent ?? widget, this.controlPositions[id]);
+    // The SDK appends by default, so a control mounted after its neighbours
+    // (shown again from the Controls menu, or a toggle that lands after the
+    // view is built) would drift out of order. Slot it after the built-ins
+    // that precede it in the same corner.
+    const position = this.controlPositions[id];
+    const rank = HOSTED_CONTROL_ORDER.indexOf(id);
+    let index = 0;
+    for (const other of this.builtInControls.keys()) {
+      const otherRank = HOSTED_CONTROL_ORDER.indexOf(other);
+      if (otherRank !== -1 && otherRank < rank && this.controlPositions[other] === position)
+        index++;
+    }
+    this.view.ui.add(widget.uiComponent ?? widget, { position, index });
     this.builtInControls.set(id, widget);
   }
   private unmountBuiltInControl(id: BuiltInMapControl): void {

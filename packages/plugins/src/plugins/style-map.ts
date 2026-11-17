@@ -50,3 +50,35 @@ export function getStyleMap(
   const mapbox = app.getMapboxMap?.();
   return mapbox ? (mapbox as unknown as MapLibreMap) : null;
 }
+
+/**
+ * The map a plugin control talks to on any renderer: {@link getStyleMap}, or
+ * on ArcGIS and the Cesium globe the host's control facade, whose style calls
+ * succeed and read back without reaching the SDK.
+ *
+ * On ArcGIS the host draws what that style holds in two ways: a layer the
+ * plugin mirrors into the GeoLibre store (a Web Services raster, registered
+ * footprints) is drawn from the store record, and any other GeoJSON fill,
+ * line, circle or text layer (a grid, a highlight, a draw preview) is drawn as
+ * the host's own graphics. Use it where that covers what the plugin shows:
+ * raster or vector-tile sources it does not mirror, icons, custom layers,
+ * `Marker`/`Popup` and MapLibre-only APIs still need an ArcGIS path of their
+ * own. See "Plugin controls" in docs/arcgis-renderer.md. The globe draws the
+ * same two ways: mirrored records through its layer sync, other GeoJSON
+ * overlays as ground-clamped entities.
+ *
+ * @param app - The plugin host API, or nothing while a plugin is inactive.
+ * @returns The MapLibre or Mapbox map, the ArcGIS or Cesium control facade,
+ *   or `null` when none is mounted (a split pane, or a map mid-swap).
+ */
+export function getControlMap(
+  app:
+    | Pick<
+        GeoLibreAppAPI,
+        "getMap" | "getMapboxMap" | "getArcgisControlMap" | "getCesiumControlMap"
+      >
+    | null
+    | undefined,
+): MapLibreMap | null {
+  return getStyleMap(app) ?? app?.getArcgisControlMap?.() ?? app?.getCesiumControlMap?.() ?? null;
+}

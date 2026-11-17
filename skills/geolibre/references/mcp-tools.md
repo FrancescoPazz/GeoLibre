@@ -3,7 +3,8 @@
 Every tool that reads or writes a project takes `path`, the `.geolibre.json`
 file, resolved against the workspace roots. Relative paths resolve against the
 first root, so `city.geolibre.json` works without knowing the host layout.
-(`list_catalog` is the one exception — it takes no arguments at all.)
+`list_catalog` and the `live_*` tools take no path: the live tools move the
+map open in Desktop instead of a file.
 
 The server's own docstrings are the authority — this page is the map of the
 surface, so you can pick the right tool before calling anything.
@@ -12,19 +13,22 @@ surface, so you can pick the right tool before calling anything.
 
 Pick by what the data **is**:
 
-| You have                                                              | Tool                   | Notes                                                                                                                                                   |
-| --------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A GeoJSON URL, file, or literal                                       | `add_geojson_layer`    | Inlined into the project. Self-contained. **The only kind `classify_layer` can style.** Cap: 50 MB.                                                     |
-| A big remote FlatGeobuf / GeoParquet / GeoJSON                        | `add_vector_layer`     | Read in place, not copied. No attribute table in the file.                                                                                              |
-| A Cloud Optimized GeoTIFF / COG                                       | `add_raster_layer`     | `bands`, `colormap`, `rescale`.                                                                                                                         |
-| An XYZ raster tile template (`{z}/{x}/{y}.png`)                       | `add_tile_layer`       | Basemaps like OSM go here, not `set_basemap`.                                                                                                           |
-| A PMTiles archive, or a vector tile service                           | `add_tiles_layer`      | `kind="pmtiles"` (with `tile_type`) or `kind="vector-tiles"`.                                                                                           |
-| A WMS or WMTS endpoint                                                | `add_ogc_layer`        | `service="wms"` or `"wmts"`.                                                                                                                            |
-| An OGC 3D Tiles tileset                                               | `add_3d_tiles_layer`   | `altitude_offset` to sit it on the ground; `ion_asset_id` instead of `url` for a Cesium Ion tileset.                                                    |
-| A Cesium Ion asset (tileset or imagery)                               | `add_cesium_ion_layer` | 3D globe only: pair it with `set_renderer` / `primaryRenderer: "cesium"`. `kind="imagery"` for imagery.                                                 |
-| A CZML (Cesium Language) dynamic scene: orbits, tracks, moving models | `add_czml_layer`       | 3D globe only: `url` for a `.czml` document, or `data` for its packet array inline. The globe follows the document's `clock`.                           |
-| Native KML/KMZ with document styling                                  | `add_cesium_kml_layer` | 3D globe only. Supply `url`, inline XML in `data`, or a KMZ data URL. Package local icons and overlays in KMZ for sharing.                              |
-| A Shapefile, GeoPackage, KML, CSV                                     | Convert first          | Read it with GeoPandas and pass GeoJSON to `add_geojson_layer`, or use the Python API's `Map.add_shp` / `Map.add_gpkg` / `Map.add_kml` / `Map.add_csv`. |
+| You have | Tool | Notes |
+| --- | --- | --- |
+| A GeoJSON URL, file, or literal | `add_geojson_layer` | Inlined into the project. Self-contained. **The only kind `classify_layer` can style.** Cap: 50 MB. |
+| A big remote FlatGeobuf / GeoParquet / GeoJSON | `add_vector_layer` | Read in place, not copied. No attribute table in the file. |
+| A Cloud Optimized GeoTIFF / COG | `add_raster_layer` | `bands`, `colormap`, `rescale`. |
+| An XYZ raster tile template (`{z}/{x}/{y}.png`) | `add_tile_layer` | Basemaps like OSM go here, not `set_basemap`. |
+| Satellite or aerial imagery with no URL in hand (Sentinel-2, Landsat, NAIP, a DEM) | `add_planetary_computer_layer` | Microsoft Planetary Computer by collection id: one STAC `item`, or a `datetime` mosaic. No credentials. MapLibre renderer. |
+| A PMTiles archive, or a vector tile service | `add_tiles_layer` | `kind="pmtiles"` (with `tile_type`) or `kind="vector-tiles"`. |
+| A WMS or WMTS endpoint | `add_ogc_layer` | `service="wms"` or `"wmts"`. |
+| A LAS/LAZ/COPC/EPT point cloud | `add_lidar_layer` | COPC and EPT stream by level of detail; the app's Point Cloud Annotation plugin can label it. |
+| An ICESat-2 (ATL06, ATL08) or GEDI (L2A, L2B, L4A) `.h5` granule | `add_spaceborne_lidar_layer` | Local file in the workspace; needs `geolibre[spaceborne]`. `bbox` for a regional subset of a GEDI orbit. |
+| An OGC 3D Tiles tileset or an ArcGIS I3S scene layer | `add_3d_tiles_layer` | `altitude_offset` to sit it on the ground; `ion_asset_id` instead of `url` for a Cesium Ion tileset; a `.../SceneServer/layers/<n>` URL is added as a scene layer. |
+| A Cesium Ion asset (tileset or imagery) | `add_cesium_ion_layer` | 3D globe only: pair it with `set_renderer` / `primaryRenderer: "cesium"`. `kind="imagery"` for imagery. |
+| A CZML (Cesium Language) dynamic scene: orbits, tracks, moving models | `add_czml_layer` | 3D globe only: `url` for a `.czml` document, or `data` for its packet array inline. The globe follows the document's `clock`. |
+| Native KML/KMZ with document styling | `add_cesium_kml_layer` | 3D globe only. Supply `url`, inline XML in `data`, or a KMZ data URL. Package local icons and overlays in KMZ for sharing. |
+| A Shapefile, GeoPackage, KML, CSV | Convert first | Read it with GeoPandas and pass GeoJSON to `add_geojson_layer`, or use the Python API's `Map.add_shp` / `Map.add_gpkg` / `Map.add_kml` / `Map.add_csv`. |
 
 Layers draw bottom-first. Every `add_*` takes an optional `index` (draw-order
 position); omitted, the layer goes on top.
@@ -37,6 +41,10 @@ position); omitted, the layer goes on top.
 create_project(path, name="Untitled Project", center=None, zoom=None,
                basemap=None, overwrite=False)
 describe_project(path)
+get_point_cloud_annotations(path)
+set_point_cloud_classes(path, classes)
+prelabel_point_cloud(path, url, input_file, tool="ground", only_unclassified=True)
+write_labeled_point_cloud(path, url, input_file, output_file, overwrite=False)
 list_catalog()
 ```
 
@@ -45,6 +53,22 @@ project even with `overwrite=True`, so a retry cannot destroy an unrelated
 `package.json` sitting in a root.
 
 `describe_project` reports inlined feature data as a count, never echoed back.
+
+`get_point_cloud_annotations` reports, per point cloud URL, how many points the
+app's annotator relabelled into each class and how many points each instance id
+holds, the custom classes, the 3D vectors (polylines, polygons, keypoints),
+plus every saved 3D box (with its status and attributes).
+
+`set_point_cloud_classes` defines the annotator's custom classes (its label
+schema): `[{"code": 64, "name": "Car", "color": "#e11d48"}]`, codes 19-255.
+Existing labels, instances and boxes are kept; an empty list clears them.
+
+`prelabel_point_cloud` runs the app's Pre-label classifiers (`ground`,
+`ground-vegetation`) on a local copy of a LiDAR layer's file and saves the
+changed classes as labels for the layer `url`. `write_labeled_point_cloud`
+writes that local file with the project's labels (and instance ids) applied, as
+full-resolution LAS/LAZ. Both need the `geolibre[pointcloud]` extra, and `url`
+must be a LiDAR layer in the project.
 
 `list_catalog` returns the basemaps, color ramp names, legend presets, and the
 active workspace roots. Call it before guessing any of those names.
@@ -58,11 +82,19 @@ add_vector_layer(path, name, url, render_mode="geojson", data_format=None,
 add_raster_layer(path, name, url, bands=None, colormap=None, rescale=None,
                  style=None, index=None)
 add_tile_layer(path, name, url, tile_size=256, attribution=None, index=None)
+add_planetary_computer_layer(path, collection, item=None, name=None, datetime=None,
+                             bbox=None, preset=None, assets=None, expression=None,
+                             rescale=None, colormap=None, max_cloud_cover=None,
+                             index=None)
 add_ogc_layer(path, name, service, endpoint, layers=None, styles="",
               image_format="image/png", transparent=True, tile_size=256,
               version="1.1.1", crs=None, bounds=None, index=None)
 add_tiles_layer(path, name, url, kind="pmtiles", tile_type="vector",
                 source_layers=None, style=None, index=None)
+add_lidar_layer(path, name, url, index=None)
+add_spaceborne_lidar_layer(path, input_file, name=None, beams=None, fields=None,
+                           quality_filter=True, bbox=None, max_points=100000,
+                           color_by=None, index=None)
 add_3d_tiles_layer(path, name, url=None, ion_asset_id=None, altitude_offset=0, index=None)
 add_cesium_ion_layer(path, name, asset_id, kind="3d-tiles", altitude_offset=0, index=None)
 add_czml_layer(path, name, url=None, data=None, index=None)
@@ -78,6 +110,19 @@ add_cesium_kml_layer(path, name, url=None, data=None, index=None)
   RGB), and `rescale` is a list of `[min, max]` pairs, one per band
   (`[[0, 3000]]`). The COG URL must be publicly readable **and CORS-enabled** —
   the browser fetches the tiles directly.
+- `add_planetary_computer_layer`: with `item` it draws that one STAC item;
+  without it, a mosaic of every item matching `datetime` (`"start/end"`) and
+  `max_cloud_cover`, e.g. a low-cloud Sentinel-2 summer composite
+  (`collection="sentinel-2-l2a", datetime="2024-06-01/2024-08-31",
+  max_cloud_cover=10`). Style it with a `preset` (sentinel-2-l2a: `true-color`,
+  `false-color`, `ndvi`, `ndwi`, `nbr`, `ndbi`, `swir`; landsat-c2-l2:
+  `true-color`, `false-color`, `ndvi`, `ndwi`, `nbr`, `thermal`; naip: `rgb`,
+  `cir`, `ndvi`; cop-dem-glo-30 / cop-dem-glo-90: `elevation`, `hillshade`), or
+  with `assets` / `expression` plus `rescale=[min, max]` and `colormap`. With
+  none of them the collection's default preset applies. The layer stores no
+  tile URL: GeoLibre's Planetary Computer panel builds it when the project
+  opens (MapLibre renderer only), lists it in its Layers tab, and can restyle
+  it. Give a mosaic a `bbox` so zoom-to-layer has an extent.
 - `add_ogc_layer`: `layers` is required when `service="wms"`. `version` defaults
   to `1.1.1`; pass what the server advertises when it differs. For
   `service="wmts"`, `endpoint` is a full tile URL template. `bounds` is the
@@ -91,9 +136,11 @@ add_cesium_kml_layer(path, name, url=None, data=None, index=None)
   WMS tiles are requested in, `EPSG:3857` when omitted: check that the layer
   lists it in the capabilities, because a server without Web Mercator answers
   every tile with an XML exception and the layer stays blank. For such a
-  server pass a geographic CRS it does list (`EPSG:4326`, `EPSG:4258`,
-  `EPSG:6706`, or `CRS:84` with `version="1.3.0"`): the desktop app redraws those tiles into Web
-  Mercator, while the web build and `export_html` pages cannot show them.
+  server pass a CRS it does list, preferably a geographic one (`EPSG:4326`,
+  `EPSG:4258`, `EPSG:6706`, or `CRS:84` with `version="1.3.0"`), otherwise a
+  projected `EPSG:<code>` such as `EPSG:25832`: the desktop app redraws or
+  warps those tiles into Web Mercator, while the web build and `export_html`
+  pages cannot show them.
 
 ### Editing
 
@@ -105,18 +152,29 @@ set_layer_popup(path, layer, fields=None, click=None, title=None,
                 title_expression=None, body_expression=None,
                 show_feature_id=None, max_width=None, image_height=None,
                 tooltip=None, merge=False)
+set_layer_metadata(path, layer, title=None, abstract=None, keywords=None,
+                   license=None, attribution=None, contact=None, lineage=None,
+                   temporal_start=None, temporal_end=None, links=None,
+                   merge=True)
 classify_layer(path, layer, column, class_count=5, colormap="viridis",
                scheme="equal-interval")
 list_layer_properties(path, layer)
+set_layer_filter(path, layer, expression=None)
+set_floor_picker(path, layer, field="level", level=None, mode=None)
+set_labels(path, layer, field=None, expression=None, enabled=None,
+           placement=None, size=None, color=None, halo_color=None,
+           halo_width=None, min_zoom=None, max_zoom=None,
+           allow_overlap=None, anchor=None, options=None)
 ```
 
 `layer` is a layer id **or** its display name, everywhere.
 
 `style_layer` merges keys into the layer's existing style rather than replacing
 it. Common keys: `fillColor`, `fillOpacity`, `strokeColor`, `strokeWidth`,
-`circleRadius`, `minZoom`, `maxZoom`, and for rasters `rasterBrightnessMin` /
-`rasterBrightnessMax` / `rasterSaturation` / `rasterContrast` /
-`rasterHueRotate`. Colors are CSS strings (`"#3b82f6"`).
+`strokeOpacity`, `strokeDash`, `strokeBlur`, `circleRadius`, `minZoom`,
+`maxZoom`, and for rasters `rasterBrightnessMin` / `rasterBrightnessMax` /
+`rasterSaturation` / `rasterContrast` / `rasterHueRotate`. Colors are CSS
+strings (`"#3b82f6"`).
 
 `set_layer_popup` chooses what a click (and, with `tooltip`, a hover) shows.
 Without it a layer shows its name plus every visible property. Each `fields`
@@ -132,10 +190,95 @@ draw inside it, both in CSS pixels; a thumbnail keeps its aspect ratio, so raise
 edits the existing config in place, so a tooltip can be added without restating
 the fields. Run `list_layer_properties` first to get the real column names.
 
+`set_layer_metadata` records a layer's catalog description — what the app's
+Metadata dialog edits, exports as a STAC Item, and writes into GeoParquet
+exports. It changes nothing about how the layer draws. `contact` is an object
+with any of `name`, `email`, `organization`; `license` is an SPDX id
+(`CC-BY-4.0`) or free text; `temporal_start`/`temporal_end` are ISO 8601 dates
+(`2019-01-01`) or date-times; `links` are URLs or `{href, rel, title}` objects.
+A malformed email, date, or URL (or an end before the start) is refused. With
+the default `merge=True`, fields you omit keep their values.
+
 `classify_layer` clamps `class_count` to 2–12. `scheme` is `equal-interval`
 (even value ranges) or `quantile` (even feature counts per class). It needs an
 inlined GeoJSON layer; run `list_layer_properties` first to get the real column
 name and a sense of the values.
+
+`set_layer_filter` hides the features that do not match a **boolean** MapLibre
+expression, the saved filter the app's Select by Expression → Filter layer
+writes: `[">=", ["get", "pop"], 100000]`, or several combined with `all` /
+`any`. The data is untouched. Omit `expression` to clear it. An expression that
+is not true/false (`["get", "pop"]`) is refused, because the app would drop it
+on load.
+
+`set_floor_picker` links an indoor layer (rooms with a `level` or `ordinal`
+field) to the app's on-map floor picker. `level` picks the floor shown (`"0"`,
+`-1`; omit it to keep the floor in view, `mode="all"` for every floor) and `mode="below"` keeps the floors under it, for
+a cutaway of a stacked extrusion. The floor is shared by every linked layer.
+
+`set_labels` labels features from a property (`field`) or a text `expression`
+(`["concat", ["get", "name"], " (", ["get", "pop"], ")"]`). Settings you omit
+keep their current values, so a second call can restyle without restating the
+field; `enabled=False` hides the labels and keeps the settings. `placement` is
+`point` or `line`; `anchor` is `center`, `top`, `bottom`, `left`, `right` or a
+corner such as `top-left`. Rarer settings go in `options` by name: `offset_x`,
+`offset_y`, `rotation`, `max_width`, `transform` (`none`, `uppercase`,
+`lowercase`), `number_format`, `number_decimals`, `number_locale`, `dedupe`
+(`off`, `unique`, `concatenate`), and the data-defined `size_expression`,
+`color_expression`, `opacity_expression`, `visibility_expression`,
+`priority_expression`.
+
+### Plugin state and story maps
+
+```text
+set_plugin_state(path, plugin_id, state=None, position=None, activate=True,
+                 allow_unknown=False, clear=False)
+set_story_map(path, title=None, subtitle=None, byline=None, footer=None,
+              theme=None, show_markers=None, marker_color=None, inset=None,
+              inset_position=None, hide_chapter_nav=None, start_slide=None,
+              end_slide=None)
+add_story_chapter(path, title, description="", center=None, zoom=None,
+                  pitch=None, bearing=None, image=None, alignment="left",
+                  hidden=False, map_animation="flyTo", rotate_animation=False,
+                  on_enter=None, on_exit=None, index=None)
+remove_story_chapter(path, chapter)
+move_story_chapter(path, chapter, index)
+```
+
+- `set_plugin_state` stores a plugin's saved settings, the blob the plugin
+  reads back when the project opens (the Time Slider's timeline, a grid
+  plugin's resolution). `list_catalog` returns the built-in ids as
+  `pluginStateIds`; another id needs `allow_unknown=True` and an external
+  plugin loaded from a manifest URL. The shape of `state` is the plugin's own,
+  so copy it from a project the app saved rather than inventing keys. Omit
+  `state` to change only `position` / `activate`; `clear=True` removes the
+  stored state. Prefer
+  `add_swipe`, `add_legend` and `add_colorbar` for those controls.
+- A story map is the scroll-driven narrative presented from Project → Story
+  Map. `set_story_map` sets its title block and presentation (`theme` is
+  `light` or `dark`; `start_slide` / `end_slide` are `none`, `blank`, `black`,
+  `global` or `adjacent`). `add_story_chapter` appends a chapter, or inserts it
+  at `index`; a camera value you omit comes from the project's saved view, so
+  `set_view` then `add_story_chapter` captures that view. `on_enter` /
+  `on_exit` fade layers: `[{"layer": "Cities", "opacity": 1, "duration": 800}]`.
+  `chapter` is a chapter id, title, or 0-based index.
+
+### Bookmarks
+
+```text
+add_bookmark(path, name, center=None, zoom=None, pitch=None, bearing=None,
+             folder=None, visible_layers=None)
+remove_bookmark(path, bookmark)
+```
+
+- Bookmarks are saved map views in the Bookmarks panel (Controls → Bookmarks),
+  stored in the project so they travel with the file. `add_bookmark` appends
+  one; a camera value you omit comes from the project's saved view, so
+  `set_view` then `add_bookmark` captures that view. `folder` is a folder id or
+  name, and a new name creates the folder. `visible_layers` lists the layers
+  (ids or names) to show when the bookmark is opened; the others are hidden.
+  `bookmark` is a bookmark id, name, or 0-based index. `describe_project` lists
+  them.
 
 ### Framing and decoration
 
@@ -144,6 +287,8 @@ set_renderer(path, renderer, pane_id=None)
 set_map_layout(path, rows, cols, view_kinds=None, sync_view=True)
 set_view(path, center=None, zoom=None, bearing=None, pitch=None, bbox=None)
 set_basemap(path, basemap)
+set_map_legend(path, title=None, position=None, group_by_layer=None,
+               visible=None, collapsed=None)
 add_legend(path, title=None, legend_dict=None, labels=None, colors=None,
            builtin=None, position="bottom-left", shape="square")
 add_colorbar(path, colormap="viridis", vmin=0.0, vmax=1.0, label="", units="",
@@ -159,7 +304,11 @@ add_swipe(path, left_layers, right_layers, orientation="vertical",
 - `set_basemap` takes a named basemap or a MapLibre style JSON URL. An XYZ
   raster basemap (OpenStreetMap, Esri imagery) is **not** a basemap style — add
   it with `add_tile_layer` at `index=0`.
-- `add_legend`: give it exactly one of `legend_dict` (`{label: color}`),
+- `set_map_legend`: the app's own legend panel (Controls > Legend). Its rows
+  come from each visible layer's symbology, so after `classify_layer` it lists
+  the classes with no entries to write. Prefer it to `add_legend` for a styled
+  layer; a project has one, and calling it again updates it.
+- `add_legend`: hand-written entries. Give it exactly one of `legend_dict` (`{label: color}`),
   `labels` + `colors` (paired lists), or `builtin` (a preset name such as `nlcd`
   or `esa_worldcover`).
 - `add_colorbar`: `vmin` must be less than `vmax`. `colors` overrides `colormap`
@@ -168,6 +317,45 @@ add_swipe(path, left_layers, right_layers, orientation="vertical",
   string `__basemap__` refers to the basemap.
 
 Positions are `top-left`, `top-right`, `bottom-left`, `bottom-right`.
+
+### Preview
+
+```text
+show_map(path)
+get_map_preview(path)
+approve_map_origin(preview_id, origin)
+fetch_map_resource(preview_id, grant, url)
+close_map_preview(preview_id)
+```
+
+`show_map` renders the project inline in MCP Apps clients. The other preview
+tools are app-only plumbing; never call them directly. The preview asks for
+consent in one panel listing the project's known origins, with Allow all and
+Block all actions. Newly discovered hosts are batched into that panel and still
+require approval before the Python MCP server requests public HTTP/S resources.
+The destination sees the
+server machine's IP, not necessarily the browser's. No external browser
+network access or fixed host allowlist is needed; the host must permit
+App-to-server tool calls.
+
+The host must also enforce app-only visibility; it is not server-side
+authentication. A client ignoring that metadata can expose the redacted
+project and approval tools to the model. Server-side grant and public-address
+checks still apply.
+
+Consent is not persisted. Preview sessions expire after 30 minutes of
+inactivity; successful origin approval and resource authorization refresh the
+idle timeout. Origin grants still last five minutes and renew only for
+already-approved origins. Closing the preview revokes its grants.
+Private/LAN/loopback/link-local destinations,
+known credential-like URL parameters, redirects, compressed responses, and
+resource bodies larger than 4 MiB or slower than 15 seconds are rejected. Use
+the direct destination URL for a redirect. Reopen with `show_map` to change
+consent or replace an expired session.
+
+Credential detection is name-based and heuristic; do not supply projects with
+secrets in custom fields or vendor-specific parameters. The server caps active
+previews at 64; closing one frees a slot, and abandoned sessions expire.
 
 ### Export
 
@@ -180,10 +368,70 @@ Writes a standalone page that embeds the hosted GeoLibre viewer and injects the
 project into it. Credentials are stripped on the way out. `app_url` is a trust
 boundary — see the SKILL.
 
+## Live desktop map
+
+These tools do not take a `path`. They move the map open in GeoLibre Desktop.
+`live_status()` first: if `connected` is false, the user opens
+Processing → Jupyter Notebook once. A live edit persists only after the user
+saves in the app. Layer ids come from `live_list_layers()`, not from a
+project file.
+
+```text
+live_status()
+live_list_layers()
+live_get_layer(layer_id)
+live_get_view()
+live_set_view(lng, lat, zoom=None, bearing=None, pitch=None)
+live_fly_to(lng=None, lat=None, zoom=None, bearing=None, pitch=None, duration=None)
+live_fit_bounds(bounds)
+live_zoom_to_layer(layer_id)
+live_set_basemap(basemap)
+live_add_geojson(data, name="GeoJSON", style=None)
+live_add_marker(lng, lat, name="Marker", properties=None, style=None)
+live_add_markers(points, name="Markers", style=None)
+live_get_layer_features(layer_id)
+live_get_selected_features()
+live_get_drawn_features()
+live_identify(lng, lat, layer_id=None)
+live_set_identify(layer_id=None)
+live_get_identify()
+live_set_control_visible(control, visible=True, options=None)
+live_set_visibility(layer_id, visible)
+live_set_opacity(layer_id, opacity)
+live_set_style(layer_id, style)
+live_remove_layer(layer_id)
+live_list_algorithms(query=None)
+live_run_algorithm(algorithm_id, parameters=None)
+live_list_whitebox_tools(query=None)
+live_run_whitebox_tool(tool_id, parameters=None)
+live_run_model_builder(graph)
+live_to_image(out_path=None, overwrite=False)
+```
+
+Processing runs in the app, so it is live-only: there is no file tool for it.
+`live_list_algorithms` and `live_list_whitebox_tools` return each tool's `id`
+and `parameters`; `live_run_algorithm` and `live_run_whitebox_tool` run one on
+the open map, add its result layers, and return their ids.
+`live_run_model_builder` executes a serialized Model Builder graph (`nodes` and
+`edges`) in one call. Layer parameters take ids from `live_list_layers()`. The
+relay waits about five seconds: a longer run keeps going in the app and the
+call reports that it did not finish, so check `live_list_layers()` before
+running it again.
+
+`live_get_layer_features`, `live_get_selected_features`, and
+`live_get_drawn_features` read GeoJSON features from the live store (including
+user sketches in the Geo Editor); `live_identify` queries rendered features at
+`(lng, lat)`. `live_to_image` captures the current viewport as a PNG data URL
+or writes a `.png` inside the workspace.
+
+`live_set_basemap` takes a catalog name (`liberty`, `bright`, `positron`,
+`dark`, `fiord`) or an `http(s)` style URL. `live_add_geojson` confines a
+local path to the workspace, the same way `add_geojson_layer` does.
+
 ## Workspace rules
 
-- Writes are limited to `.json` (projects) and `.html`/`.htm` (exports). A bare
-  `.json` with no name is refused.
+- Writes are limited to `.json` (projects), `.html`/`.htm` (exports), and `.png`
+  (live map captures). A bare `.json` with no name is refused.
 - Existing files are never replaced without `overwrite=True`.
 - A tool that edits an existing project first checks the file really is one.
 - Reads are capped at 256 MB per project file.

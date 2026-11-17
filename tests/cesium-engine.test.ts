@@ -8,10 +8,11 @@ import {
 } from "@cesium/engine";
 import { beforeEach, describe, it } from "node:test";
 import { useAppStore } from "../packages/core/src/store";
-import type { MapViewState } from "../packages/core/src/types";
+import { DEFAULT_LAYER_STYLE, type MapViewState } from "../packages/core/src/types";
 import {
   CesiumEngine,
   CESIUM_CAPABILITIES,
+  cesiumLongitudes,
   resetPrimaryCesiumBuiltInControlState,
 } from "../packages/map/src/cesium-engine";
 import {
@@ -134,8 +135,12 @@ function makeCesium() {
       },
     },
     createWorldTerrainAsync: () => Promise.resolve({ kind: "world-terrain" }),
+    IonResource: {
+      fromAssetId: (assetId: number, options?: { accessToken?: string }) =>
+        Promise.resolve({ kind: "ion-resource", assetId, token: options?.accessToken }),
+    },
     CesiumTerrainProvider: {
-      fromIonAssetId: (assetId: number) => Promise.resolve({ kind: "ion-terrain", assetId }),
+      fromUrl: (resource: unknown) => Promise.resolve({ kind: "ion-terrain", resource }),
     },
   } as unknown as typeof import("@cesium/engine");
 }
@@ -169,6 +174,7 @@ function makeViewer(groundHeight = 0) {
   let groundPick = true;
   let ellipsoidPick = true;
   const moveEnd = makeEvent();
+  const moveStart = makeEvent();
   const tileLoadProgressEvent = makeEvent();
   const morphComplete = makeEvent();
   const canvasListeners = new Map<string, Set<(event: unknown) => void>>();
@@ -207,7 +213,8 @@ function makeViewer(groundHeight = 0) {
       },
       frustum: { fovy: Math.PI / 3 },
       moveEnd,
-      moveStart: makeEvent(),
+      moveStart,
+      cancelFlight: () => {},
       // applyMapViewToCamera drives these; the fake records the resulting view.
       lookAt: (target: { x: number; y: number; z: number }, hpr: HprLike) => {
         lookAtCount.n++;
@@ -281,12 +288,15 @@ function makeViewer(groundHeight = 0) {
     duration?: number;
   }
   return {
-    viewer: viewer as never,
+    // The fake stands in for the CesiumWidget the engine takes, while tests
+    // still read the fake's own fields back.
+    viewer: viewer as typeof viewer & ConstructorParameters<typeof CesiumEngine>[1],
     setPickHits(ground: boolean, ellipsoid: boolean) {
       groundPick = ground;
       ellipsoidPick = ellipsoid;
     },
     moveEnd,
+    moveStart,
     tileLoadProgressEvent,
     morphComplete,
     /** Put the scene in a scene mode, as the scene-mode picker's morph does. */
@@ -514,6 +524,47 @@ describe("CesiumEngine camera publishing", () => {
     engine.destroy();
   });
 
+  it("reports story arrival only on successful flight completion and only once", () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    let arrived = 0;
+    engine.applyStoryChapterCamera({ center: [30, 10], zoom: 8 }, "flyTo", false, () => arrived++);
+    assert.equal(arrived, 0);
+    const flight = fakes.flights.at(-1) as { complete: () => void };
+    flight.complete();
+    flight.complete();
+    assert.equal(arrived, 1);
+    engine.destroy();
+  });
+
+  it("drops late story arrivals when paused or replaced", () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.restoreLayerStyles = () => assert.fail("pausing must not restore styles");
+    let arrived = 0;
+    engine.applyStoryChapterCamera({ center: [30, 10], zoom: 8 }, "flyTo", false, () => arrived++);
+    const first = fakes.flights.at(-1) as { complete: () => void };
+    engine.applyStoryChapterCamera({ center: [31, 11], zoom: 9 }, "flyTo", false, () => arrived++);
+    first.complete();
+    assert.equal(arrived, 0);
+    engine.stopStoryCamera();
+    (fakes.flights.at(-1) as { complete: () => void }).complete();
+    assert.equal(arrived, 0);
+    engine.destroy();
+  });
+
+  it("keeps the camera's orientation for a chapter without pitch or bearing", () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView({ ...VIEW, bearing: 40, pitch: 30 });
+    const before = engine.readView();
+    engine.applyStoryChapterCamera({ center: [30, 10], zoom: 8 }, "jumpTo");
+    const after = engine.readView();
+    assert.ok(Math.abs(after.bearing - before.bearing) < 1e-6, `bearing ${after.bearing}`);
+    assert.ok(Math.abs(after.pitch - before.pitch) < 1e-6, `pitch ${after.pitch}`);
+    engine.destroy();
+  });
+
   it("stops publishing once destroyed", () => {
     const fakes = makeViewer();
     const engine = new CesiumEngine(makeCesium(), fakes.viewer);
@@ -611,6 +662,161 @@ describe("CesiumEngine terrain correction", () => {
     engine.destroy();
   });
 
+  it("never pulls an animated flight back to the last placement (#2878)", () => {
+    // A flight streams terrain all along its path, so the tile queue drains
+    // mid-air at a new height. Re-applying the seed placement there sent a
+    // drop's fly-to-layer (and a Set View) straight back to the seed view.
+    for (const fly of [
+      (engine: CesiumEngine) => engine.flyTo({ center: [-97.5, 37.5], zoom: 4 }),
+      (engine: CesiumEngine) => engine.fitBounds([-125, 25, -70, 50]),
+      (engine: CesiumEngine) => engine.zoomIn(),
+    ]) {
+      const fakes = makeViewer(0);
+      const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+      engine.applyView({ ...VIEW, zoom: 2 });
+      const placements = fakes.placements;
+      fly(engine);
+      assert.equal(fakes.flights.length, 1, "the flight started");
+      fakes.setGroundHeight(-770);
+      fakes.tileLoadProgressEvent.emit(0);
+      assert.equal(fakes.placements, placements, "the flight's camera is authoritative");
+      engine.destroy();
+    }
+  });
+
+  it("corrects a landed flight once terrain under it settles", () => {
+    // A flight converts its zoom against the ground loaded when it started, so
+    // it can land too close; the landed view is corrected like a placement.
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.flyTo({ center: [10, 20], zoom: 6 });
+    fakes.moveEnd.emit();
+    const landed = engine.getLastAppliedView();
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the landed view is corrected");
+    assert.deepEqual(engine.getLastAppliedView(), landed, "re-applied as the landed view");
+    engine.destroy();
+  });
+
+  it("corrects again after a flight that never moved the camera", () => {
+    // Cesium completes a flight with nowhere to go at once and raises no
+    // moveStart/moveEnd (a zoom in at max zoom, a reset north on a north-up
+    // globe), so the flight's own completion has to end it.
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.zoomIn();
+    (fakes.flights[0] as { complete: () => void }).complete();
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the placement is corrected again");
+    engine.destroy();
+  });
+
+  it("corrects again after a flight stopped before it moved", () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.fitBounds([-125, 25, -70, 50]);
+    engine.stopCamera();
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the placement is corrected again");
+    engine.destroy();
+  });
+
+  it("skips a rectangle fit mid-morph", () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    fakes.setSceneMode(0);
+    engine.fitBounds([-125, 25, -70, 50]);
+    fakes.setSceneMode(3);
+    assert.equal(fakes.flights.length, 0, "no flight mid-morph");
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the placement is still corrected");
+    engine.destroy();
+  });
+
+  it("does not start a point fit mid-morph", () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    fakes.setSceneMode(0);
+    engine.fitBounds([10, 20, 10, 20]);
+    fakes.setSceneMode(3);
+    assert.equal(fakes.flights.length, 0, "no flight mid-morph");
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the placement is still corrected");
+    engine.destroy();
+  });
+
+  it("leaves a moving flight's landing to moveEnd", () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.flyTo({ center: [10, 20], zoom: 6 });
+    fakes.moveStart.emit();
+    (fakes.flights[0] as { complete: () => void }).complete();
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements, "still settling: no correction yet");
+    engine.destroy();
+  });
+
+  it("leaves a flight the user took over to the user", () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.flyTo({ center: [10, 20], zoom: 6 });
+    fakes.fireCanvas("wheel");
+    fakes.moveEnd.emit();
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements, "the user's camera is authoritative");
+    engine.destroy();
+  });
+
+  it("keeps correcting while a layer fit waits for a flight that never starts", () => {
+    // A layer with no bounds in the store hands its fit to the layer sync, which
+    // flies only once the layer's Cesium object loads. Until it does, the
+    // camera is still on its placement and terrain must still correct it.
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.fitLayer({ id: "not-loaded-yet", type: "3d-tiles", source: {}, metadata: {} } as never);
+    assert.equal(fakes.flights.length, 0, "nothing to fly to yet");
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the placement is still corrected");
+    engine.destroy();
+  });
+
+  it("corrects again once a new placement replaces the flight", () => {
+    const fakes = makeViewer(0);
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    engine.applyView(VIEW);
+    engine.fitBounds([-125, 25, -70, 50]);
+    engine.applyView({ ...VIEW, center: [10, 20] });
+    const placements = fakes.placements;
+    fakes.setGroundHeight(1200);
+    fakes.tileLoadProgressEvent.emit(0);
+    assert.equal(fakes.placements, placements + 1, "the new placement is corrected");
+    engine.destroy();
+  });
+
   it("drops the tile listener on destroy", () => {
     const fakes = makeViewer();
     const engine = new CesiumEngine(makeCesium(), fakes.viewer);
@@ -703,15 +909,6 @@ describe("CesiumEngine terrain", () => {
     engine.destroy();
   });
 
-  it("loads the deployment's own Ion terrain asset in place of World Terrain", async () => {
-    const fakes = makeViewer();
-    const engine = new CesiumEngine(makeCesium(), fakes.viewer, { terrainIonAssetId: 2473055 });
-    await engine.enableWorldTerrain();
-    assert.equal(engine.isTerrainEnabled(), true);
-    assert.deepEqual(fakes.viewer.terrainProvider, { kind: "ion-terrain", assetId: 2473055 });
-    engine.destroy();
-  });
-
   it("ignores a terrain asset id without Ion credentials and stays keyless", async () => {
     const fakes = makeViewer();
     const cesium = makeCesium();
@@ -737,27 +934,6 @@ describe("CesiumEngine terrain", () => {
     engine.destroy();
   });
 
-  it("retries the Ion terrain asset after a failed load, like World Terrain", async () => {
-    const fakes = makeViewer();
-    const cesium = makeCesium();
-    let attempts = 0;
-    cesium.CesiumTerrainProvider = {
-      fromIonAssetId: async (assetId: number) => {
-        if (++attempts === 1) throw new Error("temporary network failure");
-        return { kind: "ion-terrain", assetId } as never;
-      },
-    } as never;
-    const engine = new CesiumEngine(cesium, fakes.viewer, { terrainIonAssetId: 42 });
-    await engine.enableWorldTerrain();
-    assert.equal(engine.isTerrainEnabled(), false);
-    assert.equal(engine.setTerrainEnabled(true), true);
-    await Promise.resolve();
-    assert.equal(attempts, 2);
-    assert.equal(engine.isTerrainEnabled(), true);
-    assert.deepEqual(fakes.viewer.terrainProvider, { kind: "ion-terrain", assetId: 42 });
-    engine.destroy();
-  });
-
   it("does not resurrect terrain the user turned off mid-load", async () => {
     const fakes = makeViewer();
     const engine = new CesiumEngine(makeCesium(), fakes.viewer);
@@ -779,6 +955,181 @@ describe("CesiumEngine terrain", () => {
     engine.setTerrainExaggeration(2.5);
     assert.equal(engine.getTerrainExaggeration(), 2.5);
     assert.equal(fakes.viewer.scene.verticalExaggeration, 2.5);
+    engine.destroy();
+  });
+
+  it("loads Cesium Ion terrain asset when configured with token", async () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer, {
+      ionToken: "tok-123",
+      terrainIonAssetId: 2767062,
+    });
+    assert.equal(engine.getTerrainIonAssetId(), 2767062);
+    await engine.enableWorldTerrain();
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.deepEqual(fakes.viewer.terrainProvider, {
+      kind: "ion-terrain",
+      resource: { kind: "ion-resource", assetId: 2767062, token: "tok-123" },
+    });
+    engine.destroy();
+  });
+
+  it("swapping and clearing Ion terrain asset dynamically updates provider", async () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer, {
+      ionToken: "tok-123",
+      terrainIonAssetId: 2767062,
+    });
+    await engine.enableWorldTerrain();
+    assert.equal(await engine.setTerrainIonAssetId(39401), true);
+    assert.equal(engine.getTerrainIonAssetId(), 39401);
+    assert.deepEqual(fakes.viewer.terrainProvider, {
+      kind: "ion-terrain",
+      resource: { kind: "ion-resource", assetId: 39401, token: "tok-123" },
+    });
+
+    // Clearing restores World Terrain
+    assert.equal(await engine.setTerrainIonAssetId(null), true);
+    assert.equal(engine.getTerrainIonAssetId(), null);
+    assert.deepEqual(fakes.viewer.terrainProvider, { kind: "world-terrain" });
+    engine.destroy();
+  });
+
+  it("rejects invalid Ion terrain asset id or missing token", async () => {
+    const fakes = makeViewer();
+    const engineWithoutToken = new CesiumEngine(makeCesium(), fakes.viewer);
+    assert.equal(await engineWithoutToken.setTerrainIonAssetId(2767062), false);
+
+    const engineWithToken = new CesiumEngine(makeCesium(), fakes.viewer, {
+      ionToken: "tok-123",
+    });
+    assert.equal(await engineWithToken.setTerrainIonAssetId(0), false);
+    assert.equal(await engineWithToken.setTerrainIonAssetId(-5), false);
+    assert.equal(await engineWithToken.setTerrainIonAssetId(1.5), false);
+    assert.equal(await engineWithToken.setTerrainIonAssetId(NaN), false);
+    engineWithoutToken.destroy();
+    engineWithToken.destroy();
+  });
+
+  it("restores previous terrain when Ion terrain asset fails to load asynchronously", async () => {
+    const fakes = makeViewer();
+    const Cesium = makeCesium();
+    Cesium.IonResource.fromAssetId = ((assetId: number, options?: { accessToken?: string }) => {
+      if (assetId === 999999) return Promise.reject(new Error("Asset not found or inaccessible"));
+      return Promise.resolve({ kind: "ion-resource", assetId, token: options?.accessToken });
+    }) as never;
+    const engine = new CesiumEngine(Cesium, fakes.viewer, {
+      ionToken: "tok-123",
+      terrainIonAssetId: 2767062,
+    });
+    await engine.enableWorldTerrain();
+    assert.equal(engine.getTerrainIonAssetId(), 2767062);
+    assert.equal(engine.isTerrainEnabled(), true);
+
+    // Attempt to set a failing asset
+    const success = await engine.setTerrainIonAssetId(999999);
+    assert.equal(success, false);
+    // Previous asset id is restored
+    assert.equal(engine.getTerrainIonAssetId(), 2767062);
+    // Terrain remains enabled with restored provider
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.deepEqual(fakes.viewer.terrainProvider, {
+      kind: "ion-terrain",
+      resource: { kind: "ion-resource", assetId: 2767062, token: "tok-123" },
+    });
+    engine.destroy();
+  });
+
+  it("falls back to World Terrain when a saved Ion asset fails to load", async () => {
+    const fakes = makeViewer();
+    const Cesium = makeCesium();
+    Cesium.IonResource.fromAssetId = (() => Promise.reject(new Error("revoked"))) as never;
+    const engine = new CesiumEngine(Cesium, fakes.viewer, {
+      ionToken: "tok-123",
+      terrainIonAssetId: 2767062,
+    });
+    assert.equal(await engine.enableWorldTerrain(), true);
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.deepEqual(fakes.viewer.terrainProvider, { kind: "world-terrain" });
+    engine.destroy();
+  });
+
+  it("does not roll back an Ion terrain request a newer one superseded", async () => {
+    const fakes = makeViewer();
+    const Cesium = makeCesium();
+    let rejectSlow: (error: Error) => void = () => {};
+    Cesium.IonResource.fromAssetId = ((assetId: number, options?: { accessToken?: string }) =>
+      assetId === 111
+        ? new Promise((_, reject) => (rejectSlow = reject))
+        : Promise.resolve({ kind: "ion-resource", assetId, token: options?.accessToken })) as never;
+    const engine = new CesiumEngine(Cesium, fakes.viewer, {
+      ionToken: "tok-123",
+      terrainIonAssetId: 2767062,
+    });
+    await engine.enableWorldTerrain();
+
+    const slow = engine.setTerrainIonAssetId(111);
+    assert.equal(await engine.setTerrainIonAssetId(222), true);
+    rejectSlow(new Error("gone"));
+    assert.equal(await slow, false);
+    assert.equal(engine.getTerrainIonAssetId(), 222);
+    assert.deepEqual(fakes.viewer.terrainProvider, {
+      kind: "ion-terrain",
+      resource: { kind: "ion-resource", assetId: 222, token: "tok-123" },
+    });
+
+    // Turning terrain off while a load fails must not switch it back on.
+    const failing = engine.setTerrainIonAssetId(111);
+    engine.setTerrainEnabled(false);
+    rejectSlow(new Error("gone"));
+    assert.equal(await failing, false);
+    assert.equal(engine.isTerrainEnabled(), false);
+    engine.destroy();
+  });
+
+  it("keeps the COG terrain source when clearing it fails to load Ion terrain", async () => {
+    const fakes = makeViewer();
+    const Cesium = makeCesium();
+    Object.assign(Cesium, {
+      WebMercatorTilingScheme,
+      Event,
+      Credit,
+      TileAvailability,
+      TerrainProvider,
+    });
+    Cesium.IonResource.fromAssetId = () => Promise.reject(new Error("gone"));
+    const engine = new CesiumEngine(Cesium, fakes.viewer, {
+      ionToken: "tok-123",
+      terrainIonAssetId: 2767062,
+    });
+    let disposed = false;
+    const internals = engine as unknown as {
+      cogTerrain: unknown;
+      cogTerrainUrl: string | null;
+    };
+    internals.cogTerrain = { renderTile: () => null, dispose: () => (disposed = true) };
+    internals.cogTerrainUrl = "dem.tif";
+    await engine.enableWorldTerrain();
+    const cogProvider = fakes.viewer.terrainProvider;
+
+    assert.equal(await engine.setTerrainCogSource(null), false);
+    assert.equal(engine.hasCustomTerrainSource(), true);
+    assert.equal(engine.getTerrainCogSource(), "dem.tif");
+    assert.equal(engine.isTerrainEnabled(), true);
+    assert.equal(fakes.viewer.terrainProvider, cogProvider);
+    assert.equal(disposed, false);
+    engine.destroy();
+  });
+
+  it("configures Ion asset id without enabling terrain when terrain is disabled", async () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer, {
+      ionToken: "tok-123",
+    });
+    assert.equal(engine.isTerrainEnabled(), false);
+    assert.equal(await engine.setTerrainIonAssetId(2767062), true);
+    assert.equal(engine.getTerrainIonAssetId(), 2767062);
+    assert.equal(engine.isTerrainEnabled(), false);
     engine.destroy();
   });
 });
@@ -916,6 +1267,30 @@ describe("CesiumEngine framing", () => {
     engine.destroy();
   });
 
+  it("flies across the antimeridian for an unwrapped extent (#3469)", () => {
+    const fakes = makeViewer();
+    const engine = new CesiumEngine(makeCesium(), fakes.viewer);
+    // getLayerBounds reports an Aleutian-to-Maine extent with east past 180;
+    // Cesium's Rectangle takes it as west > east.
+    engine.fitBounds([172, 18, 293, 72]);
+    assert.deepEqual((fakes.flights[0] as { destination: unknown }).destination, {
+      w: 172,
+      s: 18,
+      e: -67,
+      n: 72,
+    });
+    engine.destroy();
+  });
+
+  it("wraps extent longitudes for Rectangle.fromDegrees", () => {
+    assert.deepEqual(cesiumLongitudes(-180, 180), [-180, 180]);
+    assert.deepEqual(cesiumLongitudes(-170, 190), [-180, 180]);
+    assert.deepEqual(cesiumLongitudes(172, 293), [172, -67]);
+    assert.deepEqual(cesiumLongitudes(-190, -170), [170, -170]);
+    assert.deepEqual(cesiumLongitudes(-10, 10), [-10, 10]);
+    assert.deepEqual(cesiumLongitudes(172, -67), [172, -67]);
+  });
+
   it("ignores a non-finite extent instead of flying to NaN", () => {
     const fakes = makeViewer();
     const engine = new CesiumEngine(makeCesium(), fakes.viewer);
@@ -1027,7 +1402,12 @@ describe("CesiumEngine framing", () => {
 
     // A plain min/max would hand Cesium a 358-degree box and frame the globe.
     // `west` greater than `east` is the repo's crossing-rectangle convention.
-    assert.deepEqual(fakes.flights[0].destination, { w: 179, s: 10, e: -179, n: 20 });
+    assert.deepEqual((fakes.flights[0] as { destination: unknown }).destination, {
+      w: 179,
+      s: 10,
+      e: -179,
+      n: 20,
+    });
     engine.destroy();
   });
 
@@ -1052,7 +1432,12 @@ describe("CesiumEngine framing", () => {
 
     engine.highlightFeature(layer, ["a", "b", "c"], { fit: true });
 
-    const box = fakes.flights[0].destination as { w: number; s: number; e: number; n: number };
+    const box = (fakes.flights[0] as { destination: unknown }).destination as {
+      w: number;
+      s: number;
+      e: number;
+      n: number;
+    };
     assert.equal(box.w, 0);
     assert.equal(box.e, -170);
     // The latitudes round-trip through radians in the fake.
@@ -1416,7 +1801,7 @@ describe("Cesium feature picking", () => {
       metadata: {},
       visible: true,
       opacity: 1,
-      style: {},
+      style: { ...DEFAULT_LAYER_STYLE },
       geojson: {
         type: "FeatureCollection",
         features: [

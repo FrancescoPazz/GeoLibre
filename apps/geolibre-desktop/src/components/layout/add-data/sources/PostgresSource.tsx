@@ -15,11 +15,17 @@ import {
   startMartinServer,
   stopMartinServer,
 } from "../../../../lib/martin";
-import { postgisFeatureKeys, registerPostgisConnection } from "../../../../lib/postgis-connections";
-import { postgisTableKey, postgisTableLabel } from "../../../../lib/postgis-table-selection";
+import { registerPostgisConnection } from "../../../../lib/postgis-connections";
+import {
+  databaseFeatureKeys,
+  databaseTableKey,
+  databaseTableLabel,
+  uniqueDatabaseTables,
+} from "../../../../lib/database-tables";
 import { IS_MAS_BUILD } from "../../../../lib/build-flags";
-import { startGeoLibreSidecar } from "../../../../lib/sidecar";
+import { ignoreSidecarStartError, startGeoLibreSidecar } from "../../../../lib/sidecar";
 import { isDesktopRuntime } from "../../../../lib/is-mobile";
+import { isTauri } from "../../../../lib/is-tauri";
 import {
   createBaseLayer,
   errorMessage,
@@ -30,6 +36,8 @@ import {
 import { AddDataSourceForm, useAddDataSource } from "../shared";
 import { martinSourceMatchesTable } from "../martin-source-match";
 import type { OpenAddDataPostgres } from "../open-add-data";
+import { PostgresConnectionFields } from "./PostgresConnectionFields";
+import { PostgresNativeSource } from "./PostgresNativeSource";
 
 type PostgresLoadMode = "tiles" | "editable";
 
@@ -38,7 +46,16 @@ interface PostgresSourceProps {
   initialPostgres?: OpenAddDataPostgres;
 }
 
-export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
+export function PostgresSource(props: PostgresSourceProps) {
+  // The mobile apps are Tauri but cannot spawn Martin or the sidecar; they
+  // render tiles in-process instead (GeoLibre#2091). The web build and the
+  // desktop shell keep the Martin/sidecar flow below. The user agent is stable
+  // for the session, so evaluate once.
+  const nativeTiles = useMemo(() => isTauri() && !isDesktopRuntime(), []);
+  return nativeTiles ? <PostgresNativeSource {...props} /> : <PostgresMartinSource {...props} />;
+}
+
+function PostgresMartinSource({ initialPostgres }: PostgresSourceProps) {
   const { t } = useTranslation();
   const source = useAddDataSource(t("addData.postgres.defaultName"));
   const { martin } = source.shell;
@@ -122,6 +139,27 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleConnectionChange = (value: string) => {
+    setPostgresConnectionString(value);
+    // The fetched table list belongs to the previous connection string;
+    // invalidate it (and any in-flight listing) so a stale selection cannot be
+    // submitted against a different database.
+    if (value.trim() !== postgisConnection) {
+      listRequestRef.current += 1;
+      setPostgisTables([]);
+      setSelectedTableKey("");
+      setPostgisConnection("");
+      setPostgisStatus(null);
+      // A different database also invalidates the tiles-mode Martin
+      // connection, so a layer from the old server can't be added.
+      clearMartinState();
+      // The Browser-panel table preselect belongs to the connection it was
+      // opened for; once the user switches connections it no longer applies
+      // and must not preselect a same-named table in a different database.
+      desiredTableRef.current = null;
+    }
+  };
+
   // List the database's spatial tables through the sidecar's /postgis
   // endpoints (psycopg) for the editable-layer mode. Martin is not involved:
   // the features are loaded as GeoJSON so edits can be written back.
@@ -150,13 +188,10 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
       }
       const connectionString = postgresConnectionString.trim();
       setPostgisStatus(t("addData.postgres.statusListingTables"));
-      try {
-        // Best-effort: the sidecar may already be running (or be started
-        // externally in dev); a failed start still lets the list call try.
-        await startGeoLibreSidecar();
-      } catch {
-        // Ignored: the status check below surfaces the real error.
-      }
+      // Best-effort: the sidecar may already be running (or be started
+      // externally in dev); the status check below surfaces a missing runtime.
+      // Only a stale sidecar from an earlier session is surfaced from here.
+      await startGeoLibreSidecar().catch(ignoreSidecarStartError);
       // Check the runtime first so a missing psycopg reads as "install the
       // postgis extra", not as a generic connection failure (mirrors how the
       // other optional engines gate their dialogs on a *Status call).
@@ -188,7 +223,7 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
           )
         : undefined;
       const defaultTable = desiredTable ?? tables.find((table) => table.primary_key);
-      setSelectedTableKey(defaultTable ? postgisTableKey(defaultTable) : "");
+      setSelectedTableKey(defaultTable ? databaseTableKey(defaultTable) : "");
       setSelectedGeometryColumn(defaultTable?.geometry_column ?? "");
       // Consumed once: a later reconnect on the same connection must not undo a
       // manual table pick by re-applying the originally-clicked table.
@@ -196,7 +231,7 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
       setPostgisStatus(
         tables.length > 0
           ? t("addData.postgres.statusTablesFound", {
-              count: new Set(tables.map(postgisTableKey)).size,
+              count: new Set(tables.map(databaseTableKey)).size,
             })
           : t("addData.postgres.statusNoTables"),
       );
@@ -359,7 +394,7 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
   const addEditableTable = async (tableKey: string) => {
     const table = postgisTables.find(
       (candidate) =>
-        postgisTableKey(candidate) === tableKey &&
+        databaseTableKey(candidate) === tableKey &&
         candidate.geometry_column === selectedGeometryColumn,
     );
     if (!table) {
@@ -397,7 +432,7 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
           postgisConnectionLabel: savedPostgresConnectionLabel(connectionString),
           // Persisted with the project so the deletion-scoping baseline
           // survives a reload (keys are not credentials).
-          postgisBaselineKeys: postgisFeatureKeys(result.geojson),
+          postgisBaselineKeys: databaseFeatureKeys(result.geojson),
         },
         { geojson: result.geojson },
       ),
@@ -427,17 +462,9 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
     await addMartinSource(martin.selectedSourceId);
   });
 
-  const uniquePostgisTables = (() => {
-    const seen = new Set<string>();
-    return postgisTables.filter((table) => {
-      const key = postgisTableKey(table);
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  })();
+  const uniquePostgisTables = uniqueDatabaseTables(postgisTables);
   const selectedTableGeometries = postgisTables.filter(
-    (table) => postgisTableKey(table) === selectedTableKey,
+    (table) => databaseTableKey(table) === selectedTableKey,
   );
 
   return (
@@ -456,7 +483,7 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
       <div className="space-y-3">
         {!desktopRuntime ? (
           <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-            {t("addData.postgres.desktopOnlyNotice")}
+            {t("addData.postgres.webUnavailableNotice")}
           </p>
         ) : null}
         <div className="space-y-1.5">
@@ -473,73 +500,11 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
             <p className="text-xs text-muted-foreground">{t("addData.postgres.editableNotice")}</p>
           ) : null}
         </div>
-        {savedPostgresConnections.length > 0 ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="postgres-saved-connection">
-              {t("addData.postgres.savedConnection")}
-            </Label>
-            <Select
-              id="postgres-saved-connection"
-              value={
-                savedPostgresConnections.includes(postgresConnectionString)
-                  ? postgresConnectionString
-                  : ""
-              }
-              onChange={(event) => {
-                setPostgresConnectionString(event.target.value);
-                if (event.target.value.trim() !== postgisConnection) {
-                  listRequestRef.current += 1;
-                  setPostgisTables([]);
-                  setSelectedTableKey("");
-                  setPostgisConnection("");
-                  setPostgisStatus(null);
-                  // A different database also invalidates the tiles-mode Martin
-                  // connection, so a layer from the old server can't be added.
-                  clearMartinState();
-                  // The Browser-panel table preselect belongs to the connection
-                  // it was opened for; once the user switches connections it no
-                  // longer applies and must not preselect a same-named table in
-                  // a different database.
-                  desiredTableRef.current = null;
-                }
-              }}
-            >
-              <option value="">{t("addData.postgres.selectSavedConnection")}</option>
-              {savedPostgresConnections.map((connection) => (
-                <option key={connection} value={connection}>
-                  {savedPostgresConnectionLabel(connection)}
-                </option>
-              ))}
-            </Select>
-          </div>
-        ) : null}
-        <div className="space-y-1.5">
-          <Label htmlFor="postgres-connection">{t("addData.postgres.connectionString")}</Label>
-          <Input
-            id="postgres-connection"
-            type="password"
-            autoComplete="off"
-            placeholder={t("addData.postgres.connectionStringPlaceholder")}
-            value={postgresConnectionString}
-            onChange={(event) => {
-              setPostgresConnectionString(event.target.value);
-              // The fetched table list belongs to the previous connection
-              // string; invalidate it (and any in-flight listing) so a stale
-              // selection cannot be submitted against a different database.
-              if (event.target.value.trim() !== postgisConnection) {
-                listRequestRef.current += 1;
-                setPostgisTables([]);
-                setSelectedTableKey("");
-                setPostgisConnection("");
-                setPostgisStatus(null);
-                // See the saved-connection handler: a connection change voids
-                // the tiles-mode Martin connection and the table preselect.
-                clearMartinState();
-                desiredTableRef.current = null;
-              }
-            }}
-          />
-        </div>
+        <PostgresConnectionFields
+          savedConnections={savedPostgresConnections}
+          connectionString={postgresConnectionString}
+          onConnectionChange={handleConnectionChange}
+        />
         <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
           <div className="space-y-1.5">
             {loadMode === "tiles" ? (
@@ -594,14 +559,14 @@ export function PostgresSource({ initialPostgres }: PostgresSourceProps) {
                 const tableKey = event.target.value;
                 setSelectedTableKey(tableKey);
                 setSelectedGeometryColumn(
-                  postgisTables.find((table) => postgisTableKey(table) === tableKey)
+                  postgisTables.find((table) => databaseTableKey(table) === tableKey)
                     ?.geometry_column ?? "",
                 );
               }}
             >
               {uniquePostgisTables.map((table) => {
-                const key = postgisTableKey(table);
-                const label = postgisTableLabel(table);
+                const key = databaseTableKey(table);
+                const label = databaseTableLabel(table);
                 // Tables without a usable key stay visible (so the user sees
                 // why they are missing) but cannot be picked: this mode exists
                 // to save edits back, which needs a primary key.

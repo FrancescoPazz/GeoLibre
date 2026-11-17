@@ -61,6 +61,7 @@ jobs:
   build:
     name: Build Android APK (release)
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     # Elevated here (not workflow-level) so only this job can write release
     # assets; workflow_dispatch runs never attach but the grant is harmless.
     permissions:
@@ -110,7 +111,7 @@ jobs:
             x86_64-linux-android
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: apps/geolibre-desktop/src-tauri -> target
 
@@ -154,6 +155,18 @@ jobs:
         # mipmaps with the GeoLibre launcher icons checked in under src-tauri/icons.
         working-directory: apps/geolibre-desktop
         run: cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
+
+      - name: Apply GeoLibre MainActivity
+        # The generated MainActivity draws edge-to-edge without insetting the
+        # content, so the toolbar sits under the status bar on WebViews that
+        # report env(safe-area-inset-*) as 0 (GeoLibre#3044). Fail if the
+        # template moved the file rather than silently shipping the default.
+        working-directory: apps/geolibre-desktop
+        run: |
+          set -euo pipefail
+          target=src-tauri/gen/android/app/src/main/java/org/geolibre/app/MainActivity.kt
+          test -f "$target" || { echo "::error::$target not generated"; exit 1; }
+          cp src-tauri/android/MainActivity.kt "$target"
 
       - name: Build release APKs (per ABI)
         # Release (not --debug): the size-optimized + stripped Cargo profile keeps

@@ -24,7 +24,7 @@ import { useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { AddDataKind } from "../layout/AddDataDialog";
 import { isFavoritableKind } from "../../lib/browser-favorites";
-import type { BrowserNode } from "../../lib/browser-tree";
+import { type BrowserNode, isRepeatClick } from "../../lib/browser-tree";
 
 interface BrowserTreeNodeProps {
   node: BrowserNode;
@@ -62,6 +62,10 @@ interface BrowserTreeNodeProps {
   onCancelRename: (id: string) => void;
   /** Delete a saved Layer Library entry (its trash icon). */
   onDeleteLibraryLayer: (node: BrowserNode) => void;
+  /** Forget a saved SQL Server connection (its trash icon). */
+  onForgetMssqlConnection: (node: BrowserNode) => void;
+  /** Forget a saved PostgreSQL connection (its trash icon). */
+  onForgetPostgresConnection: (node: BrowserNode) => void;
   /** Import a Layer Library JSON bundle (the My Data section's ⬆). */
   onImportLibrary: () => void;
   /** Export the Layer Library as a JSON bundle (the My Data section's ⬇). */
@@ -83,6 +87,9 @@ function nodeIcon(node: BrowserNode, isExpanded: boolean): LucideIcon {
       return File;
     case "library-layer":
       return Layers;
+    case "arcgis-sublayer":
+      // A MapServer group layer expands like a folder; a leaf is a layer.
+      return node.children ? (isExpanded ? FolderOpen : Folder) : Layers;
     default:
       return isExpanded ? FolderOpen : Folder;
   }
@@ -171,10 +178,15 @@ export function BrowserTreeNode({
   onCommitRename,
   onCancelRename,
   onDeleteLibraryLayer,
+  onForgetMssqlConnection,
+  onForgetPostgresConnection,
   onImportLibrary,
   onExportLibrary,
 }: BrowserTreeNodeProps) {
   const { t } = useTranslation();
+  // When this row was last activated by a click, so only the repeat clicks of
+  // a double-click on this same row are ignored.
+  const lastActivatedAtRef = useRef(Number.NEGATIVE_INFINITY);
   // A status row (loading / error) is non-interactive text, not a tree control.
   if (node.kind === "info") {
     return (
@@ -207,15 +219,9 @@ export function BrowserTreeNode({
   // so its non-undefined narrowing survives into the onClick closure — a
   // property access (node.newConnectionKind) would not, forcing a cast.
   const newConnectionKind = node.newConnectionKind;
-  // The Databases section's ＋ (which opens the "postgres" source) reads "New
-  // database connection"; a service-kind group's reads e.g. "New WMS
-  // connection" (distinguishable per group for screen-reader users). Keyed off
-  // the source it opens rather than node.kind, so a future section with a
-  // different ＋ source gets the right label.
-  const newConnectionLabel =
-    newConnectionKind === "postgres"
-      ? t("browser.newDatabaseConnection")
-      : t("browser.newConnection", { kind: node.label });
+  // Each service or database engine group names its ＋ after the displayed
+  // source, keeping the action specific for sighted and screen-reader users.
+  const newConnectionLabel = t("browser.newConnection", { kind: node.label });
   // The trailing ＋ affordance: a service/database group opens Add Data; the
   // Files section opens a folder picker. At most one applies per node.
   const plusAction = newConnectionKind
@@ -263,13 +269,19 @@ export function BrowserTreeNode({
             tabIndex={node.id === activeRowId ? 0 : -1}
             data-browser-row={node.id}
             onFocus={() => onRowFocus(node.id)}
-            onClick={() => {
+            onClick={(event) => {
               // Also sync from onClick: some browsers (WebKit) don't focus a
               // button on mouse click, so onFocus alone would leave the roving
               // active row stale after a click.
               onRowFocus(node.id);
               if (isGroup) onToggle(node.id);
-              else onActivate(node);
+              // A double-click delivers two clicks. The busy guard only covers
+              // an add still in flight, and a quick one (a My Data layer) is
+              // done before the second click lands, so it added the layer twice.
+              else if (!isRepeatClick(event.detail, event.timeStamp - lastActivatedAtRef.current)) {
+                lastActivatedAtRef.current = event.timeStamp;
+                onActivate(node);
+              }
             }}
           >
             {isGroup ? (
@@ -324,6 +336,30 @@ export function BrowserTreeNode({
             aria-label={t("browser.deleteLibraryLayer", { name: node.label })}
             tabIndex={node.id === activeRowId ? 0 : -1}
             onClick={() => onDeleteLibraryLayer(node)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+        {node.kind === "connection" && node.mssqlConnectionId ? (
+          <button
+            type="button"
+            className="me-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-accent-foreground focus:opacity-100 group-hover:opacity-100"
+            title={t("browser.forgetMssqlConnection", { name: node.label })}
+            aria-label={t("browser.forgetMssqlConnection", { name: node.label })}
+            tabIndex={node.id === activeRowId ? 0 : -1}
+            onClick={() => onForgetMssqlConnection(node)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
+        {node.kind === "connection" && node.connectionString && !node.mssqlConnectionId ? (
+          <button
+            type="button"
+            className="me-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:bg-accent hover:text-accent-foreground focus:opacity-100 group-hover:opacity-100"
+            title={t("browser.forgetPostgresConnection", { name: node.label })}
+            aria-label={t("browser.forgetPostgresConnection", { name: node.label })}
+            tabIndex={node.id === activeRowId ? 0 : -1}
+            onClick={() => onForgetPostgresConnection(node)}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
@@ -431,6 +467,8 @@ export function BrowserTreeNode({
                 onCommitRename={onCommitRename}
                 onCancelRename={onCancelRename}
                 onDeleteLibraryLayer={onDeleteLibraryLayer}
+                onForgetMssqlConnection={onForgetMssqlConnection}
+                onForgetPostgresConnection={onForgetPostgresConnection}
                 onImportLibrary={onImportLibrary}
                 onExportLibrary={onExportLibrary}
               />

@@ -18,7 +18,8 @@ import {
   redactUrlCredentials,
   styleValue,
 } from "@geolibre/core";
-import { circlePaint, fillPaint, linePaint, rasterPaint } from "./style-mapper";
+import { circlePaint, fillPaint, linePaint, rasterPaint, withPaintResets } from "./style-mapper";
+import { OwnedPaintResets } from "./owned-paint-resets";
 import {
   DEFAULT_BUILT_IN_CONTROL_POSITIONS,
   DEFAULT_BUILT_IN_CONTROL_VISIBILITY,
@@ -36,11 +37,13 @@ import {
 } from "./map-engine";
 import {
   compileMapboxLayer,
-  isInternalMapboxLayer,
-  isMapboxPluginLayer,
   DEFAULT_MAPBOX_TEXT_FONT,
   type MapboxLayerPlan,
-  mapboxPaint,
+} from "./gl-style-compiler";
+import {
+  isInternalMapboxLayer,
+  isMapboxPluginLayer,
+  MAPBOX_SUPPORTED_LAYER_KINDS,
 } from "./mapbox-layers";
 import {
   BASEMAP_LABEL_KEY,
@@ -50,9 +53,11 @@ import {
 } from "./layer-labels";
 import { mapboxSourceId } from "./style-layer-ids";
 import { ensureGeneratedImageHandler } from "./generated-images";
+import { installSelectionDragGuard } from "./selection-drag-guard";
 import { hasZoomDependentClusterFilter } from "./cluster-input";
 import { resolveTextFontFromStyleLayers } from "./text-font";
 import { getLayerBounds } from "./geojson-loader";
+import { loadedVectorTileFeatureBounds } from "./loaded-feature-bounds";
 import { captureEngineImage } from "./map-capture";
 import { drawExtentOnCanvas } from "./extent-drawing";
 import { globeSafeMaxZoom } from "./globe-fit-bounds";
@@ -62,7 +67,7 @@ import {
   STANDARD_OPACITY,
   STANDARD_BLANK_COLOR,
 } from "./mapbox-standard-style";
-import { arcgisOpacity } from "./arcgis-vector-style";
+import { arcgisOpacity } from "./vector-style";
 import { LayerControlHost, normalizeLayerBounds } from "./layer-control-host";
 import { ResetBearingControl } from "./reset-bearing-control";
 import { MapboxGlobeControl } from "./mapbox-globe-control";
@@ -84,6 +89,14 @@ export const MAPBOX_CAPABILITIES: MapEngineCapabilities = Object.freeze({
   // mapbox-gl has no `raster-dem` source a COG can back, so the terrain
   // source controls stay hidden here (#2475).
   terrainSource: false,
+  ionTerrain: false,
+  nativeZarr: false,
+  nativeDataSources: false,
+  // The engine is published after the initial style loads.
+  deferredEngineReady: true,
+  measureTool: true,
+  controlLayerPanels: true,
+  supportedLayerKinds: MAPBOX_SUPPORTED_LAYER_KINDS,
 });
 
 const BLANK_BACKGROUND_LAYER_ID = "geolibre-blank-background";
@@ -153,6 +166,25 @@ function diagnosticResourceKey(url: string | undefined, message: string): string
 }
 
 /** Mapbox owns its own native objects; getMap deliberately remains MapLibre-only. */
+
+/**
+ * Camera options for a story chapter location, leaving out an absent pitch or
+ * bearing. mapbox-gl tests `"bearing" in options`, so an own `undefined` key
+ * would be read as a target (NaN) instead of "keep the current value".
+ *
+ * @param location The chapter's camera target.
+ * @returns Options for `flyTo`/`easeTo`/`jumpTo`.
+ */
+function storyCameraOptions(location: StoryChapterLocation): mapboxgl.CameraOptions {
+  const { center, zoom, pitch, bearing } = location;
+  return {
+    center,
+    zoom,
+    ...(pitch === undefined ? {} : { pitch }),
+    ...(bearing === undefined ? {} : { bearing }),
+  };
+}
+
 export class MapboxEngine implements MapEngine {
   readonly kind = "mapbox" as const;
   readonly capabilities = MAPBOX_CAPABILITIES;
@@ -164,6 +196,8 @@ export class MapboxEngine implements MapEngine {
   private plans = new Map<string, MapboxLayerPlan>();
   private previous = new Map<string, GeoLibreLayer>();
   private errors = new Map<string, string>();
+  /** The nullable paint GeoLibre wrote on plugin native layers (see OwnedPaintResets). */
+  private readonly ownedPaintResets = new OwnedPaintResets();
   private basemap: mapboxgl.LayerSpecification[] = [];
   // Label font borrowed from the basemap: a style only serves its own glyphs.
   private textFont: string[] = DEFAULT_MAPBOX_TEXT_FONT;
@@ -202,10 +236,7 @@ export class MapboxEngine implements MapEngine {
     removeControl: (control) => this.removeControl(control),
     getLayers: () => this.layers,
     getNativeLayerIds: (layer) => this.nativeLayerIds(layer),
-    getSourceIds: (layer) => {
-      const plan = this.plans.get(layer.id);
-      return plan ? [plan.sourceId, ...Object.keys(plan.additionalSources ?? {})] : [];
-    },
+    getSourceIds: (layer) => this.getLayerSourceIds(layer),
     excludedLayerIds: [BLANK_BACKGROUND_LAYER_ID, ...HIGHLIGHT_LAYER_IDS],
     // Never hand the control a URL: `mapbox://` styles are not fetchable, and
     // the engine already holds the loaded style's own layers (see styleLoaded),
@@ -298,6 +329,9 @@ export class MapboxEngine implements MapEngine {
     // Marker icons, fill patterns and line decorations are generated sprites
     // the map asks for through `styleimagemissing`, as on MapLibre.
     ensureGeneratedImageHandler(map as unknown as maplibregl.Map);
+    // Same guard as the MapLibre controller: keep a leftover text selection
+    // from turning a pan into a native drag. Removed with the other disposers.
+    this.disposers.add(installSelectionDragGuard(map.getCanvasContainer()));
     map.on("style.load", this.styleLoaded);
     map.on("error", this.onError);
     map.on("sourcedata", this.onSourceData);
@@ -531,22 +565,29 @@ export class MapboxEngine implements MapEngine {
       map.off("moveend", this.pendingStoryRotate);
       this.pendingStoryRotate = null;
     }
-    map.flyTo(location, { storyCameraToken: token });
+    map.flyTo(storyCameraOptions(location), { storyCameraToken: token });
   }
   applyStoryChapterCamera(
     location: StoryChapterLocation,
     animation: StoryChapterAnimation = "flyTo",
     rotate = false,
+    onArrive?: () => void,
   ): void {
     const map = this.map;
-    if (!map) return;
+    if (!map) {
+      onArrive?.();
+      return;
+    }
     const token = ++this.storyCameraToken;
     if (this.pendingStoryRotate) {
       map.off("moveend", this.pendingStoryRotate);
       this.pendingStoryRotate = null;
     }
-    if (!rotate) {
-      map[animation]({ ...location, duration: 800 }, { storyCameraToken: token });
+    if (!rotate && !onArrive) {
+      map[animation](
+        { ...storyCameraOptions(location), duration: 800 },
+        { storyCameraToken: token },
+      );
       return;
     }
     const onMoveEnd = (event: mapboxgl.MapEventOf<"moveend"> & { storyCameraToken?: number }) => {
@@ -554,15 +595,18 @@ export class MapboxEngine implements MapEngine {
       map.off("moveend", onMoveEnd);
       if (this.pendingStoryRotate === onMoveEnd) this.pendingStoryRotate = null;
       if (this.storyCameraToken !== token || !this.map) return;
-      this.map.rotateTo(this.map.getBearing() + 180, {
-        duration: 30000,
-        easing: (time) => time,
-      });
+      onArrive?.();
+      if (rotate && this.storyCameraToken === token && this.map) {
+        this.map.rotateTo(this.map.getBearing() + 180, {
+          duration: 30000,
+          easing: (time) => time,
+        });
+      }
     };
     // Listen before moving: jumpTo fires its moveend synchronously.
     this.pendingStoryRotate = onMoveEnd;
     map.on("moveend", onMoveEnd);
-    map[animation]({ ...location, duration: 800 }, { storyCameraToken: token });
+    map[animation]({ ...storyCameraOptions(location), duration: 800 }, { storyCameraToken: token });
   }
   zoomIn(): void {
     this.map?.zoomIn();
@@ -606,18 +650,22 @@ export class MapboxEngine implements MapEngine {
       { padding: FIT_BOUNDS_PADDING, duration: 800, ...(maxZoom === null ? {} : { maxZoom }) },
     );
   }
-  fitLayer(layer: GeoLibreLayer): void {
+  fitLayer(layer: GeoLibreLayer): boolean {
     // getLayerBounds already falls through to layer.source.bounds →
     // layer.metadata.bounds with the same finite-number check, so the only
-    // addition for Mapbox is the source *plan* bounds (the id of the compiled
-    // native source), which getLayerBounds cannot reach.
-    const bounds = getLayerBounds(layer) ?? this.getLayerSourceBounds(layer);
+    // additions for Mapbox are the source *plan* bounds (the id of the compiled
+    // native source), which getLayerBounds cannot reach, and, for a bare
+    // vector-tile template with no bounds at all, its loaded features' extent.
+    const map = this.map;
+    const bounds =
+      getLayerBounds(layer) ??
+      this.getLayerSourceBounds(layer) ??
+      loadedVectorTileFeatureBounds(map, layer, this.getLayerSourceIds(layer));
     if (bounds) {
       this.fitBounds(bounds);
-      return;
+      return true;
     }
-    const map = this.map;
-    if (!map) return;
+    if (!map) return false;
     const center = layer.metadata.center;
     if (
       Array.isArray(center) &&
@@ -630,7 +678,9 @@ export class MapboxEngine implements MapEngine {
         // Match MapController.fitLayer: a tileset is looked at in perspective.
         ...(layer.type === "3d-tiles" ? { pitch: Math.max(map.getPitch(), 60) } : {}),
       });
+      return true;
     }
+    return false;
   }
   /** The map viewport in CSS pixels, or null when the canvas has not been
    * laid out yet — a zero size would make any derived ceiling nonsense. */
@@ -640,12 +690,15 @@ export class MapboxEngine implements MapEngine {
     const height = canvas?.clientHeight ?? 0;
     return width > 0 && height > 0 ? { width, height } : null;
   }
+  /** The native source ids a layer's compiled plan draws from. */
+  private getLayerSourceIds(layer: GeoLibreLayer): string[] {
+    const plan = this.plans.get(layer.id);
+    return plan ? [plan.sourceId, ...Object.keys(plan.additionalSources ?? {})] : [];
+  }
   /** Bounds a layer advertises about itself from its source, if any. */
   private getLayerSourceBounds(layer: GeoLibreLayer): [number, number, number, number] | null {
     const map = this.map;
-    const plan = this.plans.get(layer.id);
-    const ids = plan ? [plan.sourceId, ...Object.keys(plan.additionalSources ?? {})] : [];
-    for (const id of ids) {
+    for (const id of this.getLayerSourceIds(layer)) {
       const source = map?.getSource(id) as
         | { bounds?: [number, number, number, number] }
         | undefined;
@@ -940,12 +993,28 @@ export class MapboxEngine implements MapEngine {
                 ? circlePaint(style, layer.opacity)
                 : null;
       if (!paint) continue;
-      for (const [property, value] of Object.entries(mapboxPaint(paint))) {
-        if (value === undefined || value === null) continue;
+      // Mapbox's map.getLayer serializes a fresh copy on every call, so the
+      // style's own layer object stands in for the layer's identity. Without
+      // it nothing is owned and nothing is reset (see OwnedPaintResets).
+      const lookup = (layerId: string): object | undefined =>
+        (
+          map as unknown as { style?: { getOwnLayer?: (id: string) => object | undefined } }
+        ).style?.getOwnLayer?.(layerId) ?? undefined;
+      // A `null` from withPaintResets is the reset of a property the style no
+      // longer sets (a dash cleared back to solid); setPaintProperty takes it.
+      for (const [property, value] of Object.entries(withPaintResets(native.type, paint))) {
+        if (value === undefined || property.endsWith("-layer-opacity")) continue;
+        // As on MapLibre (`setExternalNativeLayerPaint`): a reset only clears a
+        // value GeoLibre wrote, never the plugin's own (its dashes).
+        if (value === null && !this.ownedPaintResets.mayReset(lookup, id, property)) continue;
         const key = property as keyof mapboxgl.AnyPaint;
         try {
-          if (JSON.stringify(map.getPaintProperty(id, key)) !== JSON.stringify(value))
+          // An unset property reads back as undefined; compare it as null so a
+          // reset that already happened is not repeated on every sync.
+          if (JSON.stringify(map.getPaintProperty(id, key) ?? null) !== JSON.stringify(value)) {
             map.setPaintProperty(id, key, value as mapboxgl.AnyPaint[keyof mapboxgl.AnyPaint]);
+            if (value !== null) this.ownedPaintResets.recordWrite(lookup, id, property);
+          }
         } catch {
           // A control's native layers can be heterogeneous; skip a paint
           // property that does not apply to this one.
@@ -1379,12 +1448,7 @@ export class MapboxEngine implements MapEngine {
     }
   }
   restoreLayerStyles(): void {
-    this.storyCameraToken++;
-    if (this.pendingStoryRotate) {
-      this.map?.off("moveend", this.pendingStoryRotate);
-      this.pendingStoryRotate = null;
-    }
-    this.map?.stop();
+    this.stopStoryCamera();
     // Clear the fade transitions first, otherwise the restored opacities
     // animate back in over the last chapter's duration (MapLibre's
     // `restoreLayerStyles` does the same).
@@ -1678,6 +1742,9 @@ export class MapboxEngine implements MapEngine {
     };
   }
   stopCamera(): void {
+    this.stopStoryCamera();
+  }
+  stopStoryCamera(): void {
     this.storyCameraToken++;
     if (this.pendingStoryRotate) {
       this.map?.off("moveend", this.pendingStoryRotate);

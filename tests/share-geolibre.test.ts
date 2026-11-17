@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createEmptyProject, serializeProject } from "@geolibre/core";
+import { createEmptyProject, serializeProject, type LayerStyle } from "@geolibre/core";
 import {
   DEFAULT_PROJECT_TITLE,
   DEFAULT_SHARE_BASE_URL,
   fetchProjectShares,
+  ShareLinksUnsupportedError,
   fetchSharedProjectVersions,
   isShareableTitle,
   MAX_PROJECT_TITLE_LENGTH,
@@ -230,7 +231,7 @@ describe("uploadProjectToShare", () => {
       },
       visible: true,
       opacity: 1,
-      style: {},
+      style: {} as LayerStyle,
       metadata: {},
     });
 
@@ -250,6 +251,33 @@ describe("uploadProjectToShare", () => {
 
   it("rejects when no token is provided", async () => {
     await assert.rejects(() => uploadProjectToShare({ ...baseArgs, token: "  " }), /token/i);
+  });
+
+  it("reports a body past the string cap as too large, not as a network failure", async () => {
+    // The request body escapes the project text into a JSON string, so it is
+    // the longest string an upload builds. Cap strings just above the project
+    // text so only the body trips it, the way a large embedded layer does
+    // against V8's real limit (GeoLibre#3025).
+    const content = serializeProject(createEmptyProject("Big map"));
+    const { fn, calls } = fakeFetch(201, { project: PROJECT_DTO });
+    const original = JSON.stringify;
+    JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
+      const text = original(...args);
+      if (typeof text === "string" && text.length > content.length + 16) {
+        throw new RangeError("Invalid string length");
+      }
+      return text;
+    }) as typeof JSON.stringify;
+    try {
+      await assert.rejects(
+        () => uploadProjectToShare({ ...baseArgs, content, fetchImpl: fn }),
+        (error: unknown) =>
+          error instanceof RangeError && /invalid string length/i.test(error.message),
+      );
+    } finally {
+      JSON.stringify = original;
+    }
+    assert.equal(calls.length, 0);
   });
 
   it("POSTs the project with a bearer token and returns the URLs", async () => {
@@ -273,6 +301,25 @@ describe("uploadProjectToShare", () => {
     assert.equal(result.projectUrl, PROJECT_DTO.projectUrl);
     assert.equal(result.viewerUrl, PROJECT_DTO.viewerUrl);
     assert.equal(result.rawJsonUrl, PROJECT_DTO.rawJsonUrl);
+    assert.equal(result.versionCount, 1);
+  });
+
+  it("returns versionCount from the server if an integer >= 1, else 1", async () => {
+    const { fn: fn1 } = fakeFetch(201, { project: { ...PROJECT_DTO, versionCount: 5 } });
+    const res1 = await uploadProjectToShare({ ...baseArgs, fetchImpl: fn1 });
+    assert.equal(res1.versionCount, 5);
+
+    const { fn: fn2 } = fakeFetch(201, { project: { ...PROJECT_DTO, versionCount: 0 } });
+    const res2 = await uploadProjectToShare({ ...baseArgs, fetchImpl: fn2 });
+    assert.equal(res2.versionCount, 1);
+
+    const { fn: fn3 } = fakeFetch(201, { project: { ...PROJECT_DTO, versionCount: 2.5 } });
+    const res3 = await uploadProjectToShare({ ...baseArgs, fetchImpl: fn3 });
+    assert.equal(res3.versionCount, 1);
+
+    const { fn: fn4 } = fakeFetch(201, { project: { ...PROJECT_DTO, versionCount: "3" } });
+    const res4 = await uploadProjectToShare({ ...baseArgs, fetchImpl: fn4 });
+    assert.equal(res4.versionCount, 1);
   });
 
   it("sends organization ownership and additive group shares", async () => {
@@ -488,6 +535,37 @@ describe("fetchProjectShares", () => {
 
   it("rejects when no token is provided", async () => {
     await assert.rejects(() => fetchProjectShares({ token: "   " }), /token/i);
+  });
+
+  it("reports a server without the share-link API as unsupported, not failed", async () => {
+    // share.geolibre.app publishes projects but has no GET /api/shares.
+    const { fn } = fakeFetch(404, { error: "Not Found" });
+
+    await assert.rejects(
+      () =>
+        fetchProjectShares({
+          token: "glb_secrettoken",
+          baseUrl: "https://share.geolibre.app",
+          fetchImpl: fn,
+        }),
+      (err: unknown) =>
+        err instanceof ShareLinksUnsupportedError && err.host === "share.geolibre.app",
+    );
+  });
+
+  it("still reports other server failures as errors", async () => {
+    const { fn } = fakeFetch(500, { error: "boom" });
+
+    await assert.rejects(
+      () =>
+        fetchProjectShares({
+          token: "glb_secrettoken",
+          baseUrl: "https://share.geolibre.app",
+          fetchImpl: fn,
+        }),
+      (err: unknown) =>
+        !(err instanceof ShareLinksUnsupportedError) && /HTTP 500/.test(String(err)),
+    );
   });
 
   it("fails closed to the view role when the server sends an unknown one", async () => {

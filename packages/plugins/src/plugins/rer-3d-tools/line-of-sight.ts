@@ -1,4 +1,5 @@
-import type { Cartesian2, Cartesian3, Entity, ScreenSpaceEventHandler } from "@cesium/engine";
+import type { Cartesian2, Cartesian3 } from "@cesium/core";
+import type { Entity, ScreenSpaceEventHandler } from "@cesium/engine";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { GeoLibreAppAPI } from "../../types";
 import {

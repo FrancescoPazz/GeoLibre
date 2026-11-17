@@ -1,15 +1,16 @@
 // tiles.geolibre.app
 //
-// A CORS-adding, edge-caching tile service for GeoLibre's planetary basemaps.
-// It does two jobs, both keyed to a tight allowlist so it is never an open proxy:
+// A CORS-adding, edge-caching tile service for GeoLibre's planetary basemaps,
+// keyed to a tight allowlist so it is never an open proxy:
+// `/opm/<dataset>/<z>/<x>/<y>.png` is a plain reverse proxy for the
+// OpenPlanetaryMap raster mosaics (Mars, Moon).
 //
-//   1. `/opm/<dataset>/<z>/<x>/<y>.png` — a plain reverse proxy for the
-//      OpenPlanetaryMap raster mosaics (Mars, Moon).
-//   2. `/wms/<dataset>/<z>/<x>/<y>.png` — reprojects a USGS Astrogeology WMS
-//      layer (Mercury, Venus, the Galilean moons, Titan, Pluto, Charon) from
-//      equirectangular to Web Mercator on the fly (see reproject.ts).
+// The other planetary bodies (Mercury, Venus, ...) come from the USGS
+// Astrogeology WMS, reprojected in the browser by `@geolibre/map`'s
+// `usgs-wms://` protocol. A `/wms` route here used to do that, but USGS's
+// Cloudflare bot protection answers requests from Workers with a 403.
 //
-// Why (1) exists: MapLibre GL fetches raster tiles with `fetch()`, which
+// Why it exists: MapLibre GL fetches raster tiles with `fetch()`, which
 // enforces CORS. OpenPlanetaryMap's single-layer mosaics are served straight
 // from S3 buckets that send no `Access-Control-Allow-Origin` header, so the
 // browser blocks them and the map renders black. (The openplanetarymap.org site
@@ -18,13 +19,6 @@
 // (nginx), desktop build (Tauri) and Jupyter embed have no shared proxy — a
 // public Worker is the one URL that works uniformly across all of them.
 //
-// Why (2) exists: the USGS `planetarymaps.usgs.gov` WMS only offers EPSG:4326
-// (equirectangular) for these bodies — no EPSG:3857 — so MapLibre can't consume
-// it directly. The Worker requests one WMS window per tile, warps it to Web
-// Mercator, and re-emits it with CORS. This is CPU-bound (PNG decode + encode);
-// each tile is computed once and then served from the edge cache, so raise
-// `limits.cpu_ms` in wrangler.toml if cold tiles ever time out on your plan.
-//
 // The Worker fetches each tile server-side (no CORS applies server-to-server),
 // re-emits it with `Access-Control-Allow-Origin: *`, and caches it at the edge
 // so repeat requests are served from Cloudflare's PoP rather than round-tripping
@@ -32,9 +26,8 @@
 //
 // The OPM tiles are TMS (flipped Y); MapLibre applies the flip before the
 // request reaches the Worker, so the Worker treats <z>/<x>/<y> as opaque and
-// forwards them unchanged. The reprojected WMS tiles are standard XYZ.
+// forwards them unchanged.
 
-import * as UPNG from "upng-js";
 import {
   ADSB_LOL_MILITARY_UPSTREAM,
   ADSBDB_AIRCRAFT_UPSTREAM,
@@ -54,7 +47,13 @@ import {
   TRANSIT_UPSTREAMS,
   FIRMS_UPSTREAMS,
 } from "./allowlisted-fetch";
-import { remapRowsToMercator, tileGeoBounds, wmsBboxFor } from "./reproject";
+import {
+  EARTHDATA_CORS_HEADERS,
+  EARTHDATA_DOWNLOAD_PATH,
+  handleEarthdataDownload,
+} from "./earthdata";
+import { odpUpstream } from "./odp";
+import { isAllowedOverpassQuery } from "./overpass-query";
 
 /** Allowlisted OpenPlanetaryMap tile datasets → their upstream base URL. */
 const DATASETS: Record<string, string> = {
@@ -173,17 +172,6 @@ const NSW_CCTV_USER_AGENT =
 const OVERPASS_PATH = "/overpass";
 const OVERPASS_MAX_BODY_BYTES = 20_000;
 const OVERPASS_UPSTREAM_TIMEOUT_MS = 65_000;
-export const OVERPASS_MAX_ALL_QUERY_AREA_SQUARE_DEGREES = 0.25;
-export const OVERPASS_MAX_QUERY_AREA_SQUARE_DEGREES = 4;
-const OVERPASS_QUERY_PREFIX = "[out:json][timeout:60];";
-const OVERPASS_QUERY_SUFFIX = "out geom;";
-const OVERPASS_NUMBER = "-?(?:\\d+(?:\\.\\d+)?|\\.\\d+)";
-const OVERPASS_QUOTED = '"(?:\\\\.|[^"\\\\])*"';
-const OVERPASS_FILTER = `(?:\\[~"\\."~"\\."\\]|\\[${OVERPASS_QUOTED}(?:=${OVERPASS_QUOTED})?\\])`;
-const OVERPASS_SELECTOR = new RegExp(
-  `nwr(${OVERPASS_FILTER})\\((${OVERPASS_NUMBER}),(${OVERPASS_NUMBER}),(${OVERPASS_NUMBER}),(${OVERPASS_NUMBER})\\);`,
-  "g",
-);
 
 // Source Cooperative metadata proxy. `source.coop/api/v1` sends no CORS headers
 // at all, so a browser cannot read it; this route fetches it server-side and
@@ -220,90 +208,6 @@ const SOURCE_COOP_CACHE_CONTROL = "public, max-age=300";
 const GITHUB_RAW_PATH = "/github-raw";
 const GITHUB_RAW_REPOSITORY_PATH = /^\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/raw\/.+$/;
 
-// A USGS Astrogeology WMS layer to reproject. `map` and `layer` are the only
-// caller-influenced parts of the upstream request, and both come from this
-// allowlist — the Worker never forwards a client-supplied WMS parameter.
-interface WmsDataset {
-  /** MapServer `map=` file, e.g. `/maps/mercury/mercury_simp_cyl.map`. */
-  map: string;
-  /** WMS `LAYERS=` value. */
-  layer: string;
-}
-
-// The single USGS Astrogeology MapServer endpoint every WMS dataset is served
-// from. Requests are same-origin server-to-server, so CORS never applies.
-const WMS_BASE = "https://planetarymaps.usgs.gov/cgi-bin/mapserv";
-
-/** Allowlisted WMS layers → their `map`/`layer` on the USGS MapServer. */
-const WMS_DATASETS: Record<string, WmsDataset> = {
-  "mercury-messenger-color": {
-    map: "/maps/mercury/mercury_simp_cyl.map",
-    layer: "MESSENGER_Color",
-  },
-  "mercury-messenger": {
-    map: "/maps/mercury/mercury_simp_cyl.map",
-    layer: "MESSENGER",
-  },
-  "venus-magellan": {
-    map: "/maps/venus/venus_simp_cyl.map",
-    layer: "MAGELLAN",
-  },
-  "venus-magellan-color": {
-    map: "/maps/venus/venus_simp_cyl.map",
-    layer: "MAGELLAN_color",
-  },
-  "io-galileo-color": {
-    map: "/maps/jupiter/io_simp_cyl.map",
-    layer: "SSI_color",
-  },
-  "europa-galileo-voyager": {
-    map: "/maps/jupiter/europa_simp_cyl.map",
-    layer: "GALILEO_VOYAGER",
-  },
-  "ganymede-galileo-voyager": {
-    map: "/maps/jupiter/ganymede_simp_cyl.map",
-    layer: "GALILEO_VOYAGER",
-  },
-  "callisto-galileo-voyager": {
-    map: "/maps/jupiter/callisto_simp_cyl.map",
-    layer: "GALILEO_VOYAGER",
-  },
-  "titan-cassini": {
-    map: "/maps/saturn/titan_simp_cyl.map",
-    layer: "Titan_ISS_Controlled_Mosaic",
-  },
-  "titan-hisar": {
-    map: "/maps/saturn/titan_simp_cyl.map",
-    layer: "Titan_HiSAR_Mosaic",
-  },
-  "pluto-mosaic": {
-    map: "/maps/pluto/pluto_simp_cyl.map",
-    layer: "NEWHORIZONS_PLUTO_MOSAIC",
-  },
-  "pluto-color": {
-    map: "/maps/pluto/pluto_simp_cyl.map",
-    layer: "NEWHORIZONS_PLUTO_ClrSHADE",
-  },
-  "charon-mosaic": {
-    map: "/maps/pluto/charon_simp_cyl.map",
-    layer: "NEWHORIZONS_CHARON_MOSAIC",
-  },
-};
-
-// `/wms/<dataset>/<z>/<x>/<y>.png`. Same integer constraints as TILE_PATH.
-const WMS_PATH = /^\/wms\/([a-z0-9-]+)\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})\.png$/;
-
-// Edge length of a reprojected tile. Matches MapLibre's default `tileSize`.
-const WMS_TILE_SIZE = 256;
-
-// Highest zoom the reprojection endpoint will serve. The mosaics top out at
-// native zoom 7 (MapLibre never requests past a source's maxzoom), so this sits
-// one level above that and rejects everything deeper. Without it the
-// `x`/`y < 2**z` check is useless at high z (2**z dwarfs the regex's 7-digit
-// ceiling), letting a client hammer USGS + the PNG codec with unlimited distinct
-// cache keys — each miss here is CPU-bound, unlike the byte-forwarding /opm path.
-const MAX_WMS_ZOOM = 8;
-
 const CORS_HEADERS: Record<string, string> = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, OPTIONS",
@@ -313,9 +217,11 @@ const CORS_HEADERS: Record<string, string> = {
   "access-control-expose-headers": "content-range, content-length, etag, accept-ranges",
   "access-control-max-age": "86400",
 };
+const OVERPASS_UPSTREAM_HEADER = "x-overpass-upstream";
 const OVERPASS_CORS_HEADERS: Record<string, string> = {
   ...CORS_HEADERS,
   "access-control-allow-methods": "POST, OPTIONS",
+  "access-control-expose-headers": `${CORS_HEADERS["access-control-expose-headers"]}, ${OVERPASS_UPSTREAM_HEADER}`,
 };
 
 /** `/pmtiles/<name>.pmtiles` range-proxies the Protomaps daily planet builds,
@@ -443,6 +349,11 @@ function isAllowedProxyOrigin(origin: string | null): boolean {
     return false;
   }
   if (protocol === "tauri:" && hostname === "localhost") return true;
+  // The desktop webview's origin on Windows, where Tauri serves the app over
+  // http(s)://tauri.localhost rather than a custom scheme.
+  if ((protocol === "http:" || protocol === "https:") && hostname === "tauri.localhost") {
+    return true;
+  }
   if (protocol === "https:") {
     if (hostname === "geolibre.app" || hostname.endsWith(".geolibre.app")) {
       return true;
@@ -529,61 +440,41 @@ async function handleSourceCoop(request: Request, pathname: string): Promise<Res
 }
 
 /**
- * Accept only the exact bounded query grammar emitted by buildOsmDownloadQuery.
- * This enforces the client's limits at the trust boundary so a forged POST
- * cannot use GeoLibre's Worker for an unbounded or long-running Overpass query.
+ * Proxies one Ocean Data Platform tile or feature page with CORS added.
+ *
+ * Origin-gated like `/source-coop/`, and anonymous: the Worker never forwards
+ * an `Authorization` header, so only publicly shared datasets pass through
+ * (ODP answers a private or unknown one with 401, which is relayed as is).
+ * The response streams through without being buffered.
  */
-export function isAllowedOverpassQuery(query: string): boolean {
-  if (!query.startsWith(OVERPASS_QUERY_PREFIX) || !query.endsWith(OVERPASS_QUERY_SUFFIX)) {
-    return false;
+async function handleOdp(request: Request, url: URL): Promise<Response> {
+  if (!isAllowedProxyOrigin(request.headers.get("origin"))) {
+    return new Response("Forbidden", { status: 403, headers: CORS_HEADERS });
   }
-  let selectorsText = query.slice(OVERPASS_QUERY_PREFIX.length, -OVERPASS_QUERY_SUFFIX.length);
-  const wrapped = selectorsText.startsWith("(") && selectorsText.endsWith(");");
-  if (wrapped) {
-    selectorsText = selectorsText.slice(1, -2);
+  const route = odpUpstream(url);
+  if (!route) {
+    return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
   }
-  OVERPASS_SELECTOR.lastIndex = 0;
-  const matches = [...selectorsText.matchAll(OVERPASS_SELECTOR)];
-  if (matches.length < 1 || matches.length > 2) return false;
-  if (matches.map((match) => match[0]).join("") !== selectorsText) return false;
-  // The client wraps exactly two selectors only when splitting one view at the
-  // antimeridian. Reject unrelated multi-region queries forged outside it.
-  if (wrapped !== (matches.length === 2)) return false;
-  if (
-    matches.length === 2 &&
-    (matches[0][1] !== matches[1][1] ||
-      matches[0][2] !== matches[1][2] ||
-      matches[0][4] !== matches[1][4] ||
-      Number(matches[0][5]) !== 180 ||
-      Number(matches[1][3]) !== -180)
-  ) {
-    return false;
+  let originResponse: Response;
+  try {
+    originResponse = await fetchAllowlistedUpstream(route.upstream, {
+      headers: { "user-agent": "GeoLibre tiles proxy (+https://geolibre.app)" },
+      cf: {
+        cacheEverything: true,
+        cacheTtlByStatus: { "200-299": route.cacheSeconds, "300-599": -1 },
+      },
+    });
+  } catch {
+    return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
   }
-
-  const allFeatures = matches.every((match) => match[1] === '[~"."~"."]');
-  if (matches.some((match) => (match[1] === '[~"."~"."]') !== allFeatures)) return false;
-  // Keep these mirrored limits aligned with osm-downloader-api.ts in packages/plugins.
-  const areaLimit = allFeatures
-    ? OVERPASS_MAX_ALL_QUERY_AREA_SQUARE_DEGREES
-    : OVERPASS_MAX_QUERY_AREA_SQUARE_DEGREES;
-  let totalArea = 0;
-  for (const match of matches) {
-    const [, , southText, westText, northText, eastText] = match;
-    const [south, west, north, east] = [southText, westText, northText, eastText].map(Number);
-    if (
-      ![south, west, north, east].every(Number.isFinite) ||
-      south < -90 ||
-      north > 90 ||
-      west < -180 ||
-      east > 180 ||
-      south >= north ||
-      west >= east
-    ) {
-      return false;
-    }
-    totalArea += (north - south) * (east - west);
-  }
-  return totalArea <= areaLimit;
+  const headers = new Headers(CORS_HEADERS);
+  const contentType = originResponse.headers.get("content-type");
+  if (contentType) headers.set("content-type", contentType);
+  headers.set(
+    "cache-control",
+    originResponse.ok ? `public, max-age=${route.cacheSeconds}` : "no-store",
+  );
+  return new Response(originResponse.body, { status: originResponse.status, headers });
 }
 
 /** Relay one bounded form-encoded Overpass query with browser-readable CORS. */
@@ -667,12 +558,17 @@ async function handleOverpass(request: Request): Promise<Response> {
     });
   }
   let originResponse: Response | null = null;
+  let answeringUpstream: string | null = null;
   let upstreamTimeout: ReturnType<typeof setTimeout> | null = null;
   const upstreamDeadline = Date.now() + OVERPASS_UPSTREAM_TIMEOUT_MS;
-  for (const upstream of [OVERPASS_API_UPSTREAM, OVERPASS_API_FALLBACK_UPSTREAM]) {
+  const upstreams = [OVERPASS_API_UPSTREAM, OVERPASS_API_FALLBACK_UPSTREAM];
+  for (const upstream of upstreams) {
     const remainingMs = upstreamDeadline - Date.now();
     if (remainingMs <= 0) break;
     const upstreamController = new AbortController();
+    // A valid Overpass query may run for the full 60-second query timeout. Give
+    // the current upstream the remaining relay budget; quick 429/5xx responses
+    // still leave almost all of that budget for the next fixed instance.
     upstreamTimeout = setTimeout(() => upstreamController.abort(), remainingMs);
     try {
       originResponse = await fetchAllowlistedUpstream(upstream, {
@@ -688,24 +584,36 @@ async function handleOverpass(request: Request): Promise<Response> {
     } catch {
       clearTimeout(upstreamTimeout);
       upstreamTimeout = null;
+      continue;
+    }
+    if (originResponse && originResponse.status !== 429 && originResponse.status < 500) {
+      clearTimeout(upstreamTimeout);
+      const bodyTimeoutMs = Math.max(1, upstreamDeadline - Date.now());
+      upstreamTimeout = setTimeout(() => upstreamController.abort(), bodyTimeoutMs);
+      answeringUpstream = upstream;
       break;
     }
-    if (originResponse && originResponse.status !== 429 && originResponse.status < 500) break;
     clearTimeout(upstreamTimeout);
     upstreamTimeout = null;
     await originResponse?.body?.cancel().catch(() => undefined);
     originResponse = null;
   }
-  if (!originResponse) {
-    return new Response("Bad Gateway", {
-      status: 502,
-      headers: OVERPASS_CORS_HEADERS,
-    });
+  if (!originResponse || !answeringUpstream) {
+    return new Response(
+      "Overpass is busy: every upstream instance failed or timed out. Try again later.",
+      {
+        status: 502,
+        headers: OVERPASS_CORS_HEADERS,
+      },
+    );
   }
   if (!originResponse.body && upstreamTimeout) clearTimeout(upstreamTimeout);
   const headers = new Headers(OVERPASS_CORS_HEADERS);
   headers.set("content-type", originResponse.headers.get("content-type") ?? "application/json");
   headers.set("cache-control", "no-store");
+  // Name the instance that answered so clients and reviewers can see where the
+  // query (and its area of interest) went.
+  headers.set(OVERPASS_UPSTREAM_HEADER, new URL(answeringUpstream).host);
   const responseBody = originResponse.body
     ? streamWithTimeoutCleanup(originResponse.body, upstreamTimeout!)
     : null;
@@ -1164,7 +1072,12 @@ export const tilesWorker = {
   async fetch(request: Request, _env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") {
-      const headers = url.pathname === OVERPASS_PATH ? OVERPASS_CORS_HEADERS : CORS_HEADERS;
+      const headers =
+        url.pathname === OVERPASS_PATH
+          ? OVERPASS_CORS_HEADERS
+          : url.pathname === EARTHDATA_DOWNLOAD_PATH
+            ? EARTHDATA_CORS_HEADERS
+            : CORS_HEADERS;
       return new Response(null, { status: 204, headers });
     }
     if (url.pathname === OVERPASS_PATH && request.method === "POST") {
@@ -1190,9 +1103,8 @@ export const tilesWorker = {
         "GeoLibre tile + service proxy.\n" +
           "  Passthrough: /opm/<dataset>/<z>/<x>/<y>.png\n" +
           `    Datasets: ${Object.keys(DATASETS).join(", ")}\n` +
-          "  Reprojected WMS: /wms/<dataset>/<z>/<x>/<y>.png\n" +
-          `    Datasets: ${Object.keys(WMS_DATASETS).join(", ")}\n` +
           "  OpenAerialMap search: /oam/meta?bbox=...&limit=...\n" +
+          "  NASA Earthdata granule download: /earthdata/download?url=... (Authorization: Bearer)\n" +
           "  CKAN search: /ckan/search?q=...&rows=...&start=...\n" +
           "  CelesTrak TLE groups: /celestrak/<group>\n" +
           "  Launch Library 2 recent missions: /launch-library/recent\n" +
@@ -1204,6 +1116,7 @@ export const tilesWorker = {
           "  OpenStreetMap download: POST /overpass\n" +
           "  Source Cooperative metadata: /source-coop/products/... , /source-coop/feed\n" +
           "  GitHub repository file: /github-raw?url=https://github.com/.../raw/...\n" +
+          "  Ocean Data Platform: /odp/tiles/<uuid>/<z>/<x>/<y>.pbf , /odp/features/<uuid>/items\n" +
           "  PMTiles range proxy: /pmtiles/<name>.pmtiles (Range header required)\n",
         {
           status: 200,
@@ -1212,13 +1125,18 @@ export const tilesWorker = {
       );
     }
 
-    const wmsMatch = WMS_PATH.exec(url.pathname);
-    if (wmsMatch) {
-      return handleWmsTile(request, wmsMatch, ctx);
-    }
-
     // OpenAerialMap metadata search: forward the allowlisted query params to the
     // fixed upstream and re-emit the JSON with CORS (see OAM_META_PATH above).
+    // NASA Earthdata granule download for the Earthaccess plugin's web build
+    // (see workers/tiles/src/earthdata.ts). Origin-gated: the route forwards a
+    // user's Earthdata token, so only GeoLibre's own pages may drive it.
+    if (url.pathname === EARTHDATA_DOWNLOAD_PATH) {
+      if (!isAllowedProxyOrigin(request.headers.get("origin"))) {
+        return new Response("Forbidden", { status: 403, headers: EARTHDATA_CORS_HEADERS });
+      }
+      return handleEarthdataDownload(request);
+    }
+
     if (url.pathname === OAM_META_PATH) {
       // Abuse guard: this is a wildcard-CORS proxy to a fixed upstream, so
       // restrict it to GeoLibre's own origins (see isAllowedProxyOrigin) — every
@@ -1510,6 +1428,12 @@ export const tilesWorker = {
       return handleSourceCoop(request, url.pathname);
     }
 
+    // Ocean Data Platform tiles and features: CORS-restricted upstream (see
+    // workers/tiles/src/odp.ts).
+    if (url.pathname.startsWith("/odp/")) {
+      return handleOdp(request, url);
+    }
+
     if (url.pathname === GITHUB_RAW_PATH) {
       if (!isAllowedProxyOrigin(request.headers.get("origin"))) {
         return new Response("Forbidden", {
@@ -1636,130 +1560,3 @@ export const tilesWorker = {
 };
 
 export default tilesWorker;
-
-/**
- * Serve one reprojected `/wms/<dataset>/<z>/<x>/<y>.png` tile: request the
- * matching USGS WMS window in EPSG:4326, warp it to Web Mercator, and re-emit it
- * as a PNG with CORS. Results are edge-cached, so the decode/warp/encode cost is
- * paid once per tile.
- */
-async function handleWmsTile(
-  request: Request,
-  match: RegExpExecArray,
-  ctx: ExecutionContext,
-): Promise<Response> {
-  const [, dataset, zs, xs, ys] = match;
-  // Own-property lookup only, for the same Object.prototype reason as the OPM
-  // path above (a slug like "constructor" must 404, not resolve to a function).
-  const ds = Object.hasOwn(WMS_DATASETS, dataset) ? WMS_DATASETS[dataset] : undefined;
-  if (!ds) {
-    return new Response(`Unknown dataset: ${dataset}`, {
-      status: 404,
-      headers: CORS_HEADERS,
-    });
-  }
-
-  const z = Number(zs);
-  const x = Number(xs);
-  const y = Number(ys);
-  // Reject over-deep zooms and coordinates outside the pyramid before touching
-  // the USGS server (see MAX_WMS_ZOOM — the x/y bound alone doesn't limit z).
-  const dim = 2 ** z;
-  if (z > MAX_WMS_ZOOM || x >= dim || y >= dim) {
-    return new Response("Not Found", { status: 404, headers: CORS_HEADERS });
-  }
-
-  const cache = caches.default;
-  const cached = await cache.match(request);
-  if (cached) return cached;
-
-  const bounds = tileGeoBounds({ z, x, y });
-  // Every WMS parameter is Worker-controlled except `map`/`layer`, which come
-  // from the WMS_DATASETS allowlist — never from the request.
-  const wmsUrl =
-    `${WMS_BASE}?map=${encodeURIComponent(ds.map)}` +
-    "&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&STYLES=" +
-    `&LAYERS=${encodeURIComponent(ds.layer)}` +
-    "&SRS=EPSG:4326&FORMAT=image/png&TRANSPARENT=TRUE" +
-    `&WIDTH=${WMS_TILE_SIZE}&HEIGHT=${WMS_TILE_SIZE}` +
-    `&BBOX=${wmsBboxFor(bounds)}`;
-
-  let origin: Response;
-  try {
-    origin = await fetchAllowlistedUpstream(wmsUrl, {
-      cf: { cacheEverything: true, cacheTtl: 86400 },
-    });
-  } catch {
-    return new Response("Bad Gateway", { status: 502, headers: CORS_HEADERS });
-  }
-
-  const contentType = origin.headers.get("content-type") ?? "";
-  if (!origin.ok || !contentType.startsWith("image/")) {
-    // A WMS ServiceException is XML, not an image — don't feed it to the PNG
-    // decoder. Answer with a transparent tile so the black-space backdrop shows
-    // through. Draining the body frees the connection.
-    //
-    // Unlike the /opm path (which forwards the real upstream status), a failure
-    // here renders as a blank tile, so log it — otherwise a typo'd map/layer in
-    // a WMS_DATASETS entry would fail silently as an all-blank basemap in prod.
-    console.warn(
-      `WMS reproject miss: dataset=${dataset} status=${
-        origin.status
-      } content-type=${contentType || "?"}`,
-    );
-    await origin.arrayBuffer().catch(() => undefined);
-    const resp = pngResponse(transparentTile(), NEGATIVE_CACHE_CONTROL);
-    // Negative-cache genuine misses, but skip 5xx/429 so a transient USGS
-    // outage or throttle isn't pinned as a blank tile for the negative TTL
-    // (mirrors the OPM passthrough path above).
-    if (origin.status < 500 && origin.status !== 429) {
-      ctx.waitUntil(cache.put(request, resp.clone()));
-    }
-    return resp;
-  }
-
-  let out: ArrayBuffer;
-  try {
-    const decoded = UPNG.decode(await origin.arrayBuffer());
-    // The window is requested at exactly WMS_TILE_SIZE², so the returned image
-    // matches; guard anyway so a surprise size can't drive an out-of-bounds read.
-    if (decoded.width !== WMS_TILE_SIZE || decoded.height !== WMS_TILE_SIZE) {
-      throw new Error(`unexpected WMS size ${decoded.width}x${decoded.height}`);
-    }
-    const rgba = new Uint8Array(UPNG.toRGBA8(decoded)[0]);
-    const warped = remapRowsToMercator(rgba, WMS_TILE_SIZE, { z, x, y }, bounds);
-    out = UPNG.encode([warped.buffer as ArrayBuffer], WMS_TILE_SIZE, WMS_TILE_SIZE, 0);
-  } catch (err) {
-    // A 2xx response we can't decode/warp (e.g. a misconfigured dataset or an
-    // unexpected upstream format/size) is a persistent failure, so degrade to a
-    // negative-cached transparent tile — matching the upstream-status branch
-    // above — instead of re-running this CPU-bound path on every request forever.
-    console.warn(`WMS reproject decode failure: dataset=${dataset} error=${String(err)}`);
-    const resp = pngResponse(transparentTile(), NEGATIVE_CACHE_CONTROL);
-    ctx.waitUntil(cache.put(request, resp.clone()));
-    return resp;
-  }
-
-  const resp = pngResponse(out, CACHE_CONTROL);
-  ctx.waitUntil(cache.put(request, resp.clone()));
-  return resp;
-}
-
-/** A 200 PNG response with CORS and the given cache policy. */
-function pngResponse(body: ArrayBuffer, cacheControl: string): Response {
-  const headers = new Headers(CORS_HEADERS);
-  headers.set("content-type", "image/png");
-  headers.set("cache-control", cacheControl);
-  return new Response(body, { status: 200, headers });
-}
-
-// A fully-transparent tile, encoded once and reused for WMS misses. Sliced per
-// use so each Response owns its bytes (never a detached shared buffer).
-let transparentTilePng: ArrayBuffer | undefined;
-function transparentTile(): ArrayBuffer {
-  if (!transparentTilePng) {
-    const rgba = new Uint8Array(WMS_TILE_SIZE * WMS_TILE_SIZE * 4);
-    transparentTilePng = UPNG.encode([rgba.buffer as ArrayBuffer], WMS_TILE_SIZE, WMS_TILE_SIZE, 0);
-  }
-  return transparentTilePng.slice(0);
-}

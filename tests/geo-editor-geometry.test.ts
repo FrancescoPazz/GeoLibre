@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { FeatureCollection } from "geojson";
+import type { Feature, FeatureCollection } from "geojson";
 import type { GeoLibreLayer } from "../packages/core/src/types";
 import {
   GEOMAN_SHAPE_PROPERTIES,
@@ -9,11 +9,15 @@ import {
   applySyncedEditorTracking,
   canEditLayerGeometry,
   canonicalGeometryKey,
+  captureEditedFeatureIds,
   captureEditedGeometries,
   captureEditedProperties,
+  mercatorSegmentMidpoint,
   planGeoEditorOverlayOrder,
   reconcileEditedFeatures,
+  removeMultiLineStringVertex,
   tagFeatureKeys,
+  findGeometryEditFeature,
 } from "../packages/plugins/src/plugins/geo-editor-geometry";
 
 function makeLayer(overrides: Partial<GeoLibreLayer>): GeoLibreLayer {
@@ -175,6 +179,31 @@ describe("tagFeatureKeys", () => {
     assert.equal(collection.features[0].properties?.[GEOMETRY_EDIT_FID_PROPERTY], undefined);
   });
 
+  it("gives an id-less feature its array index, as Identify and the table do", () => {
+    // Identify's Edit geometry finds its feature by this tag (#2932).
+    const tagged = tagFeatureKeys({
+      type: "FeatureCollection",
+      features: [point(42), point(undefined), point(undefined)],
+    });
+    assert.deepEqual(
+      tagged.features.map((f) => f.properties?.[GEOMETRY_EDIT_FID_PROPERTY]),
+      ["42", "1", "2"],
+    );
+  });
+
+  it("keeps an explicit id even when an earlier id-less index would claim it", () => {
+    // Identify resolves the third feature as "1" (its own id), so the editor
+    // must tag it "1"; the id-less feature at index 1 gets a fresh id instead.
+    const tagged = tagFeatureKeys({
+      type: "FeatureCollection",
+      features: [point(undefined), point(undefined), point("1")],
+    });
+    const tags = tagged.features.map((f) => f.properties?.[GEOMETRY_EDIT_FID_PROPERTY]);
+    assert.equal(tags[0], "0");
+    assert.equal(tags[2], "1");
+    assert.equal(new Set(tags).size, 3);
+  });
+
   it("assigns unique ids when the input has duplicate ids", () => {
     const tagged = tagFeatureKeys({
       type: "FeatureCollection",
@@ -225,9 +254,11 @@ describe("reconcileEditedFeatures", () => {
       features: [point(5), point(12), point(undefined)],
     };
     const reconciled = reconcileEditedFeatures(tagFeatureKeys(original));
+    // The id-less feature keeps its array index, the id the attribute table
+    // already gave it, so a save does not renumber it.
     assert.deepEqual(
       reconciled.features.map((f) => String(f.id)),
-      ["5", "12", "0"],
+      ["5", "12", "2"],
     );
   });
 
@@ -722,6 +753,44 @@ describe("editor tracking — copied and id-less features", () => {
     });
   });
 
+  it("records a copy that kept its source's tag as created, and keeps the source's id", () => {
+    // Geoman's copy and split clone `properties`, edit tag included, so the copy
+    // matches the source's snapshot. The occurrence whose geometry is unchanged
+    // is the source; the moved one is the copy, even when it comes first.
+    const original: FeatureCollection = {
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          id: 7,
+          geometry: { type: "Point", coordinates: [0, 0] },
+          properties: { name: "source", created_by: "bob", created_at: "2020-01-01T00:00:00.000Z" },
+        },
+      ],
+    };
+    const tagged = tagFeatureKeys(original);
+    const copy = structuredClone(tagged.features[0]);
+    copy.geometry = { type: "Point", coordinates: [1, 1] };
+    const kinds: string[] = [];
+    const reconciled = reconcileEditedFeatures(
+      { type: "FeatureCollection", features: [copy, tagged.features[0]] },
+      captureEditedProperties(tagged, original),
+      { ...stamp, originalGeometries: captureEditedGeometries(tagged) },
+      {
+        originalIds: captureEditedFeatureIds(tagged, original),
+        prepareNewFeature: (properties, kind) => {
+          kinds.push(kind);
+          return properties;
+        },
+      },
+    );
+    assert.deepEqual(kinds, ["copied"]);
+    assert.equal(reconciled.features[1].id, 7);
+    assert.equal(reconciled.features[1].properties?.created_by, "bob");
+    assert.notEqual(reconciled.features[0].id, 7);
+    assert.equal(reconciled.features[0].properties?.created_by, "ada");
+  });
+
   it("keeps matching an id-less feature after it has been stamped once", () => {
     // The tracking columns only ever exist on the store side, so a key that read
     // them would give one feature two identities once stamped and every sync
@@ -760,5 +829,227 @@ describe("editor tracking — copied and id-less features", () => {
 
     const result = applySyncedEditorTracking(editorCopy, stored, keyOf, stamp);
     assert.equal(result.features[0].properties?.created_at, "2026-08-01T00:00:00.000Z");
+  });
+});
+
+describe("removeMultiLineStringVertex", () => {
+  const multi = (coordinates: number[][][]) => ({ type: "MultiLineString" as const, coordinates });
+
+  it("removes the vertex from the part that holds it", () => {
+    const geometry = multi([
+      [
+        [0, 0],
+        [1, 1],
+        [2, 0],
+      ],
+      [
+        [5, 5],
+        [6, 6],
+      ],
+    ]);
+    assert.deepEqual(removeMultiLineStringVertex(geometry, [1, 1]), {
+      type: "MultiLineString",
+      coordinates: [
+        [
+          [0, 0],
+          [2, 0],
+        ],
+        [
+          [5, 5],
+          [6, 6],
+        ],
+      ],
+    });
+    // The input is left alone.
+    assert.equal(geometry.coordinates[0].length, 3);
+  });
+
+  it("drops a part left with fewer than two vertices", () => {
+    const geometry = multi([
+      [
+        [0, 0],
+        [1, 1],
+        [2, 0],
+      ],
+      [
+        [5, 5],
+        [6, 6],
+      ],
+    ]);
+    assert.deepEqual(removeMultiLineStringVertex(geometry, [6, 6])?.coordinates, [
+      [
+        [0, 0],
+        [1, 1],
+        [2, 0],
+      ],
+    ]);
+  });
+
+  it("returns null once no part is left", () => {
+    const geometry = multi([
+      [
+        [0, 0],
+        [1, 1],
+      ],
+    ]);
+    assert.equal(removeMultiLineStringVertex(geometry, [0, 0]), null);
+  });
+
+  it("uses the marker path to pick between repeated coordinates", () => {
+    const geometry = multi([
+      [
+        [0, 0],
+        [1, 1],
+      ],
+      [
+        [1, 1],
+        [2, 2],
+        [3, 3],
+      ],
+    ]);
+    const path = ["geometry", "coordinates", 1, 0];
+    assert.deepEqual(removeMultiLineStringVertex(geometry, [1, 1], path)?.coordinates, [
+      [
+        [0, 0],
+        [1, 1],
+      ],
+      [
+        [2, 2],
+        [3, 3],
+      ],
+    ]);
+  });
+
+  it("removes the closing vertex of a closed part when the path points at it", () => {
+    const geometry = multi([
+      [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+        [0, 0],
+      ],
+    ]);
+    const path = ["geometry", "coordinates", 0, 3];
+    assert.deepEqual(removeMultiLineStringVertex(geometry, [0, 0], path)?.coordinates, [
+      [
+        [0, 0],
+        [1, 0],
+        [1, 1],
+      ],
+    ]);
+  });
+
+  it("ignores a stale path and matches on the coordinate", () => {
+    const geometry = multi([
+      [
+        [0, 0],
+        [1, 1],
+        [2, 2],
+      ],
+    ]);
+    const path = ["geometry", "coordinates", 0, 0];
+    assert.deepEqual(removeMultiLineStringVertex(geometry, [2, 2], path)?.coordinates, [
+      [
+        [0, 0],
+        [1, 1],
+      ],
+    ]);
+  });
+
+  it("returns undefined for a vertex that isn't there", () => {
+    assert.equal(
+      removeMultiLineStringVertex(
+        multi([
+          [
+            [0, 0],
+            [1, 1],
+          ],
+        ]),
+        [9, 9],
+      ),
+      undefined,
+    );
+  });
+});
+
+describe("findGeometryEditFeature", () => {
+  it("finds the feature Identify named through the session tag", () => {
+    const tagged = tagFeatureKeys({
+      type: "FeatureCollection",
+      features: [point(42, { name: "a" }), point(undefined, { name: "b" })],
+    });
+    assert.equal(findGeometryEditFeature(tagged, "1")?.properties?.name, "b");
+    assert.equal(findGeometryEditFeature(tagged, "42")?.properties?.name, "a");
+  });
+
+  it("returns undefined for an unknown id or untagged features", () => {
+    const tagged = tagFeatureKeys({ type: "FeatureCollection", features: [point(undefined)] });
+    assert.equal(findGeometryEditFeature(tagged, "7"), undefined);
+    assert.equal(
+      findGeometryEditFeature({ type: "FeatureCollection", features: [point("0")] }, "0"),
+      undefined,
+    );
+  });
+});
+
+describe("mercatorSegmentMidpoint", () => {
+  const close = (actual: number, expected: number) =>
+    assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} != ${expected}`);
+
+  it("averages longitudes and keeps a parallel's latitude", () => {
+    const [lng, lat] = mercatorSegmentMidpoint([100, 20], [110, 20]);
+    close(lng, 105);
+    close(lat, 20);
+  });
+
+  it("puts the latitude halfway along Mercator y, not halfway in degrees", () => {
+    // A meridian edge from the equator to 60N: Mercator y doubles the spacing
+    // toward the pole, so the drawn midpoint sits well above 30N.
+    const [lng, lat] = mercatorSegmentMidpoint([10, 0], [10, 60]);
+    close(lng, 10);
+    const y60 = Math.log(Math.tan(Math.PI / 4 + Math.PI / 6));
+    close(lat, (Math.atan(Math.sinh(y60 / 2)) * 180) / Math.PI);
+    assert.ok(lat > 35 && lat < 36);
+  });
+
+  it("is symmetric about the equator", () => {
+    const [, lat] = mercatorSegmentMidpoint([0, -40], [0, 40]);
+    close(lat, 0);
+  });
+
+  it("lands on the drawn edge: collinear with its ends in Mercator space", () => {
+    // An edge of the countries layer's Vietnam polygon (#3382).
+    const start = [107.22092858279524, 10.364483954301832];
+    const end = [108.36612999881545, 11.008320624226272];
+    const toY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+    const [lng, lat] = mercatorSegmentMidpoint(start, end);
+    close(lng, (start[0] + end[0]) / 2);
+    close(toY(lat), (toY(start[1]) + toY(end[1])) / 2);
+    // ...which is not the plain latitude average.
+    assert.ok(Math.abs(lat - (start[1] + end[1]) / 2) > 1e-6);
+  });
+
+  it("clamps an end beyond Mercator's limit, as MapLibre draws it", () => {
+    // Drawn from the equator up to the clamped 85.05N, not to the pole.
+    const toY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+    const [lng, lat] = mercatorSegmentMidpoint([0, 0], [20, 90]);
+    close(lng, 10);
+    close(toY(lat), toY(85.051129) / 2);
+  });
+
+  it("averages plain latitudes for an edge with both ends beyond the limit", () => {
+    // Antarctica's ring runs along -90; clamping would pull the marker off it.
+    assert.deepEqual(mercatorSegmentMidpoint([-180, -90], [-170, -90]), [-175, -90]);
+  });
+
+  it("averages elevation when both ends have one", () => {
+    const middle = mercatorSegmentMidpoint([0, 0, 5], [2, 0, 7]);
+    assert.equal(middle.length, 3);
+    close(middle[2], 6);
+  });
+
+  it("leaves elevation out when either end lacks it", () => {
+    assert.equal(mercatorSegmentMidpoint([0, 0, 5], [2, 0]).length, 2);
+    assert.equal(mercatorSegmentMidpoint([0, 0], [2, 0]).length, 2);
   });
 });

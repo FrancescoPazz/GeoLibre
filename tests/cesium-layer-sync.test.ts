@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
-import { DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "../packages/core/src/types";
+import { useAppStore } from "@geolibre/core";
+import {
+  DEFAULT_LAYER_STYLE,
+  type GeoLibreLayer,
+  type LayerStyle,
+} from "../packages/core/src/types";
 import { CesiumLayerSync, isCesiumSupportedLayerType } from "../packages/map/src/cesium-layer-sync";
+import { labelBaseColors } from "../packages/map/src/cesium-labels";
 
 // Verifies the store → Cesium reconciler against a fake Cesium namespace + viewer
 // (the real engine never loads here — its import in the module is type-only). It
@@ -188,7 +194,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       polygon: polygonFor(features[0]),
                       show: true,
@@ -196,7 +202,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       polyline: { material: options.stroke },
                       show: true,
@@ -204,7 +210,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       billboard: { color: undefined },
                       show: true,
@@ -212,7 +218,7 @@ function makeFakes() {
                     {
                       properties: {
                         ...(features[0]?.properties ?? {}),
-                        __geolibre_cesium_feature_index: { getValue: () => 0 },
+                        __geolibre_cesium_feature_index: { getValue: (): number => 0 },
                       },
                       label: {},
                       show: true,
@@ -265,6 +271,34 @@ function makeFakes() {
     Cesium3DTileStyle: class {
       constructor(public spec: unknown) {}
     },
+    // Just enough geodesy for the tileset altitude offset: a "cartesian" is
+    // the (lon, lat, height) it was made from, so a translation reads back as
+    // the height difference.
+    Cartographic: {
+      fromCartesian: () => ({ longitude: 0.1, latitude: 0.9, height: 0 }),
+    },
+    Cartesian3: Object.assign(
+      class {
+        constructor(
+          public x = 0,
+          public y = 0,
+          public z = 0,
+        ) {}
+      },
+      {
+        fromRadians: (x: number, y: number, z = 0) => ({ x, y, z }),
+        subtract: (
+          a: { x: number; y: number; z: number },
+          b: { x: number; y: number; z: number },
+          out: { x: number; y: number; z: number },
+        ) => Object.assign(out, { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }),
+      },
+    ),
+    Matrix4: {
+      IDENTITY: { identity: true },
+      clone: (m: object) => ({ ...m }),
+      fromTranslation: (translation: unknown) => ({ translation }),
+    },
     Color: {
       fromCssColorString: (css: string) => ({
         css,
@@ -285,7 +319,9 @@ function makeFakes() {
   return { calls, viewer, Cesium, flush };
 }
 
-function mkLayer(over: Partial<GeoLibreLayer>): GeoLibreLayer {
+type LayerPatch = Omit<Partial<GeoLibreLayer>, "style"> & { style?: Partial<LayerStyle> };
+
+function mkLayer(over: LayerPatch): GeoLibreLayer {
   return {
     id: "l1",
     name: "layer",
@@ -293,10 +329,10 @@ function mkLayer(over: Partial<GeoLibreLayer>): GeoLibreLayer {
     source: {},
     visible: true,
     opacity: 1,
-    style: {},
     metadata: {},
     ...over,
-  } as GeoLibreLayer;
+    style: { ...DEFAULT_LAYER_STYLE, ...over.style },
+  };
 }
 
 /** A one-polygon GeoJSON layer, the shape the render-status tests need. */
@@ -350,8 +386,8 @@ function newSync(
 ) {
   // The fakes stand in for the Cesium namespace + Viewer (cast through unknown).
   return new CesiumLayerSync(
-    f.Cesium as unknown as typeof import("cesium"),
-    f.viewer as unknown as import("cesium").Viewer,
+    f.Cesium as unknown as ConstructorParameters<typeof CesiumLayerSync>[0],
+    f.viewer as unknown as ConstructorParameters<typeof CesiumLayerSync>[1],
     readZoom,
     deps,
   );
@@ -373,6 +409,20 @@ describe("CesiumLayerSync", () => {
     assert.notEqual(f.calls.geojsonLoads[0].data, fc);
     assert.deepEqual(fc, { type: "FeatureCollection", features: [{}] });
     assert.equal(f.calls.geojsonLoads[0].options.clampToGround, true);
+    assert.equal(f.calls.dataSourcesAdded.length, 1);
+  });
+
+  it("drops a legacy crs member Cesium cannot parse (#3476)", async () => {
+    const sync = newSync(f);
+    // GDAL writes CRS84 as `urn:ogc:def:crs:OGC::CRS84`, a spelling Cesium's
+    // GeoJsonDataSource rejects with "Unknown crs name".
+    const crs = { type: "name", properties: { name: "urn:ogc:def:crs:OGC::CRS84" } };
+    const fc = { type: "FeatureCollection", crs, features: [{}] };
+    sync.sync([mkLayer({ type: "geojson", geojson: fc as never, visible: true })]);
+    await f.flush();
+    assert.equal(f.calls.geojsonLoads.length, 1);
+    assert.equal("crs" in (f.calls.geojsonLoads[0].data as object), false);
+    assert.equal(fc.crs, crs, "the layer's own GeoJSON is not mutated");
     assert.equal(f.calls.dataSourcesAdded.length, 1);
   });
 
@@ -462,6 +512,35 @@ describe("CesiumLayerSync", () => {
 
     assert.equal(f.calls.geojsonLoads.length, 0);
     assert.equal(isCesiumSupportedLayerType(layer), false);
+  });
+
+  it("draws a deck.gl viz record through the GeoJSON path without reloading on opacity", async () => {
+    const sync = newSync(f);
+    const viz = mkLayer({
+      id: "viz",
+      type: "deckgl-viz",
+      source: { type: "deckgl-viz", data: [[-74, 40.7]] },
+      metadata: {
+        sourceKind: "deckgl-viz",
+        externalDeckLayer: true,
+        vizConfig: {
+          layerKind: "scatterplot",
+          format: "json-array",
+          fieldMapping: { lng: 0, lat: 1 },
+          style: { color: "#3b82f6", radius: 40 },
+        },
+      },
+    });
+
+    sync.sync([viz]);
+    await f.flush();
+    assert.equal(f.calls.geojsonLoads.length, 1);
+    assert.equal(f.calls.dataSourcesAdded.length, 1);
+
+    sync.sync([{ ...viz, opacity: 0.4 }]);
+    await f.flush();
+    assert.equal(f.calls.geojsonLoads.length, 1, "an opacity change reuses the data source");
+    assert.deepEqual(sync.getRenderStatus().errors, []);
   });
 
   it("keeps ArcGIS vector tiles without a FeatureCollection marked 2D-only", () => {
@@ -602,6 +681,42 @@ describe("CesiumLayerSync", () => {
     assert.ok(Math.abs(label.outlineColor.value.alpha - 0.5) < 1e-9);
   });
 
+  it("fades a data-defined label opacity with a story fade", async () => {
+    const sync = newSync(f);
+    const fc = { type: "FeatureCollection", features: [{}] };
+    sync.sync([
+      mkLayer({
+        id: "fade",
+        type: "geojson",
+        geojson: fc as never,
+        opacity: 0.5,
+        style: { labels: { ...DEFAULT_LAYER_STYLE.labels } },
+      }),
+    ]);
+    await f.flush();
+    const ds = f.calls.dataSourcesAdded[0] as {
+      entities: { values: Array<{ label?: { fillColor: { value: { alpha: number } } } }> };
+    };
+    const entity = ds.entities.values[3];
+    const opaque = (css: string) => ({
+      alpha: 1,
+      withAlpha: (alpha: number) => ({ css, alpha }),
+    });
+    // As the labeler records a label with a data-defined opacity of 0.8.
+    labelBaseColors.set(entity as never, {
+      fill: opaque("#f00") as never,
+      outline: opaque("#fff") as never,
+      opacity: 0.8,
+    });
+    // Halfway from the layer's 0.5 down: the override fades by the same half.
+    sync.setStoryLayerOpacity("fade", 0.25);
+    assert.ok(Math.abs(entity.label!.fillColor.value.alpha - 0.4) < 1e-9);
+    sync.setStoryLayerOpacity("fade", 0);
+    assert.equal(entity.label!.fillColor.value.alpha, 0, "a fade to 0 hides it");
+    sync.restoreStoryLayerStyles();
+    assert.ok(Math.abs(entity.label!.fillColor.value.alpha - 0.8) < 1e-9);
+  });
+
   it("renders xyz/raster tiles as an imagery layer with opacity + visibility", () => {
     const sync = newSync(f);
     sync.sync([
@@ -667,6 +782,24 @@ describe("CesiumLayerSync", () => {
     sync.sync([{ ...base, metadata: { bounds: [0, 0, 2, 2] } }]);
     assert.equal(f.calls.urlProviders.length, 1);
     assert.equal(f.calls.imageryRemoved.length, 0);
+  });
+
+  it("draws a wms record whose tile is an ArcGIS REST export from that template", () => {
+    // Earthdata GIS records an ImageServer as `source.url`; GetMap against it
+    // returns no image, so the exportImage template is what draws.
+    const sync = newSync(f);
+    const tile =
+      "https://gis.example/rest/services/X/ImageServer/exportImage?bbox={bbox-epsg-3857}&bboxSR=3857&f=image";
+    sync.sync([
+      mkLayer({
+        id: "img",
+        type: "wms",
+        source: { url: "https://gis.example/rest/services/X/ImageServer", tiles: [tile] },
+      }),
+    ]);
+    assert.equal(f.calls.wmsProviders.length, 0);
+    assert.equal(f.calls.urlProviders.length, 1);
+    assert.equal(String(f.calls.urlProviders[0].url), tile);
   });
 
   it("treats a wms layer with only a service url as globe-supported", () => {
@@ -758,6 +891,38 @@ describe("CesiumLayerSync", () => {
     assert.equal(tileset.style, undefined);
   });
 
+  it("moves a loaded tileset in place when its altitude offset changes", async () => {
+    const sync = newSync(f);
+    const layer = mkLayer({
+      id: "t",
+      type: "3d-tiles",
+      source: { url: "https://tiles/root.json", altitudeOffset: -43.5 },
+    });
+    sync.sync([layer]);
+    await f.flush();
+    const tileset = f.calls.primitivesAdded[0] as { modelMatrix: unknown };
+    const height = () => (tileset.modelMatrix as { translation: { z: number } }).translation.z;
+    assert.equal(height(), -43.5);
+
+    // The Style panel's height field (#3107): no reload, just a new matrix.
+    sync.sync([{ ...layer, source: { ...layer.source, altitudeOffset: 12 } }]);
+    assert.equal(f.calls.tilesetUrls.length, 1, "the tileset is not rebuilt");
+    assert.equal(f.calls.primitivesAdded.length, 1);
+    assert.equal(height(), 12);
+
+    // Back to zero restores the identity rather than leaving the last offset.
+    sync.sync([{ ...layer, source: { ...layer.source, altitudeOffset: 0 } }]);
+    assert.deepEqual(tileset.modelMatrix, { identity: true });
+    assert.equal(f.calls.tilesetUrls.length, 1);
+  });
+
+  it("leaves a tileset's model matrix alone when it has no altitude offset", async () => {
+    const sync = newSync(f);
+    sync.sync([mkLayer({ id: "t", type: "3d-tiles", source: { url: "https://tiles/root.json" } })]);
+    await f.flush();
+    assert.equal((f.calls.primitivesAdded[0] as { modelMatrix: unknown }).modelMatrix, null);
+  });
+
   it("fades a tileset with the layer opacity without tinting it", async () => {
     const sync = newSync(f);
     sync.sync([
@@ -824,6 +989,34 @@ describe("CesiumLayerSync", () => {
     assert.equal(resource.opts.headers["X-GOOG-API-KEY"], "test-key");
   });
 
+  it("refuses to send 3D Tiles request headers over plaintext, including child tiles", async () => {
+    const sync = newSync(f);
+    const tiles = (id: string, url: string) =>
+      mkLayer({
+        id,
+        type: "3d-tiles",
+        source: { url, requestHeaders: { Authorization: "Bearer t" } },
+      });
+    sync.sync([
+      tiles("plain", "http://tiles.example/tileset.json"),
+      tiles("secure", "https://tiles.example/tileset.json"),
+    ]);
+    await f.flush();
+    assert.equal(f.calls.tilesetUrls.length, 1);
+    const resource = f.calls.tilesetUrls[0] as {
+      opts: { url: string; proxy: { getURL(url: string): string } };
+    };
+    assert.equal(resource.opts.url, "https://tiles.example/tileset.json");
+    // Cesium applies the proxy to every derived request, child tiles included.
+    const { proxy } = resource.opts;
+    assert.equal(proxy.getURL("https://cdn.example/a.b3dm"), "https://cdn.example/a.b3dm");
+    assert.equal(
+      proxy.getURL("data:application/octet-stream;base64,AA=="),
+      "data:application/octet-stream;base64,AA==",
+    );
+    assert.throws(() => proxy.getURL("http://cdn.example/a.b3dm"));
+  });
+
   it("updates visibility in place without recreating the imagery layer", () => {
     const sync = newSync(f);
     const base = mkLayer({
@@ -871,6 +1064,28 @@ describe("CesiumLayerSync", () => {
     sync.sync([mkLayer({ id: "x", type: "xyz", source: { tiles: ["u/{z}/{x}/{y}"] } })]);
     sync.sync([]);
     assert.equal(f.calls.imageryRemoved.length, 1);
+  });
+
+  it("reads a raster record's Esri-style tile template from source.url", async () => {
+    // The Esri Wayback control mirrors its release as a raster record whose
+    // `source.url` is a `{level}/{row}/{col}` template, as ArcGIS reads it.
+    const sync = newSync(f);
+    sync.sync([
+      mkLayer({
+        id: "wayback",
+        type: "raster",
+        source: {
+          type: "raster",
+          url: "https://wayback.example/tile/10/{level}/{row}/{col}",
+        },
+      }),
+    ]);
+    await f.flush();
+    assert.equal(f.calls.urlProviders.length, 1);
+    assert.equal(
+      String(f.calls.urlProviders[0].url),
+      "https://wayback.example/tile/10/{z}/{y}/{x}",
+    );
   });
 
   it("renders an arcgis MapServer layer via ArcGisMapServerImageryProvider.fromUrl", async () => {
@@ -927,6 +1142,46 @@ describe("CesiumLayerSync", () => {
     };
     assert.equal(res.opts.url, "https://secure.arcgis/MapServer");
     assert.equal(res.opts.headers["Authorization"], "Bearer token123");
+  });
+
+  it("rebuilds a layer when a variable its header references changes", async () => {
+    const initial = useAppStore.getState().preferences;
+    const setToken = (value: string) =>
+      useAppStore.setState({
+        preferences: {
+          ...initial,
+          environmentVariables: [{ key: "ARC_TOKEN", value, enabled: true, secret: false }],
+        },
+      });
+    setToken("first");
+    const sync = newSync(f);
+    try {
+      sync.sync([
+        mkLayer({
+          id: "arc",
+          type: "raster",
+          sourcePath: "https://secure.arcgis/MapServer",
+          source: {
+            tiles: ["https://secure.arcgis/MapServer/export"],
+            requestHeaders: { Authorization: "Bearer ${ARC_TOKEN}" },
+          },
+          metadata: { sourceKind: "arcgis-map-service" },
+        }),
+      ]);
+      await f.flush();
+      setToken("second");
+      await f.flush();
+      const headers = f.calls.arcgisProviders.map(
+        (provider) =>
+          (provider.url as { opts: { headers: Record<string, string> } }).opts.headers[
+            "Authorization"
+          ],
+      );
+      assert.deepEqual(headers, ["Bearer first", "Bearer second"]);
+    } finally {
+      sync.destroy();
+      useAppStore.setState({ preferences: initial });
+    }
   });
 
   it("reads the arcgis token off the pre-built export tile url", async () => {
@@ -1383,17 +1638,19 @@ describe("CesiumLayerSync", () => {
   });
 
   it("classifies supported vs 2D-only layer kinds", () => {
-    for (const type of ["geojson", "xyz", "raster", "wms", "wmts", "image", "3d-tiles"] as const) {
+    for (const type of [
+      "geojson",
+      "xyz",
+      "raster",
+      "wms",
+      "wmts",
+      "image",
+      "3d-tiles",
+      "zarr",
+    ] as const) {
       assert.equal(isCesiumSupportedLayerType(mkLayer({ type })), true, type);
     }
-    for (const type of [
-      "pmtiles",
-      "mbtiles",
-      "zarr",
-      "lidar",
-      "gaussian-splat",
-      "deckgl-viz",
-    ] as const) {
+    for (const type of ["pmtiles", "mbtiles", "lidar", "gaussian-splat", "deckgl-viz"] as const) {
       assert.equal(isCesiumSupportedLayerType(mkLayer({ type })), false, type);
     }
   });
@@ -1403,16 +1660,18 @@ describe("CesiumLayerSync", () => {
     const layers = [
       // A PMTiles layer without a source to read is neither draped nor bridged.
       mkLayer({ id: "p", type: "pmtiles", source: {} }),
+      // A Zarr kind the globe draws, but with no store or variable to open.
       mkLayer({ id: "z", type: "zarr", source: {} }),
       mkLayer({ id: "a", type: "arcgis", source: { tiles: ["https://a/{z}/{x}/{y}.pbf"] } }),
     ];
     sync.sync(layers);
     assert.equal(f.calls.imageryAdded.length, 0);
     assert.equal(f.calls.primitivesAdded.length, 0);
-    // The kind-level predicate the UI uses to flag "2D only" layers agrees.
+    // The kind-level predicate the UI uses to flag "2D only" layers agrees,
+    // except for the Zarr kind, which is supported once it names a store.
     assert.deepEqual(
       layers.filter((l) => !isCesiumSupportedLayerType(l)).map((l) => l.id),
-      ["p", "z", "a"],
+      ["p", "a"],
     );
   });
 
@@ -1508,13 +1767,205 @@ describe("CesiumLayerSync", () => {
     assert.ok(ds, "dataSource should be added");
     const poly = ds.entities.values[0]?.polygon;
     assert.ok(poly, "polygon should be present");
-    // height = 10 * 2 + 5 = 25
-    assert.equal(poly.extrudedHeight.value, 25);
+    // As on the 2D map the height is the roof altitude: 10 * 2 = 20, above
+    // the 5 m base (not 10 * 2 + 5).
+    assert.equal(poly.extrudedHeight.value, 20);
     assert.equal(poly.height.value, 5);
     assert.equal(poly.heightReference.value, 2);
     assert.equal(poly.extrudedHeightReference.value, 2);
     assert.equal(poly.material.color.css, "#ff0000");
     assert.equal(poly.material.color.alpha, 0.9);
+  });
+
+  it("scales the height property when the height expression throws", async () => {
+    const sync = newSync(f);
+    const layer = mkLayer({
+      id: "throwing-height",
+      type: "geojson",
+      geojson: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            id: "b1",
+            // `to-number` of "abc" throws at evaluation time.
+            properties: { height: 10, label: "abc" },
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [0, 0],
+                  [1, 0],
+                  [1, 1],
+                  [0, 0],
+                ],
+              ],
+            },
+          },
+        ],
+      },
+      style: {
+        extrusionEnabled: true,
+        extrusionHeightProperty: "height",
+        extrusionHeightScale: 2,
+        extrusionAdvancedStyleEnabled: true,
+        extrusionHeightExpression: '["to-number", ["get", "label"]]',
+      },
+    });
+
+    sync.sync([layer]);
+    await f.flush();
+
+    const ds = f.calls.dataSourcesAdded[0] as {
+      entities: { values: Array<{ polygon: { extrudedHeight: { value: number } } }> };
+    };
+    assert.equal(ds.entities.values[0].polygon.extrudedHeight.value, 20);
+  });
+
+  it("puts each roof a floor height above its base", async () => {
+    const sync = newSync(f);
+    const floor = (id: string, level: number) => ({
+      type: "Feature" as const,
+      id,
+      properties: { level, height: 99 },
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 0],
+          ],
+        ],
+      },
+    });
+    const layer = mkLayer({
+      id: "floor-height",
+      type: "geojson",
+      geojson: { type: "FeatureCollection", features: [floor("b", -1), floor("f1", 1)] },
+      style: {
+        extrusionEnabled: true,
+        extrusionHeightProperty: "height",
+        extrusionBase: 2,
+        extrusionBaseProperty: "level",
+        extrusionBaseScale: 5,
+        extrusionFloorHeight: 4,
+      },
+    });
+
+    sync.sync([layer]);
+    await f.flush();
+
+    const ds = f.calls.dataSourcesAdded[0] as {
+      entities: {
+        values: Array<{
+          polygon: { extrudedHeight: { value: number }; height: { value: number } };
+        }>;
+      };
+    };
+    assert.deepEqual(
+      ds.entities.values.map((e) => [e.polygon.height.value, e.polygon.extrudedHeight.value]),
+      [
+        [0, 4],
+        [7, 11],
+      ],
+    );
+  });
+
+  it("falls back to the flat base when the base expression throws", async () => {
+    const sync = newSync(f);
+    const layer = mkLayer({
+      id: "throwing-base",
+      type: "geojson",
+      geojson: {
+        type: "FeatureCollection",
+        features: [
+          {
+            type: "Feature",
+            id: "b1",
+            properties: { height: 20, level: "mezzanine" },
+            geometry: {
+              type: "Polygon",
+              coordinates: [
+                [
+                  [0, 0],
+                  [1, 0],
+                  [1, 1],
+                  [0, 0],
+                ],
+              ],
+            },
+          },
+        ],
+      },
+      style: {
+        extrusionEnabled: true,
+        extrusionHeightProperty: "height",
+        extrusionBase: 4,
+        extrusionAdvancedStyleEnabled: true,
+        // `to-number` of "mezzanine" throws at evaluation time.
+        extrusionBaseExpression: '["*", ["to-number", ["get", "level"]], 3]',
+      },
+    });
+
+    sync.sync([layer]);
+    await f.flush();
+
+    const ds = f.calls.dataSourcesAdded[0] as {
+      entities: { values: Array<{ polygon: { height: { value: number } } }> };
+    };
+    assert.equal(ds.entities.values[0].polygon.height.value, 4);
+  });
+
+  it("stacks floors from a data-driven extrusion base", async () => {
+    const sync = newSync(f);
+    const floor = (id: string, level: number) => ({
+      type: "Feature" as const,
+      id,
+      properties: { level, top: level * 3.5 + 3 },
+      geometry: {
+        type: "Polygon" as const,
+        coordinates: [
+          [
+            [0, 0],
+            [1, 0],
+            [1, 1],
+            [0, 0],
+          ],
+        ],
+      },
+    });
+    const layer = mkLayer({
+      id: "floors",
+      type: "geojson",
+      geojson: { type: "FeatureCollection", features: [floor("f0", 0), floor("f2", 2)] },
+      style: {
+        extrusionEnabled: true,
+        extrusionHeightProperty: "top",
+        extrusionBaseProperty: "level",
+        extrusionBaseScale: 3.5,
+      },
+    });
+
+    sync.sync([layer]);
+    await f.flush();
+
+    const ds = f.calls.dataSourcesAdded[0] as {
+      entities: {
+        values: Array<{
+          polygon: { extrudedHeight: { value: number }; height: { value: number } };
+        }>;
+      };
+    };
+    const polys = ds.entities.values.map((entity) => entity.polygon);
+    assert.deepEqual(
+      polys.map((p) => [p.height.value, p.extrudedHeight.value]),
+      [
+        [0, 3],
+        [7, 10],
+      ],
+    );
   });
 
   it("evaluates advanced extrusion expressions for height and color", async () => {
@@ -1840,7 +2291,12 @@ describe("CesiumLayerSync", () => {
     // The extrusion path likewise skips height/heightReference on it and, since
     // Cesium reads extrudedHeight as an absolute altitude there, lifts the roof
     // above the ring's own height (100 m + 10 m) rather than extruding down to 10 m.
-    sync.sync([{ ...layer, style: { extrusionEnabled: true, extrusionHeightProperty: "height" } }]);
+    sync.sync([
+      {
+        ...layer,
+        style: { ...layer.style, extrusionEnabled: true, extrusionHeightProperty: "height" },
+      },
+    ]);
     await f.flush();
     const extruded = f.calls.dataSourcesAdded[1] as {
       entities: {

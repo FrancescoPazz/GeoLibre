@@ -1,10 +1,14 @@
 import { encodePolyline, type GeoLibreLayer } from "@geolibre/core";
 import { geojsonToCsv } from "./vector-csv";
 export { formatAttributeValue } from "./vector-csv";
-import type { FeatureCollection } from "geojson";
+import type { FeatureCollection, Geometry } from "geojson";
 import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl";
 import { saveBinaryFileWithFallback, saveTextFileWithFallback } from "./tauri-io";
-import { type BinaryVectorExportFormat, exportBinaryVectorLayer } from "./vector-exporter";
+import {
+  type BinaryVectorExportFormat,
+  type BinaryVectorExportOptions,
+  exportBinaryVectorLayer,
+} from "./vector-exporter";
 
 export { KmlCoordinateError, kmlExportErrorMessage } from "./vector-export-errors";
 
@@ -80,30 +84,6 @@ export function featureExportFileStem(layerName: string, featureId?: string | nu
   return `${stem}_${id}`;
 }
 
-function csvCell(value: unknown): string {
-  return quoteCsvCell(formatAttributeValue(value));
-}
-
-function geojsonToCsv(geojson: FeatureCollection): string {
-  const propertyKeys = new Set<string>();
-  for (const feature of geojson.features) {
-    for (const key of Object.keys(feature.properties ?? {})) {
-      propertyKeys.add(key);
-    }
-  }
-
-  const orderedKeys = Array.from(propertyKeys);
-  const headers = ["feature_id", ...orderedKeys];
-  const rows = geojson.features.map((feature, index) => {
-    const featureId = String(feature.id ?? index);
-    const properties = feature.properties ?? {};
-    const values = [featureId, ...orderedKeys.map((key) => properties[key])];
-    return values.map(csvCell).join(",");
-  });
-
-  return [headers.map(csvCell).join(","), ...rows].join("\n");
-}
-
 function exportFormatLabel(format: BinaryVectorExportFormat): string {
   switch (format) {
     case "geoparquet":
@@ -170,7 +150,7 @@ function shapefileFamily(type: string): ShapefileFamily | null {
  * name, and when the layer mixes geometry types (extra families are dropped to
  * Null shapes). Empty when the layer is fully Shapefile-safe.
  */
-export function shapefileFieldWarnings(geojson: FeatureCollection): string[] {
+export function shapefileFieldWarnings(geojson: FeatureCollection<Geometry | null>): string[] {
   const names = new Set<string>();
   for (const feature of geojson.features) {
     for (const key of Object.keys(feature.properties ?? {})) {
@@ -341,8 +321,9 @@ async function exportBinaryLayer(
   geojson: FeatureCollection,
   baseName: string,
   documentName: string,
+  options: BinaryVectorExportOptions = {},
 ): Promise<string | null> {
-  const result = await exportBinaryVectorLayer(geojson, format, baseName, documentName);
+  const result = await exportBinaryVectorLayer(geojson, format, baseName, documentName, options);
   const label = exportFormatLabel(format);
   const extension = exportFileExtension(format);
   return saveBinaryFileWithFallback(result.data, {
@@ -371,6 +352,7 @@ export async function exportVectorLayer(
   baseName: string,
   documentName = baseName,
   precision = 5,
+  options: BinaryVectorExportOptions = {},
 ): Promise<string | null> {
   if (
     format === "geojson" ||
@@ -381,7 +363,7 @@ export async function exportVectorLayer(
   ) {
     return exportTextLayer(format, geojson, baseName, documentName, precision);
   }
-  return exportBinaryLayer(format, geojson, baseName, documentName);
+  return exportBinaryLayer(format, geojson, baseName, documentName, options);
 }
 
 /**

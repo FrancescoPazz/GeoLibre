@@ -1,12 +1,17 @@
 import {
   DEFAULT_LAYER_STYLE,
   circleRadiusValue,
+  extrusionBaseValue,
   extrusionColorValue,
   extrusionHeightValue,
   heatmapRampColors,
   lineWidthValue,
   mapZoomStepOutputs,
   simpleStyleNumberValue,
+  strokeBlurValue,
+  strokeDashValue,
+  strokeOpacityPaintValue,
+  strokeOpacityValue,
   vectorCircleColorValue,
   vectorFillColorValue,
   vectorFillOpacityValue,
@@ -50,6 +55,74 @@ function layerOpacityForBlend(style: LayerStyle): number {
   return isBlending(style.blendMode) && layerBlendModesSupported() ? LAYER_OPACITY_FOR_BLEND : 1;
 }
 
+/**
+ * Whether a polygon's fill draws its 1px hairline outline in the stroke color.
+ * Only a solid, opaque stroke keeps it: the line layer draws the real outline,
+ * and a hairline under a dashed or translucent one would show through. A
+ * simplestyle layer drops it too, since any feature's own `stroke-opacity` can
+ * make its outline translucent. That is deliberately per layer rather than per
+ * feature: scanning the data for the property would cost a pass over every
+ * feature on each sync, and the line layer draws the outline either way, so
+ * only the hairline under it goes.
+ *
+ * @param style - The layer style.
+ * @returns True when the fill layer should outline polygons in the stroke color.
+ */
+export function fillOutlineDrawn(style: LayerStyle): boolean {
+  return (
+    strokeDashValue(style) === null &&
+    strokeOpacityValue(style) >= 1 &&
+    styleValue(style, "simpleStyleEnabled") !== true
+  );
+}
+
+/**
+ * Paint properties the builders here leave out when the style does not set
+ * them (a solid line's dash, a sharp line's blur, the fill hairline under a
+ * dashed or translucent stroke), by layer type. The builders stay valid style
+ * spec, so their output can go straight to `addLayer`; an update of an
+ * existing layer has to clear a value an earlier style set, which is what
+ * {@link withPaintResets} adds.
+ */
+const RESETTABLE_PAINT: Readonly<Record<string, readonly string[]>> = {
+  line: ["line-dasharray", "line-blur"],
+  fill: ["fill-outline-color"],
+};
+
+/**
+ * Whether a paint property is one the builders may leave out, and so one an
+ * update may reset (see {@link withPaintResets}).
+ *
+ * @param property - A paint property name.
+ * @returns True for `line-dasharray`, `line-blur` and `fill-outline-color`.
+ */
+export function paintBuilderMayReset(property: string): boolean {
+  return Object.values(RESETTABLE_PAINT).some((keys) => keys.includes(property));
+}
+
+/**
+ * A builder's paint for updating an existing layer of `type`: each property
+ * the builder left out gets `null`, the value `setPaintProperty` takes as a
+ * reset, so a dash, blur or hairline an earlier style set is cleared. Not for
+ * `addLayer`, which rejects `null`.
+ *
+ * @param type - The style layer type (`line`, `fill`, ...).
+ * @param paint - The builder's paint.
+ * @returns The paint plus a `null` for each property to reset.
+ */
+export function withPaintResets(
+  type: string,
+  paint: Record<string, unknown>,
+): Record<string, unknown> {
+  const keys = RESETTABLE_PAINT[type];
+  if (!keys) return paint;
+  const resets = Object.fromEntries(
+    keys.filter((key) => !(key in paint)).map((key) => [key, null]),
+  );
+  return { ...paint, ...resets };
+}
+
+/** The fill paint for a layer style, as valid style spec (no `null` values). */
 export function fillPaint(style: LayerStyle, opacity: number) {
   return {
     "fill-color": vectorFillColorValue(style) as PropertyValueSpecification<string>,
@@ -63,7 +136,12 @@ export function fillPaint(style: LayerStyle, opacity: number) {
     // vectorLineColorValue honors simpleStyle's per-feature stroke property; in
     // expression mode it also applies the user's expression to the hairline
     // outline (matching the separate line layer that draws the polygon stroke).
-    "fill-outline-color": vectorLineColorValue(style) as PropertyValueSpecification<string>,
+    // A dashed or translucent stroke leaves the hairline out (MapLibre then
+    // draws the fill's own edge in the fill color), or its solid, opaque edge
+    // would show through the gaps. See withPaintResets for the update path.
+    ...(fillOutlineDrawn(style)
+      ? { "fill-outline-color": vectorLineColorValue(style) as PropertyValueSpecification<string> }
+      : {}),
     // Elects MapLibre's render-to-texture composite so the layer blends as one
     // surface instead of once per overlapping polygon. Always emitted (rather
     // than only while blending) because `ensureLayer` only writes the paint
@@ -87,16 +165,24 @@ export function fillExtrusionPaint(style: LayerStyle, opacity: number) {
     "fill-extrusion-color": extrusionColorPaintValue(style),
     "fill-extrusion-opacity": styleValue(style, "extrusionOpacity") * opacity,
     "fill-extrusion-height": extrusionHeightPaintValue(style),
-    "fill-extrusion-base": styleValue(style, "extrusionBase"),
+    "fill-extrusion-base": extrusionBaseValue(style) as PropertyValueSpecification<number>,
     "fill-extrusion-vertical-gradient": true,
   };
 }
 
+/**
+ * The line paint for a layer style, as valid style spec: a solid line has no
+ * `line-dasharray` and a sharp one no `line-blur` (see withPaintResets).
+ */
 export function linePaint(style: LayerStyle, opacity: number) {
+  const dash = strokeDashValue(style);
+  const blur = strokeBlurValue(style);
   return {
     "line-color": vectorLineColorValue(style) as PropertyValueSpecification<string>,
     "line-width": lineWidthValue(style) as unknown as PropertyValueSpecification<number>,
-    "line-opacity": scaleByOpacity(simpleStyleNumberValue(style, "stroke-opacity", 1), opacity),
+    "line-opacity": scaleByOpacity(strokeOpacityPaintValue(style), opacity),
+    ...(dash ? { "line-dasharray": dash as unknown as PropertyValueSpecification<number[]> } : {}),
+    ...(blur > 0 ? { "line-blur": blur } : {}),
     // See the note on `fill-layer-opacity` in fillPaint.
     "line-layer-opacity": layerOpacityForBlend(style),
   };
@@ -121,10 +207,7 @@ export function circlePaint(style: LayerStyle, opacity: number) {
     // Fade the outline with the layer opacity (and let it be set explicitly)
     // so story playback can fully hide a point instead of leaving a hollow
     // ring, and so the stroke is restored when playback ends (#934).
-    "circle-stroke-opacity": scaleByOpacity(
-      simpleStyleNumberValue(style, "stroke-opacity", 1),
-      opacity,
-    ),
+    "circle-stroke-opacity": scaleByOpacity(strokeOpacityPaintValue(style), opacity),
   };
 }
 
@@ -142,18 +225,81 @@ export function heatmapColorRampExpression(colors: readonly string[]): Expressio
   return expression as ExpressionSpecification;
 }
 
-function heatmapWeight(style: LayerStyle): PropertyValueSpecification<number> {
+/**
+ * The largest positive value of a layer's heatmap weight field, which
+ * {@link heatmapPaint} divides every weight by.
+ *
+ * MapLibre adds a feature's raw weight into the density, and its ramp
+ * saturates once the density reaches 1, so a field such as a city population
+ * (millions) painted the whole surface the top color at any intensity
+ * (GeoLibre#3471). Scaling into 0..1 by the field maximum (QGIS's automatic
+ * "maximum value") makes the heaviest point weigh what an unweighted point
+ * does, leaving intensity to tune the look. Recomputed on every call (one pass
+ * over the features), so an in-place property edit can never leave it stale.
+ *
+ * @param style - The layer style (reads `heatmapWeightProperty`).
+ * @param geojson - The layer's in-memory features, when it has them.
+ * @returns The field maximum, or `null` with no weight field, no in-memory
+ *   features, or no positive value (the raw weight is used then).
+ */
+export function heatmapWeightMax(
+  style: LayerStyle,
+  geojson: { features?: readonly { properties?: Record<string, unknown> | null }[] } | undefined,
+): number | null {
   const property = styleValue(style, "heatmapWeightProperty").trim();
-  return property === ""
-    ? 1
-    : (["max", 0, ["to-number", ["get", property], 0]] as PropertyValueSpecification<number>);
+  const features = geojson?.features;
+  if (property === "" || !Array.isArray(features)) return null;
+  let max = 0;
+  for (const feature of features) {
+    const value = heatmapWeightNumber(feature?.properties?.[property]);
+    if (Number.isFinite(value) && value > max) max = value;
+  }
+  return max > 0 ? max : null;
 }
 
-export function heatmapPaint(style: LayerStyle, opacity: number) {
+/**
+ * A heatmap weight value as MapLibre's `to-number` reads it: numbers,
+ * numeric strings and booleans convert with `Number`; anything else is NaN.
+ * Shared by the field-maximum scan and the ArcGIS weight bake so both agree on
+ * which values count.
+ *
+ * @param raw - A feature property value.
+ * @returns The numeric value, or NaN.
+ */
+export function heatmapWeightNumber(raw: unknown): number {
+  if (typeof raw === "number" || typeof raw === "boolean") return Number(raw);
+  if (typeof raw === "string" && raw.trim() !== "") return Number(raw);
+  return NaN;
+}
+
+function heatmapWeight(
+  style: LayerStyle,
+  weightMax: number | null | undefined,
+): PropertyValueSpecification<number> {
+  const property = styleValue(style, "heatmapWeightProperty").trim();
+  if (property === "") return 1;
+  const weight = ["max", 0, ["to-number", ["get", property], 0]];
+  return (
+    weightMax !== null && weightMax !== undefined && Number.isFinite(weightMax) && weightMax > 0
+      ? ["/", weight, weightMax]
+      : weight
+  ) as PropertyValueSpecification<number>;
+}
+
+/**
+ * The heatmap layer paint.
+ *
+ * @param style - The layer style.
+ * @param opacity - The effective layer opacity.
+ * @param weightMax - The weight field's maximum (see {@link heatmapWeightMax});
+ *   weights are divided by it so they fall in 0..1. Omit to use raw weights.
+ * @returns The `heatmap-*` paint properties.
+ */
+export function heatmapPaint(style: LayerStyle, opacity: number, weightMax?: number | null) {
   return {
     "heatmap-radius": styleValue(style, "heatmapRadius"),
     "heatmap-intensity": styleValue(style, "heatmapIntensity"),
-    "heatmap-weight": heatmapWeight(style),
+    "heatmap-weight": heatmapWeight(style, weightMax),
     "heatmap-opacity": opacity,
     "heatmap-color": heatmapColorRampExpression(heatmapRampColors(style)),
   };
@@ -177,10 +323,7 @@ export function clusterCirclePaint(style: LayerStyle, opacity: number) {
     "circle-stroke-width": styleValue(style, "strokeWidth"),
     // Keep the cluster outline in step with its fill so the layer opacity (and
     // story fades) hide the whole bubble, mirroring {@link circlePaint} (#934).
-    "circle-stroke-opacity": scaleByOpacity(
-      simpleStyleNumberValue(style, "stroke-opacity", 1),
-      opacity,
-    ),
+    "circle-stroke-opacity": scaleByOpacity(strokeOpacityPaintValue(style), opacity),
   };
 }
 

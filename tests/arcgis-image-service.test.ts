@@ -11,6 +11,7 @@ import {
   addArcGISLayer,
   fetchArcGISImageServiceRasterFunctions,
   fetchArcGISMapServiceSublayers,
+  planArcGISMapServiceSublayers,
 } from "../packages/plugins/src/plugins/arcgis-layer";
 
 const MAP_SERVICE_URL = "https://example.com/arcgis/rest/services/Boundaries/MapServer";
@@ -96,7 +97,7 @@ describe("addArcGISLayer (map and image services)", () => {
     app = {
       // Neither service touches the map: both become plain raster layers.
       getMap: () => null,
-      fitBounds: (bounds) => {
+      fitBounds: (bounds: [number, number, number, number]) => {
         fitBoundsCalls.push(bounds);
       },
     } as unknown as GeoLibreAppAPI;
@@ -168,6 +169,57 @@ describe("addArcGISLayer (map and image services)", () => {
     assert.ok(east > -67 && east < -66, `east ${east}`);
     assert.ok(south > 24 && south < 25, `south ${south}`);
     assert.ok(north > 49 && north < 51, `north ${north}`);
+  });
+
+  it("flags an image service whose cache holds raw LERC values", async () => {
+    // A hosted tiled imagery layer: a fused Web Mercator cache of LERC2D
+    // float tiles and no `/exportImage` (capabilities `Image,TilesOnly`).
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image,TilesOnly",
+      singleFusedMapCache: true,
+      tileInfo: { ...CACHED_MAP_SERVICE.tileInfo, format: "LERC2D" },
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    // The ArcGIS renderer reads the flag to draw it with ImageryTileLayer.
+    assert.equal(layer?.metadata.arcgisRawTiles, true);
+    assert.equal(layer?.sourcePath, IMAGE_SERVICE_URL);
+  });
+
+  it("does not flag a raw-LERC image service drawn through a rendering rule", async () => {
+    respondWith({
+      ...IMAGE_SERVICE,
+      singleFusedMapCache: true,
+      tileInfo: { ...CACHED_MAP_SERVICE.tileInfo, format: "LERC2D" },
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+      renderingRule: '{"rasterFunction":"Hillshade"}',
+    });
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.metadata.arcgisRawTiles, undefined);
+  });
+
+  it("does not flag an image service with a rendered tile cache", async () => {
+    respondWith({
+      ...IMAGE_SERVICE,
+      singleFusedMapCache: true,
+      tileInfo: { ...CACHED_MAP_SERVICE.tileInfo, format: "JPGPNG" },
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.metadata.arcgisRawTiles, undefined);
   });
 
   it("uses the tile cache when the service has a standard Web Mercator one", async () => {
@@ -347,6 +399,221 @@ describe("addArcGISLayer (map and image services)", () => {
     assert.equal(useAppStore.getState().layers.length, 0);
   });
 
+  /** A Web Mercator cache tileInfo holding `levels`, with each LOD's scale. */
+  function mercatorCache(levels: number[]) {
+    return {
+      ...CACHED_MAP_SERVICE.tileInfo,
+      format: "JPEG",
+      lods: levels.map((level) => {
+        const resolution = 156543.03392800014 / 2 ** level;
+        return { level, resolution, scale: resolution * (96 / 0.0254) };
+      }),
+    };
+  }
+
+  it("draws an image service through /exportImage when its cache stops short of the sources", async () => {
+    // A mosaic cached only for small scales (overviews, down to ~150 m), with
+    // 1 m source rasters the service draws dynamically below that.
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image,Metadata,Catalog",
+      singleFusedMapCache: true,
+      pixelSizeX: 1,
+      spatialReference: { wkid: 102100, latestWkid: 3857 },
+      tileInfo: mercatorCache([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+
+    // Overzooming the level-10 cache would show the overviews at every zoom.
+    assert.match(tileTemplate(id), /\/ImageServer\/exportImage\?/);
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.metadata.arcgisTiled, false);
+    assert.equal(layer?.source.maxzoom, undefined);
+  });
+
+  it("keeps a short image service cache when the service cannot export", async () => {
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image,TilesOnly",
+      singleFusedMapCache: true,
+      pixelSizeX: 1,
+      spatialReference: { wkid: 102100 },
+      tileInfo: mercatorCache([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    assert.equal(tileTemplate(id), `${IMAGE_SERVICE_URL}/tile/{z}/{y}/{x}`);
+  });
+
+  it("clips an image service cache to the scale range it was built for", async () => {
+    // Like sampleserver6's Toronto service: LODs 0-19 listed, but the cache
+    // holds only the scales between minScale and maxScale (levels 9-18).
+    const levels = Array.from({ length: 20 }, (_, level) => level);
+    const tileInfo = mercatorCache(levels);
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Catalog,Mensuration,Image,Metadata",
+      singleFusedMapCache: true,
+      pixelSizeX: 1,
+      spatialReference: { wkid: 102100 },
+      minScale: tileInfo.lods[9].scale,
+      maxScale: tileInfo.lods[18].scale,
+      tileInfo,
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    // Exportable, yet the cache is kept: it reaches the source resolution, and
+    // its speed is worth more than drawing the service below level 9, where
+    // the cache never answered either.
+    assert.equal(tileTemplate(id), `${IMAGE_SERVICE_URL}/tile/{z}/{y}/{x}`);
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.source.minzoom, 9);
+    assert.equal(layer?.source.maxzoom, 18);
+  });
+
+  it("judges a geographic image service's pixel size in degrees", async () => {
+    // 0.0001 degrees is about 11 m, finer than the level-10 cache (~150 m).
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image",
+      singleFusedMapCache: true,
+      pixelSizeX: 0.0001,
+      spatialReference: { wkid: 4326 },
+      tileInfo: mercatorCache([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    assert.match(tileTemplate(id), /\/exportImage\?/);
+  });
+
+  it("reads a geographic WKID outside the EPSG 4000 block in degrees", async () => {
+    // JGD2011 (6668): 0.01 degrees is about 1.1 km, coarser than the level-10
+    // cache, so the cache reaches the sources. Read as metres it would not.
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image",
+      singleFusedMapCache: true,
+      pixelSizeX: 0.01,
+      spatialReference: { wkid: 6668 },
+      tileInfo: mercatorCache([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    assert.equal(tileTemplate(id), `${IMAGE_SERVICE_URL}/tile/{z}/{y}/{x}`);
+  });
+
+  it("converts a foot-based WKT's pixel size to metres", async () => {
+    // A 1 ft (0.3 m) source under a level-17 cache (~1.2 m, ~0.9 m on the
+    // ground at 40 degrees) is more than twice as fine as the cache.
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image",
+      singleFusedMapCache: true,
+      pixelSizeX: 1,
+      spatialReference: {
+        wkt: 'PROJCS["NAD_1983_StatePlane_Ohio_North_FIPS_3401_Feet",GEOGCS["GCS_North_American_1983",DATUM["D_North_American_1983",SPHEROID["GRS_1980",6378137.0,298.257222101]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic"],UNIT["Foot_US",0.3048006096012192]]',
+      },
+      tileInfo: mercatorCache([12, 13, 14, 15, 16, 17]),
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    assert.match(tileTemplate(id), /\/exportImage\?/);
+  });
+
+  it("reads a foot-based WKT's unit past a trailing AUTHORITY clause", async () => {
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image",
+      singleFusedMapCache: true,
+      pixelSizeX: 1,
+      spatialReference: {
+        wkt: 'PROJCS["NAD83 / Ohio North (ftUS)",GEOGCS["NAD83",DATUM["North_American_Datum_1983",SPHEROID["GRS 1980",6378137,298.257222101]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Lambert_Conformal_Conic_2SP"],UNIT["US survey foot",0.304800609601219],AXIS["Easting",EAST],AXIS["Northing",NORTH],AUTHORITY["EPSG","3734"]]',
+      },
+      tileInfo: mercatorCache([12, 13, 14, 15, 16, 17]),
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    assert.match(tileTemplate(id), /\/exportImage\?/);
+  });
+
+  it("does not send the ArcGIS renderer to a LERC cache that was passed over", async () => {
+    // Exportable, and the LERC cache stops short of the 1 m sources.
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image,Metadata",
+      singleFusedMapCache: true,
+      pixelSizeX: 1,
+      spatialReference: { wkid: 3857 },
+      tileInfo: { ...mercatorCache([0, 1, 2, 3, 4, 5, 6, 7, 8]), format: "LERC2D" },
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    assert.match(tileTemplate(id), /\/exportImage\?/);
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    // An explicit false, so hosted-tiled-imagery host detection cannot flip it back.
+    assert.equal(layer?.metadata.arcgisRawTiles, false);
+  });
+
+  it("keeps a TilesOnly LERC cache in another CRS flagged for the ArcGIS renderer", async () => {
+    // The cache fails the Web Mercator check and the service is TilesOnly, so
+    // the flag keeps the ArcGIS renderer on its ImageryTileLayer. (MapLibre,
+    // which cannot read such a cache, still gets the /exportImage template, as
+    // before this change; that template fails on a TilesOnly service.)
+    respondWith({
+      ...IMAGE_SERVICE,
+      capabilities: "Image,TilesOnly",
+      singleFusedMapCache: true,
+      tileInfo: {
+        ...mercatorCache([0, 1, 2]),
+        format: "LERC2D",
+        spatialReference: { wkid: 32617 },
+      },
+    });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.equal(layer?.metadata.arcgisRawTiles, true);
+  });
+
+  it("records an image service's band names for Identify", async () => {
+    respondWith({ ...IMAGE_SERVICE, bandNames: ["Red", "Green", "Blue"] });
+    const id = await addArcGISLayer(app, {
+      layerType: "image-service",
+      sourceType: "url",
+      url: IMAGE_SERVICE_URL,
+    });
+    const layer = useAppStore.getState().layers.find((l) => l.id === id);
+    assert.deepEqual(layer?.metadata.arcgisBandNames, ["Red", "Green", "Blue"]);
+  });
+
   it("applies an image service rendering rule and skips the cache for it", async () => {
     respondWith({ ...IMAGE_SERVICE, ...CACHED_MAP_SERVICE, name: "Elevation" });
     const id = await addArcGISLayer(app, {
@@ -501,6 +768,172 @@ describe("addArcGISLayer (map and image services)", () => {
       zoomTo: false,
     });
     assert.deepEqual(fitBoundsCalls, []);
+  });
+
+  describe("splitSublayers", () => {
+    /**
+     * A MapServer shaped like a real utility service: top-level leaves (0, 1)
+     * and a group (2) holding a default-visible leaf and a default-hidden one.
+     */
+    const GROUPED_MAP_SERVICE = {
+      ...CACHED_MAP_SERVICE,
+      layers: [
+        { id: 0, name: "Manholes", defaultVisibility: true, subLayerIds: null },
+        { id: 1, name: "Inlets", defaultVisibility: false, subLayerIds: null },
+        { id: 2, name: "Pipes", defaultVisibility: true, subLayerIds: [3, 4] },
+        { id: 3, name: "Trunk mains", defaultVisibility: true, subLayerIds: null },
+        { id: 4, name: "Laterals", defaultVisibility: false, subLayerIds: null },
+      ],
+    };
+
+    it("adds one dynamic layer per top-level sublayer inside a group", async () => {
+      respondWith(GROUPED_MAP_SERVICE);
+      const topId = await addArcGISLayer(app, {
+        layerType: "map-service",
+        sourceType: "url",
+        url: MAP_SERVICE_URL,
+        splitSublayers: true,
+      });
+
+      const { layers, layerGroups } = useAppStore.getState();
+      assert.deepEqual(
+        layers.map((layer) => [layer.name, layer.metadata.arcgisSublayers, layer.visible]),
+        // The store is bottom-to-top, so sublayer 0 (drawn on top) is last.
+        [
+          // A group draws through its default-visible leaves: `show:2` would
+          // also draw the default-hidden Laterals.
+          ["Pipes", "3", true],
+          // Each layer keeps the service's own default visibility.
+          ["Inlets", "1", false],
+          ["Manholes", "0", true],
+        ],
+      );
+      assert.equal(topId, layers[layers.length - 1].id);
+      assert.equal(layerGroups.length, 1);
+      // Named after the service folder, not its generic `mapName` ("Layers").
+      assert.equal(layerGroups[0].name, "Boundaries");
+      assert.ok(layers.every((layer) => layer.groupId === layerGroups[0].id));
+      // Each child draws only its own sublayers, so the cache cannot be used.
+      for (const layer of layers) {
+        const template = tileTemplate(layer.id);
+        assert.match(template, /\/MapServer\/export\?/);
+        assert.ok(template.includes(`layers=show%3A${layer.metadata.arcgisSublayers}`), template);
+      }
+      // The service description is fetched once, not once per sublayer.
+      assert.equal(fetchUrls.length, 1);
+      // One camera move for the whole group.
+      assert.equal(fitBoundsCalls.length, 1);
+    });
+
+    it("draws a group with no default-visible leaf through all of them, hidden", () => {
+      assert.deepEqual(
+        planArcGISMapServiceSublayers([
+          { id: 0, name: "Basins", defaultVisibility: true, subLayerIds: [1, 2] },
+          { id: 1, name: "Basin", defaultVisibility: false },
+          { id: 2, name: "Basin Label", defaultVisibility: false },
+          // A hidden group hides its leaves too.
+          { id: 3, name: "Archive", defaultVisibility: false, subLayerIds: [4] },
+          { id: 4, name: "Old pipes", defaultVisibility: true },
+        ]),
+        [
+          { name: "Basins", sublayers: "1,2", visible: false },
+          { name: "Archive", sublayers: "4", visible: false },
+        ],
+      );
+    });
+
+    it("splits only the selected sublayers when some were chosen", async () => {
+      respondWith(GROUPED_MAP_SERVICE);
+      await addArcGISLayer(app, {
+        layerType: "map-service",
+        sourceType: "url",
+        url: MAP_SERVICE_URL,
+        name: "Stormwater",
+        sublayers: "1,2",
+        splitSublayers: true,
+      });
+      const { layers, layerGroups } = useAppStore.getState();
+      // A selected group layer stays one layer that draws all its leaves.
+      assert.deepEqual(
+        layers.map((layer) => layer.name),
+        ["Pipes", "Inlets"],
+      );
+      // An explicit selection is drawn, whatever the service default says.
+      assert.ok(layers.every((layer) => layer.visible));
+      assert.equal(layerGroups[0].name, "Stormwater");
+    });
+
+    it("stacks a selection in service order, whatever order it was typed in", async () => {
+      respondWith(GROUPED_MAP_SERVICE);
+      await addArcGISLayer(app, {
+        layerType: "map-service",
+        sourceType: "url",
+        url: MAP_SERVICE_URL,
+        sublayers: "2,0",
+        splitSublayers: true,
+      });
+      // Bottom-to-top: Manholes (0) is drawn above Pipes (2), as the service does.
+      assert.deepEqual(
+        useAppStore.getState().layers.map((layer) => layer.name),
+        ["Pipes", "Manholes"],
+      );
+    });
+
+    it("keeps the plan of a service with one top-level layer", async () => {
+      respondWith({
+        ...CACHED_MAP_SERVICE,
+        layers: [
+          { id: 0, name: "Basins", defaultVisibility: true, subLayerIds: [1, 2] },
+          { id: 1, name: "Basin", defaultVisibility: true },
+          { id: 2, name: "Basin Label", defaultVisibility: false },
+        ],
+      });
+      await addArcGISLayer(app, {
+        layerType: "map-service",
+        sourceType: "url",
+        url: MAP_SERVICE_URL,
+        splitSublayers: true,
+      });
+      const { layers, layerGroups } = useAppStore.getState();
+      assert.equal(layerGroups.length, 0);
+      assert.equal(layers.length, 1);
+      // Drawn through its default-visible leaf, not the composite of the service.
+      assert.equal(layers[0].metadata.arcgisSublayers, "1");
+      assert.equal(layers[0].name, "Basins");
+    });
+
+    it("keeps a lone default-hidden top-level layer hidden", async () => {
+      respondWith({
+        ...CACHED_MAP_SERVICE,
+        layers: [{ id: 0, name: "Tide Gauge", defaultVisibility: false }],
+      });
+      await addArcGISLayer(app, {
+        layerType: "map-service",
+        sourceType: "url",
+        url: MAP_SERVICE_URL,
+        splitSublayers: true,
+      });
+      const [layer] = useAppStore.getState().layers;
+      assert.equal(layer.visible, false);
+      assert.equal(layer.metadata.arcgisSublayers, "0");
+    });
+
+    it("adds a single sublayer as a plain layer with no group", async () => {
+      respondWith(GROUPED_MAP_SERVICE);
+      await addArcGISLayer(app, {
+        layerType: "map-service",
+        sourceType: "url",
+        url: MAP_SERVICE_URL,
+        name: "Inlets only",
+        sublayers: "1",
+        splitSublayers: true,
+      });
+      const { layers, layerGroups } = useAppStore.getState();
+      assert.equal(layers.length, 1);
+      assert.equal(layers[0].name, "Inlets only");
+      assert.equal(layers[0].groupId, undefined);
+      assert.equal(layerGroups.length, 0);
+    });
   });
 });
 

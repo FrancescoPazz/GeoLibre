@@ -16,9 +16,16 @@ import {
   serializeProject,
   serializeStoryMapCsv,
   serializeStoryMapJson,
+  shouldZoomToNewLayers,
   useAppStore,
+  type SecondaryMapView,
 } from "@geolibre/core";
 import { geojsonLayer } from "./helpers/layer-fixtures";
+
+/** View a saved layer as a plain record, to probe for keys its type does not declare. */
+function asRecord(value: object): Record<string, unknown> {
+  return value as Record<string, unknown>;
+}
 
 describe("project parsing", () => {
   it("discards session raster URLs on save and on loading older projects", () => {
@@ -57,7 +64,7 @@ describe("project parsing", () => {
       metadata: {},
     });
 
-    assert.equal(saved.layers[0].source.tiles?.[0], tile);
+    assert.equal((saved.layers[0].source.tiles as string[] | undefined)?.[0], tile);
     assert.equal(layer.source.tiles[0], routed);
   });
 
@@ -80,7 +87,7 @@ describe("project parsing", () => {
       metadata: {},
     });
 
-    assert.equal(saved.layers[0].source.tiles?.[0], routed);
+    assert.equal((saved.layers[0].source.tiles as string[] | undefined)?.[0], routed);
   });
 
   it("preserves layer style fields missing from a legacy top-level style", () => {
@@ -272,6 +279,75 @@ describe("project parsing", () => {
     assert.equal(parseProject(JSON.stringify(legacy)).preferences.map.terrainEnabled, false);
   });
 
+  it("round-trips the 3D look: view, terrain, exaggeration and DEM source", () => {
+    // A pitched view with COG terrain must reopen in 3D (NGIS 2026 workshop).
+    const base = createEmptyProject("3D view");
+    const dem = "https://data.source.coop/opengeos/data/workshops/ngis-2026/reno_tahoe_dem.tif";
+    const saved = {
+      ...base,
+      mapView: { center: [-119.8, 39.25] as [number, number], zoom: 10.2, pitch: 55, bearing: -15 },
+      preferences: {
+        ...base.preferences,
+        map: {
+          ...base.preferences.map,
+          terrainEnabled: true,
+          terrainExaggeration: 2,
+          terrainSource: dem,
+        },
+      },
+    };
+    const reloaded = parseProject(serializeProject(saved));
+    assert.equal(reloaded.mapView.pitch, 55);
+    // Bearings are normalized to [0, 360): -15 reads back as 345.
+    assert.equal(reloaded.mapView.bearing, 345);
+    assert.equal(reloaded.preferences.map.terrainEnabled, true);
+    assert.equal(reloaded.preferences.map.terrainExaggeration, 2);
+    assert.equal(reloaded.preferences.map.terrainSource, dem);
+
+    // Older projects and unusable values keep the renderer defaults.
+    assert.equal(base.preferences.map.terrainExaggeration, undefined);
+    assert.equal(base.preferences.map.terrainSource, undefined);
+    const bad = structuredClone(saved) as unknown as {
+      preferences: { map: Record<string, unknown> };
+    };
+    bad.preferences.map.terrainExaggeration = -1;
+    bad.preferences.map.terrainSource = "file:///tmp/dem.tif";
+    const cleaned = parseProject(JSON.stringify(bad));
+    assert.equal(cleaned.preferences.map.terrainExaggeration, undefined);
+    assert.equal(cleaned.preferences.map.terrainSource, undefined);
+  });
+
+  it("round-trips zoom-to-new-layers and keeps it on for legacy projects", () => {
+    const base = createEmptyProject("Auto zoom");
+    assert.equal(base.preferences.map.zoomToNewLayers, true);
+    const disabled = {
+      ...base,
+      preferences: {
+        ...base.preferences,
+        map: { ...base.preferences.map, zoomToNewLayers: false },
+      },
+    };
+    assert.equal(parseProject(serializeProject(disabled)).preferences.map.zoomToNewLayers, false);
+
+    const legacy = structuredClone(base) as unknown as {
+      preferences: { map: Record<string, unknown> };
+    };
+    delete legacy.preferences.map.zoomToNewLayers;
+    assert.equal(parseProject(JSON.stringify(legacy)).preferences.map.zoomToNewLayers, true);
+  });
+
+  it("gates automatic fits on the zoom-to-new-layers preference", () => {
+    const store = useAppStore.getState();
+    const original = store.preferences;
+    try {
+      assert.equal(shouldZoomToNewLayers(), true);
+      store.setPreferences({ ...original, map: { ...original.map, zoomToNewLayers: false } });
+      assert.equal(shouldZoomToNewLayers(), false);
+    } finally {
+      useAppStore.getState().setPreferences(original);
+    }
+  });
+
   it("round-trips the scale unit preference and defaults unknown values to metric", () => {
     const base = createEmptyProject("Scale");
     assert.equal(base.preferences.map.scaleUnit, "metric");
@@ -375,13 +451,13 @@ describe("project parsing", () => {
       preferences: createEmptyProject().preferences,
       metadata: {},
     });
-    const saved = project.layers[0] as Record<string, unknown>;
+    const saved = asRecord(project.layers[0]);
     assert.ok(!("timeFilter" in saved), "timeFilter must not be saved");
     assert.ok(!("embedFilter" in saved), "embedFilter must not be saved");
     // Everything else about the layer survives.
     assert.equal(saved.id, "roads");
 
-    const reparsed = parseProject(serializeProject(project)).layers[0] as Record<string, unknown>;
+    const reparsed = asRecord(parseProject(serializeProject(project)).layers[0]);
     assert.ok(!("embedFilter" in reparsed));
   });
 
@@ -417,6 +493,33 @@ describe("project parsing", () => {
     assert.equal(project.layers[0].metadata.feed, "satellites");
   });
 
+  it("leaves session-only layers out of the saved project", () => {
+    const kept = geojsonLayer({ id: "roads" });
+    const sessionOnly = {
+      ...geojsonLayer({ id: "streamed-cloud" }),
+      metadata: { sessionOnly: true },
+    } as unknown as Parameters<typeof projectFromStore>[0]["layers"][number];
+    const project = projectFromStore({
+      projectName: "Session layers",
+      mapView: { center: [0, 0], zoom: 2, bearing: 0, pitch: 0 },
+      basemapStyleUrl: DEFAULT_BASEMAP,
+      basemapVisible: true,
+      basemapOpacity: 1,
+      layers: [kept, sessionOnly],
+      selectedLayerId: "streamed-cloud",
+      preferences: createEmptyProject().preferences,
+      metadata: {},
+    });
+
+    assert.deepEqual(
+      project.layers.map((layer) => layer.id),
+      ["roads"],
+    );
+    assert.ok(!("streamed-cloud" in project.styles), "no style for the skipped layer");
+    // A selection pointing at the skipped layer is not written either.
+    assert.equal(project.selectedLayerId, undefined);
+  });
+
   it("keeps quick filters, which are project state rather than session state", () => {
     // The contrast with the test above is the point: `timeFilter`/`embedFilter`
     // are set at runtime by the Time Slider and the host page, but a quick
@@ -442,7 +545,7 @@ describe("project parsing", () => {
       metadata: {},
     });
 
-    const reparsed = parseProject(serializeProject(project)).layers[0] as Record<string, unknown>;
+    const reparsed = asRecord(parseProject(serializeProject(project)).layers[0]);
     assert.deepEqual(reparsed.quickFilters, quickFilters);
   });
 
@@ -659,6 +762,146 @@ describe("project parsing", () => {
     });
 
     assert.equal(project.layers[0].geojson, undefined);
+  });
+
+  it("saves host WFS layers by reference while retaining live and explicitly embedded data", () => {
+    const featureCollection = {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          properties: { name: "Road" },
+          geometry: { type: "Point" as const, coordinates: [1, 2] as [number, number] },
+        },
+      ],
+    };
+    const layer = geojsonLayer({
+      id: "wfs-reference",
+      name: "WFS",
+      geojson: featureCollection,
+      source: {
+        type: "geojson",
+        url: "https://example.test/wfs?request=GetFeature&bbox=1,2,3,4&count=25000",
+      },
+      metadata: { sourceKind: "wfs-getfeature", featureCount: 1 },
+      connection: {
+        layerId: "wfs-reference",
+        interval: null,
+        lastSyncedAt: "2025-01-01T00:00:00.000Z",
+        lastError: null,
+        onFailure: "keep-last",
+      },
+    });
+    const state = {
+      projectName: "WFS",
+      mapView: { center: [0, 0] as [number, number], zoom: 2, bearing: 0, pitch: 0 },
+      basemapStyleUrl: DEFAULT_BASEMAP,
+      basemapVisible: true,
+      basemapOpacity: 1,
+      layers: [layer],
+      preferences: createEmptyProject().preferences,
+      metadata: {},
+    };
+    const project = projectFromStore(state);
+    assert.ok(layer.geojson);
+    assert.equal(project.layers[0].geojson, undefined);
+    assert.equal(project.layers[0].id, layer.id);
+    assert.equal(project.layers[0].source.url, layer.source.url);
+    assert.deepEqual(project.layers[0].style, layer.style);
+    assert.deepEqual(project.layers[0].connection, layer.connection);
+    const reopened = parseProject(serializeProject(project)).layers[0];
+    assert.equal(reopened.geojson, undefined);
+    assert.equal(new URL(String(reopened.source.url)).searchParams.get("count"), "25000");
+    const embeddedEdit = projectFromStore({
+      ...state,
+      layers: [{ ...layer, source: { type: "geojson" } }],
+    });
+    assert.ok(embeddedEdit.layers[0].geojson);
+    const ordinaryGeoJson = projectFromStore({
+      ...state,
+      layers: [{ ...layer, metadata: {}, source: { type: "geojson" } }],
+    });
+    assert.ok(ordinaryGeoJson.layers[0].geojson);
+  });
+
+  it("keeps the embedded collection across repeated saves of a sanitized WFS reference", () => {
+    const featureCollection = {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          properties: { name: "Road" },
+          geometry: { type: "Point" as const, coordinates: [1, 2] as [number, number] },
+        },
+      ],
+    };
+    const state = {
+      projectName: "Credentialed WFS",
+      mapView: { center: [0, 0] as [number, number], zoom: 2, bearing: 0, pitch: 0 },
+      basemapStyleUrl: DEFAULT_BASEMAP,
+      basemapVisible: true,
+      basemapOpacity: 1,
+      layers: [
+        geojsonLayer({
+          id: "wfs-credentialed",
+          name: "Credentialed WFS",
+          geojson: featureCollection,
+          source: { type: "geojson", url: "https://example.test/wfs?request=GetFeature&token=abc" },
+          metadata: { sourceKind: "wfs-getfeature", featureCount: 1 },
+        }),
+      ],
+      preferences: createEmptyProject().preferences,
+      metadata: {},
+    };
+    const first = parseProject(serializeProject(projectFromStore(state))).layers[0];
+    assert.equal(first.source.url, "https://example.test/wfs?request=GetFeature");
+    assert.equal(first.metadata.wfsCredentialsRedacted, true);
+    assert.deepEqual(first.geojson, featureCollection);
+
+    // Reopening gives a credential-free reference that can no longer fetch these
+    // features, so the next save must not drop the embedded collection.
+    const second = parseProject(serializeProject(projectFromStore({ ...state, layers: [first] })))
+      .layers[0];
+    assert.equal(second.source.url, "https://example.test/wfs?request=GetFeature");
+    assert.deepEqual(second.geojson, featureCollection);
+  });
+
+  it("preserves edited host WFS geometry as authoritative embedded data", () => {
+    const editedGeojson = {
+      type: "FeatureCollection" as const,
+      features: [
+        {
+          type: "Feature" as const,
+          properties: { name: "Edited road" },
+          geometry: { type: "Point" as const, coordinates: [3, 4] as [number, number] },
+        },
+      ],
+    };
+    const layer = geojsonLayer({
+      id: "wfs-geometry-edited",
+      name: "Edited WFS",
+      geojson: editedGeojson,
+      source: { type: "geojson", url: "https://example.test/wfs?request=GetFeature" },
+      metadata: { sourceKind: "wfs-getfeature", geometryEdited: true },
+    });
+    const project = projectFromStore({
+      projectName: "Edited WFS",
+      mapView: { center: [0, 0], zoom: 2, bearing: 0, pitch: 0 },
+      basemapStyleUrl: DEFAULT_BASEMAP,
+      basemapVisible: true,
+      basemapOpacity: 1,
+      layers: [layer],
+      preferences: createEmptyProject().preferences,
+      metadata: {},
+    });
+    const saved = parseProject(serializeProject(project));
+    const savedLayer = saved.layers[0];
+
+    assert.equal(layer.source.url, "https://example.test/wfs?request=GetFeature");
+    assert.equal(savedLayer.source.url, undefined);
+    assert.deepEqual(savedLayer.geojson, editedGeojson);
+    assert.equal(savedLayer.metadata.geometryEdited, undefined);
+    assert.deepEqual(parseProject(serializeProject(saved)).layers[0].geojson, editedGeojson);
   });
 
   it("keeps geojson for external native layers without a restorable source URL", () => {
@@ -946,7 +1189,7 @@ describe("multi-map grid persistence", () => {
   });
 
   it("round-trips a 2x2 grid with per-pane layer visibility and labels", () => {
-    const secondaryMapViews = [
+    const secondaryMapViews: SecondaryMapView[] = [
       {
         id: "pane-1",
         view: { center: [10, 20], zoom: 5, bearing: 0, pitch: 0 },
@@ -987,7 +1230,7 @@ describe("multi-map grid persistence", () => {
   });
 
   it("round-trips a secondary pane's 3D-globe viewKind", () => {
-    const secondaryMapViews = [
+    const secondaryMapViews: SecondaryMapView[] = [
       {
         id: "globe",
         view: { center: [0, 0], zoom: 2, bearing: 0, pitch: 0 },
@@ -1577,6 +1820,20 @@ describe("story map import/export", () => {
     assert.equal(restored.title, "Kept Title");
     assert.equal(restored.chapters.length, 5);
     assert.deepEqual(restored.chapters[0].location.center, sample.chapters[0].location.center);
+  });
+
+  it("writes an absent pitch or bearing as an empty CSV cell", () => {
+    const sample = createSampleStoryMap();
+    const [first] = sample.chapters;
+    const chapter = { ...first, location: { center: first.location.center, zoom: 4 } };
+    const csv = serializeStoryMapCsv({ ...sample, chapters: [chapter] });
+    assert.ok(!csv.includes("undefined"), csv);
+    const restored = parseStoryMapCsv(csv, null);
+    assert.equal(restored.chapters[0].location.zoom, 4);
+    // Import fills an empty cell with 0, the same as loading a project file
+    // whose chapter omits them (see StoryChapterLocation).
+    assert.equal(restored.chapters[0].location.pitch, 0);
+    assert.equal(restored.chapters[0].location.bearing, 0);
   });
 
   it("imports hand-authored CSV with reordered columns and missing ids", () => {

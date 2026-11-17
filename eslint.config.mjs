@@ -10,9 +10,10 @@
 // you fix warnings, lower the limit in package.json to the new count in the
 // same PR (the lint output prints it). Never raise it to make a PR pass; fix
 // the new warning or disable it on that line with a reason.
+import jsxA11y from "eslint-plugin-jsx-a11y";
 import reactHooks from "eslint-plugin-react-hooks";
 import tseslint from "typescript-eslint";
-import local from "./eslint-rules/no-physical-tailwind.mjs";
+import local from "./eslint-rules/index.mjs";
 
 // Source compiled into the app, the packages and the workers. Type-aware rules
 // run only here: each file is checked against the tsconfig.json nearest to it
@@ -77,10 +78,66 @@ export default [
     },
   },
   {
+    // Accessibility: an icon-only control needs an accessible name, and a
+    // click handler on a plain element needs a role and keyboard support.
+    // eslint-plugin-jsx-a11y 6.10 declares ESLint <= 9 as a peer; it runs
+    // under ESLint 10, and the root package.json `overrides` entry points its
+    // peer at the installed ESLint.
+    files: ["apps/**/*.{tsx,jsx}", "packages/**/*.{tsx,jsx}"],
+    plugins: { "jsx-a11y": jsxA11y },
+    rules: {
+      // Form fields are labelled by a wrapping <label> or `htmlFor`, which this
+      // rule cannot see, so they are ignored here (the plugin's recommended
+      // ignoreElements); it targets unlabelled buttons, links and ARIA controls.
+      "jsx-a11y/control-has-associated-label": [
+        "warn",
+        {
+          ignoreElements: ["audio", "canvas", "embed", "input", "textarea", "tr", "video"],
+          ignoreRoles: [
+            "grid",
+            "listbox",
+            "menu",
+            "menubar",
+            "radiogroup",
+            "row",
+            "tablist",
+            "toolbar",
+            "tree",
+            "treegrid",
+          ],
+          includeRoles: ["alert", "dialog"],
+          depth: 7,
+        },
+      ],
+      "jsx-a11y/no-static-element-interactions": "warn",
+    },
+  },
+  {
     // The UI mirrors for right-to-left locales; see docs/i18n.md.
     files: ["apps/**/*.{ts,tsx,jsx}", "packages/**/*.{ts,tsx,jsx}"],
     rules: {
       "local/no-physical-tailwind": "warn",
+    },
+  },
+  {
+    // The map engines in @geolibre/map share code only through neutral
+    // modules; see eslint-rules/no-cross-engine-imports.mjs for which files
+    // belong to which engine. An error, not a ratcheted warning: the boundary
+    // has no exceptions, and a warning could hide behind an unrelated fix.
+    files: ["packages/map/src/**/*.{ts,tsx}"],
+    rules: {
+      "local/no-cross-engine-imports": "error",
+    },
+  },
+  {
+    // UI and plugins gate on MapEngineCapabilities, not on the renderer's name;
+    // see eslint-rules/no-renderer-kind-checks.mjs. packages/map hosts the
+    // engines and is where a name legitimately maps to behaviour. An error, so
+    // a new check either uses a capability or states why it is about the kind.
+    files: ["apps/*/src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"],
+    ignores: ["packages/map/**"],
+    rules: {
+      "local/no-renderer-kind-checks": "error",
     },
   },
   {

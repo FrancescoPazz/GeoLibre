@@ -3,18 +3,24 @@ import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useCallback, useState } from "react";
 import { DesktopShell } from "./components/layout/DesktopShell";
+import { NotificationRegion } from "./components/layout/NotificationRegion";
 import { OnboardingDialog } from "./components/layout/OnboardingDialog";
+import { RegionalBasemapPrompt } from "./components/layout/RegionalBasemapPrompt";
 import { UpdateNotificationModal } from "./components/layout/UpdateNotificationModal";
 import { useDesktopSettingsPersistence } from "./hooks/useDesktopSettings";
+import "./lib/s3-signer-setup";
 import { useLayoutOptions } from "./hooks/useLayoutOptions";
+import { useMapCrsUrl } from "./hooks/useMapCrsUrl";
 import { useProjectUrlLoader } from "./hooks/useProjectUrlLoader";
 import { useDataUrlLoader } from "./hooks/useDataUrlLoader";
+import { useStacUrlLoader } from "./hooks/useStacUrlLoader";
 import { useBeforeUnloadGuard } from "./hooks/useBeforeUnloadGuard";
 import { useRecentProjectsPersistence } from "./hooks/useRecentProjectsPersistence";
 import { useLayerLibraryPersistence } from "./hooks/useLayerLibraryPersistence";
 import { useLastBasemapPersistence } from "./hooks/useLastBasemapPersistence";
 import { useLastRendererPersistence } from "./hooks/useLastRendererPersistence";
 import { useStyleLibraryPersistence } from "./hooks/useStyleLibraryPersistence";
+import { useStartupLayerStyles } from "./hooks/useStartupLayerStyles";
 import { useTemplateLibraryPersistence } from "./hooks/useTemplateLibraryPersistence";
 import { useRuntimeEnvironmentVariables } from "./hooks/useRuntimeEnvironmentVariables";
 import { useStartupUpdateCheck } from "./hooks/useStartupUpdateCheck";
@@ -48,15 +54,18 @@ export default function App() {
   }, []);
   const projectUrlLoadState = useProjectUrlLoader();
   const dataUrlLoadState = useDataUrlLoader(mapAppAPI);
+  useStacUrlLoader(mapAppAPI, layoutOptions.viewer);
   const { showOnboarding, dismissOnboarding } = useUiProfileBootstrap();
   const { pending: pendingUpdate, remindLater, skipVersion } = useStartupUpdateCheck();
   useDesktopSettingsPersistence();
   useThemeScheme();
   useDocumentBranding();
   useRecentProjectsPersistence();
-  const { warning: startupProjectWarning, restoring: restoringStartupProject } =
+  const { restoring: restoringStartupProject, settled: startupProjectSettled } =
     useStartupProject();
+  useMapCrsUrl();
   useStyleLibraryPersistence();
+  useStartupLayerStyles();
   useLayerLibraryPersistence();
   useTemplateLibraryPersistence();
   useDeploymentGeocoderDefault();
@@ -84,27 +93,26 @@ export default function App() {
             layoutOptions={layoutOptions}
             projectUrlLoadState={projectUrlLoadState}
             dataUrlLoadState={dataUrlLoadState}
+            startupProjectSettled={startupProjectSettled}
             mapAppAPI={mapAppAPI}
             themeMode={themeMode}
             onToggleThemeMode={toggleThemeMode}
             onMapReady={handleMapReady}
           />
           <OnboardingDialog open={showOnboarding} onClose={dismissOnboarding} />
+          {/* Asks before an opened project's regional basemap (tiles from
+              mainland China) loads; the default basemap shows meanwhile. */}
+          <RegionalBasemapPrompt />
         </>
       )}
+      {/* Mounted once, outside the startup-restore branch, so a failure raised
+          while the shell is unmounted still reaches the user. */}
+      <NotificationRegion />
       <UpdateNotificationModal
         pending={pendingUpdate}
         onRemindLater={remindLater}
         onSkipVersion={skipVersion}
       />
-      {startupProjectWarning ? (
-        <div
-          role="alert"
-          className="fixed bottom-10 left-1/2 z-50 -translate-x-1/2 rounded-md border bg-background px-4 py-3 text-sm shadow-lg"
-        >
-          {startupProjectWarning}
-        </div>
-      ) : null}
     </DirectionProvider>
   );
 }

@@ -7,7 +7,11 @@
 // single-threaded execution (use the sidecar for very large data).
 import type { FeatureCollection } from "geojson";
 import { convertGeoTiffToCog } from "./cog-convert";
-import { isMultipleWhiteboxDatasetParameter, normalizeVectorOutputFormat } from "./sidecar-client";
+import {
+  identifierWords,
+  isMultipleWhiteboxDatasetParameter,
+  normalizeVectorOutputFormat,
+} from "./sidecar-client";
 import { runWasmToolInBackground } from "./wasm-tool-runner";
 import type {
   RunWhiteboxToolRequest,
@@ -217,9 +221,83 @@ function manifestToWhiteboxTool(manifest: ToolManifest): WhiteboxTool {
  * {@link mergeWasmToolManifests} to reconcile these against the catalog.
  */
 export async function listWasmToolManifests(): Promise<WhiteboxTool[]> {
-  const { listManifests } = await loadToolsModule();
-  const manifests = await listManifests();
+  const manifests = (await fetchPrebuiltToolManifests()) ?? (await listRunnerManifests());
   return manifests.map(manifestToWhiteboxTool);
+}
+
+/** Ask the WASM runner itself; downloads and compiles the ~24 MB runner. */
+async function listRunnerManifests(): Promise<ToolManifest[]> {
+  const { listManifests } = await loadToolsModule();
+  return listManifests();
+}
+
+/**
+ * File the build writes the runner's manifests to, next to index.html
+ * (`vite-plugins/wasm-tool-manifests.ts`).
+ */
+export const PREBUILT_TOOL_MANIFESTS_FILE = "whitebox-wasm-manifests.json";
+
+/** The installed geolibre-wasm version, injected by vite.config.ts. */
+declare const __GEOLIBRE_WASM_VERSION__: string | undefined;
+let prebuiltManifestsPromise: Promise<ToolManifest[] | null> | null = null;
+
+/**
+ * Load the build-time copy of the WASM runner's tool manifests.
+ *
+ * Listing them from the runner means downloading and compiling the whole
+ * `geolibre-cli.wasm` first, which held the Processing dialog's tool list on
+ * "Loading…" for ~30 s on a slow link (issue #3472). The build writes the same
+ * manifests to {@link PREBUILT_TOOL_MANIFESTS_FILE}, so the list shows as soon
+ * as that small file arrives and the runner downloads only when a tool runs.
+ *
+ * @param baseUrl Document base to resolve the file against (defaults to
+ *   `document.baseURI`; none outside a browser).
+ * @param fetchImpl The fetch implementation (injectable for tests).
+ * @returns The manifests, or null when the file is absent or malformed (an SPA
+ *   fallback answers a missing file with index.html), so the caller can ask the
+ *   runner instead.
+ */
+export function fetchPrebuiltToolManifests(
+  baseUrl: string | undefined = typeof document !== "undefined" ? document.baseURI : undefined,
+  fetchImpl: typeof fetch = (...args) => fetch(...args),
+): Promise<ToolManifest[] | null> {
+  prebuiltManifestsPromise ??= (async () => {
+    if (!baseUrl) return null;
+    try {
+      const url = new URL(PREBUILT_TOOL_MANIFESTS_FILE, baseUrl);
+      // The file name is not content-hashed; key it by the runner version so a
+      // deploy that bumps geolibre-wasm cannot be answered from a stale cache.
+      if (typeof __GEOLIBRE_WASM_VERSION__ === "string") {
+        url.searchParams.set("v", __GEOLIBRE_WASM_VERSION__);
+      }
+      const response = await fetchImpl(url.href, {
+        headers: { accept: "application/json" },
+      });
+      if (!response.ok) return null;
+      const data: unknown = await response.json();
+      if (!Array.isArray(data) || data.length === 0) return null;
+      // Shape-check what the conversion relies on, so a malformed file falls
+      // back to the runner instead of throwing in manifestToWhiteboxTool.
+      const usable = (item: ToolManifest | null) =>
+        typeof item?.id === "string" &&
+        (item.params == null || Array.isArray(item.params)) &&
+        (item.source == null || typeof item.source === "string");
+      if (!data.every((item) => usable(item as ToolManifest | null))) return null;
+      return data as ToolManifest[];
+    } catch {
+      return null;
+    }
+  })().then((result) => {
+    // Retry on a later call after a miss (a transient network error).
+    if (!result) prebuiltManifestsPromise = null;
+    return result;
+  });
+  return prebuiltManifestsPromise;
+}
+
+/** Forget the memoized prebuilt manifests (tests only). */
+export function resetPrebuiltToolManifestsCache(): void {
+  prebuiltManifestsPromise = null;
 }
 
 /**
@@ -283,10 +361,64 @@ function shouldPreferCatalogKind(
   return wasmKind.endsWith("_in") && /\b(expression|statement)\b/i.test(param.name);
 }
 
+/** Typed dataset output kinds the catalog may supply for a generic WASM output. */
+const CATALOG_DATASET_OUTPUT_KINDS = new Set(["raster_out", "vector_out", "lidar_out"]);
+/**
+ * Name words marking an output that names several files rather than one
+ * dataset. `dir` is deliberately absent: hydrology tools use it for flow
+ * *direction* (`flow_dir_output_path` is one raster), matching
+ * `FOLDER_NAME_WORDS` in the desktop app's `whitebox-param-kind.ts`.
+ */
+const MULTI_FILE_OUTPUT_WORDS = new Set([
+  "prefix",
+  "folder",
+  "folders",
+  "directory",
+  "directories",
+]);
+
+/**
+ * Whether the catalog's typed dataset kind should replace a generic WASM
+ * `file_out` for an output they both declare.
+ *
+ * geolibre-wasm's manifests describe many single-dataset outputs only as
+ * `data_kind: "file"` (`slope`, `wetness_index`, the edge-detection filters and
+ * many more), while the catalog snapshot types the same-named param as
+ * `raster_out`/`vector_out`/`lidar_out`. Left generic, the runner writes the
+ * result to an opaque `.dat` file and hands back raw bytes, so the Processing
+ * dialog offers a download instead of adding a layer, and Model Builder drops
+ * the tool from its palette entirely because it has no typed output port.
+ *
+ * Two shapes stay generic because the output is not one dataset:
+ * - a prefix/directory output (`output_prefix`, `output_directory`) that the
+ *   tool expands into several files;
+ * - a tool whose return type is a list (`principal_component_analysis`), whose
+ *   single `output` is a report with the component rasters written beside it.
+ *
+ * @param param - The WASM manifest param.
+ * @param wasmKind - The kind derived from the WASM manifest param.
+ * @param catalogKind - The kind the catalog declares for the same-named param.
+ * @param returnType - The tool's declared return type, if any.
+ * @returns `true` when the catalog kind should replace the WASM kind.
+ */
+function shouldTypeGenericOutput(
+  param: WhiteboxToolParameter,
+  wasmKind: string,
+  catalogKind: string | undefined,
+  returnType: string | undefined,
+): boolean {
+  if (wasmKind !== "file_out" || !catalogKind) return false;
+  if (!CATALOG_DATASET_OUTPUT_KINDS.has(catalogKind)) return false;
+  if (/^\s*list\[/i.test(returnType ?? "")) return false;
+  return !identifierWords(param.name ?? "").some((word) => MULTI_FILE_OUTPUT_WORDS.has(word));
+}
+
 /**
  * Reconcile one tool's WASM manifest params against the catalog's. The WASM
  * params win (names and set), but a same-named catalog param corrects a WASM
- * kind that mislabels a scalar as a dataset/bool (see {@link shouldPreferCatalogKind}).
+ * kind that mislabels a scalar as a dataset/bool (see {@link shouldPreferCatalogKind})
+ * or leaves a single-dataset output as a generic file (see
+ * {@link shouldTypeGenericOutput}).
  *
  * A manifest that declares **no** params is a metadata gap, not a parameterless
  * tool, so the catalog's params are kept instead. geolibre-wasm ships 138 such
@@ -303,6 +435,7 @@ function shouldPreferCatalogKind(
 function reconcileToolParams(
   catalogParams: WhiteboxToolParameter[] | undefined,
   wasmParams: WhiteboxToolParameter[] | undefined,
+  returnType?: string,
 ): WhiteboxToolParameter[] {
   if (!wasmParams?.length) return catalogParams ?? [];
   const catalogByName = new Map((catalogParams ?? []).map((param) => [param.name, param] as const));
@@ -321,7 +454,10 @@ function reconcileToolParams(
       !isDataset && param.default === undefined && catalogParam.default != null
         ? { ...param, default: catalogParam.default }
         : param;
-    if (shouldPreferCatalogKind(param, wasmKind, catalogKind)) {
+    if (
+      shouldPreferCatalogKind(param, wasmKind, catalogKind) ||
+      shouldTypeGenericOutput(param, wasmKind, catalogKind, returnType)
+    ) {
       return { ...merged, kind: catalogKind as WhiteboxToolParameter["kind"] };
     }
     return merged;
@@ -349,7 +485,7 @@ export function mergeWasmToolManifests(
     // (GeoLibre#1073).
     return {
       ...tool,
-      params: reconcileToolParams(tool.params, wasm.params),
+      params: reconcileToolParams(tool.params, wasm.params, wasm.return_type ?? tool.return_type),
       source: wasm.source ?? tool.source,
     };
   });
@@ -417,6 +553,53 @@ export function fileOutputTargetExtension(
   return outputTextFormatHint(param) ?? "dat";
 }
 
+/** A point cloud file extension the WASM runner reads and writes. */
+export type LidarFileExtension = "las" | "laz" | "copc.laz";
+
+/**
+ * The extension the WASM runner asks a `lidar_out` tool to write. Whitebox
+ * picks its LiDAR writer from the output extension, so a user-typed `.laz`
+ * path gets LASzip-compressed output and `.copc.laz` a Cloud Optimized Point
+ * Cloud; anything else (blank, `.las`, an unrecognized extension) keeps the
+ * uncompressed `.las` default.
+ *
+ * @param requested - The user-chosen output path, if any.
+ * @returns `copc.laz`, `laz` or `las`.
+ */
+export function lidarOutputTargetExtension(requested: unknown): LidarFileExtension {
+  if (typeof requested !== "string") return "las";
+  const path = requested.trim();
+  if (/\.copc\.laz$/i.test(path)) return "copc.laz";
+  return /\.laz$/i.test(path) ? "laz" : "las";
+}
+
+/**
+ * The extension a LAS-family file's bytes call for. Whitebox picks its LiDAR
+ * reader from the file extension alone, so LAZ or COPC bytes written as
+ * `.las` are decoded as uncompressed records and yield garbage points. The
+ * point data format byte (offset 104) has bit 7 set (bit 6 in old LASzip
+ * files) when the records are compressed, and a COPC file's first VLR, right
+ * after the header, has the user id `copc` and record id 1.
+ *
+ * @param bytes - The file bytes (only the header and first VLR are read).
+ * @returns `copc.laz`, `laz` or `las`; `las` when the bytes are not LAS at all.
+ */
+export function lidarBytesExtension(bytes: Uint8Array): LidarFileExtension {
+  if (!isLas(bytes) || bytes.length < 105) return "las";
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // The COPC info VLR: first after the header, user id "copc" (NUL-padded to
+  // 16 bytes), record id 1.
+  const userId = view.getUint16(94, true) + 2;
+  if (
+    bytes.length >= userId + 18 &&
+    String.fromCharCode(...bytes.subarray(userId, userId + 16)).replace(/\0+$/, "") === "copc" &&
+    view.getUint16(userId + 16, true) === 1
+  ) {
+    return "copc.laz";
+  }
+  return (bytes[104] & 0xc0) !== 0 ? "laz" : "las";
+}
+
 /**
  * The text/tabular output format a `file_out` parameter declares through its
  * name, description, or `table` data kind, as a bare extension (`csv`/`html`/
@@ -439,7 +622,10 @@ export function outputTextFormatHint(param: WhiteboxToolParameter): string | nul
   // tolerance of 0.5 recommended") cannot be mistaken for an extension.
   const recommended = (param.description ?? "").match(/\.([a-z][a-z0-9]*)\s+recommended/i);
   if (recommended) return recommended[1].toLowerCase();
-  const hint = `${param.name ?? ""} ${param.description ?? ""} ${param.type ?? ""}`;
+  // Split the name into words first: `_` is a word character, so `\bcsv\b`
+  // alone never matches inside `output_csv`.
+  const nameWords = identifierWords(param.name ?? "").join(" ");
+  const hint = `${nameWords} ${param.description ?? ""} ${param.type ?? ""}`;
   if (/\bcsv\b/i.test(hint)) return "csv";
   if (/\bhtml\b/i.test(hint)) return "html";
   if (/\bjson\b/i.test(hint)) return "json";
@@ -560,8 +746,13 @@ export function isTiff(b: Uint8Array): boolean {
   return magic === 0x2a || magic === 0x2b;
 }
 
-// LAS/LAZ magic: every LAS and LAZ file begins with the signature "LASF".
-function isLas(b: Uint8Array): boolean {
+/**
+ * LAS/LAZ magic: every LAS, LAZ and COPC file begins with the signature "LASF".
+ *
+ * @param b - The candidate file bytes.
+ * @returns `true` if the bytes start with the LAS signature.
+ */
+export function isLas(b: Uint8Array): boolean {
   return b.length >= 4 && b[0] === 0x4c && b[1] === 0x41 && b[2] === 0x53 && b[3] === 0x46;
 }
 
@@ -790,8 +981,11 @@ export async function runWhiteboxToolWasm(request: RunWhiteboxToolRequest): Prom
           `Input "${name}" is not a readable LAS/LAZ file in the browser. Load LAS/LAZ files, or use the sidecar.`,
         );
       }
-      const ext = kind === "lidar_in" ? "las" : kind === "file_in" ? "dat" : "tif";
       const files = byteInputs.map((bytes, index) => {
+        // A LiDAR input is named for its own encoding: Whitebox reads by
+        // extension, so LAZ/COPC bytes named `.las` decode as garbage.
+        const ext =
+          kind === "lidar_in" ? lidarBytesExtension(bytes!) : kind === "file_in" ? "dat" : "tif";
         const file = byteInputs.length === 1 ? `${name}.${ext}` : `${name}_${index + 1}.${ext}`;
         input[file] = bytes!;
         return `/work/${file}`;
@@ -814,6 +1008,15 @@ export async function runWhiteboxToolWasm(request: RunWhiteboxToolRequest): Prom
         });
         args.push(`--${name}=/work/${file}`);
       }
+    } else if (kind === "lidar_out") {
+      // LiDAR outputs come back as raw LAS bytes (e.g. a classified copy of the
+      // input); callers decide whether to load or parse them. The tool picks
+      // its writer from the extension, so honour a user-typed `.laz` (LASzip
+      // compressed) instead of always asking for uncompressed `.las`.
+      const ext = lidarOutputTargetExtension(request.parameters[name]);
+      const file = `${outputBaseName(request.tool_id, name)}.${ext}`;
+      outputs.push({ name, file, kind: "bytes" });
+      args.push(`--${name}=/work/${file}`);
     } else if (kind === "raster_out" || kind === "file_out") {
       // raster_out is always a GeoTIFF. file_out is an opaque output whose
       // format the tool infers from the output *extension* (e.g.

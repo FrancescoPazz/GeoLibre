@@ -17,6 +17,20 @@ export function isGeoLibreProjectFileName(path: string): boolean {
   return name.endsWith(".geolibre") || name.endsWith(".geolibre.json");
 }
 
+/**
+ * Give a project save path a name Open Recent can read back. Desktop reads are
+ * limited to `.geolibre` / `.geolibre.json`, so a name such as
+ * `map.geolibre_bis.json` would save fine and then refuse to reopen. A trailing
+ * `.json` is replaced by `.geolibre.json`; any other name gets it appended.
+ *
+ * @param path - The path chosen in the save dialog.
+ * @returns The path, ending in a recognized GeoLibre project extension.
+ */
+export function ensureGeoLibreProjectExtension(path: string): string {
+  if (isGeoLibreProjectFileName(path)) return path;
+  return `${path.replace(/\.json$/i, "")}.geolibre.json`;
+}
+
 export const SHAPEFILE_SIDECAR_EXTENSIONS = ["dbf", "shx", "prj", "cpg"];
 // SYNC: RESTORABLE_VECTOR_EXTENSIONS in src-tauri/src/lib.rs must list the same
 // extensions, or a format added here would be rejected by the Rust restore
@@ -131,6 +145,50 @@ export function isAbsoluteLocalPath(path: string): boolean {
   return isAbsoluteFilesystemPath(path);
 }
 
+/**
+ * Whether a layer's source path is a GeoJSON file that Save edits to source
+ * file rewrites directly (`write_local_geojson_file`) rather than through the
+ * sidecar: an absolute local `.geojson`/`.json` path that is not a
+ * `.geolibre.json` project file. Mirrors `is_allowed_geojson_write_path` in the
+ * Tauri crate, which re-checks it.
+ *
+ * @param path - The layer's `sourcePath`.
+ * @returns `true` for a directly writable GeoJSON source.
+ */
+export function isGeojsonSourcePath(path: string): boolean {
+  if (!isAbsoluteLocalPath(path) || isGeoLibreProjectFileName(path)) return false;
+  return /\.(geo)?json$/i.test(path);
+}
+
 export function fileBaseName(path: string): string {
   return localFileName(path) || path;
+}
+
+/**
+ * Whether a local path is Windows-style: a drive-letter prefix (`C:\`, `C:/`)
+ * or a UNC prefix (`\\server`). Only these use `\` as a separator; on
+ * Linux/macOS `\` is a legal filename character.
+ *
+ * @param path - The local path to classify.
+ * @returns True for a drive-letter or UNC path.
+ */
+export function isWindowsStylePath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+
+/**
+ * Join a directory path and an entry name with the directory's own separator
+ * style, so a Windows path stays all-backslash while a POSIX directory whose
+ * name contains a literal `\` is still joined with `/`.
+ *
+ * @param dir - The directory path.
+ * @param name - The entry name to append.
+ * @returns The joined path.
+ */
+export function joinLocalPath(dir: string, name: string): string {
+  if (isWindowsStylePath(dir)) {
+    if (/[/\\]$/.test(dir)) return `${dir}${name}`;
+    return `${dir}${dir.includes("\\") ? "\\" : "/"}${name}`;
+  }
+  return dir.endsWith("/") ? `${dir}${name}` : `${dir}/${name}`;
 }

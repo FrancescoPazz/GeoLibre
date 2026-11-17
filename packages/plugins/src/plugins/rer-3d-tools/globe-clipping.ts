@@ -1,4 +1,5 @@
-import type { BoundingSphere, Cartesian3, Cesium3DTileset, Scene } from "@cesium/engine";
+import type { BoundingSphere, Cartesian3 } from "@cesium/core";
+import type { Cesium3DTileset, Scene } from "@cesium/engine";
 import { cesiumIonAssetId, useAppStore, type GeoLibreLayer } from "@geolibre/core";
 import type { CesiumSceneHandle } from "@geolibre/map";
 import type { Feature, Geometry, Position } from "geojson";

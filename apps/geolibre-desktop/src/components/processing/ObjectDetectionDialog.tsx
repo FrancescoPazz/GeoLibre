@@ -1,4 +1,4 @@
-import { useAppStore } from "@geolibre/core";
+import { shouldZoomToNewLayers, useAppStore } from "@geolibre/core";
 import type { MapEngine } from "@geolibre/map";
 import {
   detectObjects,
@@ -31,7 +31,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { clamp } from "../../lib/clamp";
-import { reprojectFeatureCollectionToWgs84 } from "../../lib/duckdb-vector-loader";
+import { uniqueLayerName } from "../../lib/unique-layer-name";
 import { BUILTIN_DETECTION_MODELS, fetchDetectionModel } from "../../lib/detection-models";
 import { readPhotoLocation } from "../../lib/geotagged-photos";
 import {
@@ -96,7 +96,7 @@ function classLabel(names: string[], index: number): string {
  *
  * Each box becomes a rectangular polygon in the raster's CRS (via the
  * geotransform), tagged with its class label and score, and a legacy `crs`
- * member so {@link reprojectFeatureCollectionToWgs84} can lift it to WGS84.
+ * member so `reprojectFeatureCollectionToWgs84` can lift it to WGS84.
  *
  * @param detections Boxes in source raster pixels.
  * @param raster The source raster (for the geotransform + CRS).
@@ -392,7 +392,9 @@ export function ObjectDetectionDialog({
         .filter(Boolean);
       const fc = photoLocation
         ? detectionsToPhotoFeatureCollection(detections, photoLocation, names, imageName)
-        : await reprojectFeatureCollectionToWgs84(
+        : await (
+            await import("../../lib/duckdb-vector-loader")
+          ).reprojectFeatureCollectionToWgs84(
             detectionsToFeatureCollection(detections, raster, names),
           );
       // Split by class so each class becomes its own layer (issue #902:
@@ -406,10 +408,16 @@ export function ObjectDetectionDialog({
       }
 
       for (const [cls, features] of byClass) {
-        addGeoJsonLayer(t("objectDetection.layerName", { class: cls }), {
-          type: "FeatureCollection",
-          features,
-        });
+        addGeoJsonLayer(
+          uniqueLayerName(
+            t("objectDetection.layerName", { class: cls }),
+            useAppStore.getState().layers,
+          ),
+          {
+            type: "FeatureCollection",
+            features,
+          },
+        );
       }
       // Fit to the union of every detected box across all classes, not just the
       // first class's layer, so no class's detections end up off-screen.
@@ -435,7 +443,7 @@ export function ObjectDetectionDialog({
           }
         }
       }
-      if (Number.isFinite(minX)) {
+      if (Number.isFinite(minX) && shouldZoomToNewLayers()) {
         mapControllerRef.current?.fitBounds([minX, minY, maxX, maxY]);
       }
       setResultMessage(

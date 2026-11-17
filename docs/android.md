@@ -28,19 +28,40 @@ Vector tools (Turf.js / in-browser GeoPandas via Pyodide), the SQL Workspace
 Tools that depend on a **local desktop process** are hidden on mobile, because
 Android has no Python sidecar or local helper binaries:
 
-- Processing → GeoLibre Toolbox → **Raster**, **Conversion**, **AI Segmentation**
-  (all need the Python sidecar)
-- Add Data → **PostgreSQL** (served by the local Martin tile server)
+- Processing → GeoLibre Toolbox → **Conversion**, **AI Segmentation**, and the
+  sidecar-backed **Raster** tools (all need the Python sidecar; the Raster
+  submenu keeps only the client-side **Download Global DEM** tool)
+- Add Data → **SQL Server**
 
-These are gated by a user-agent `isMobile()` check, so the Add Data menu and the
-Layer panel's add-data group never offer them. Everything else runs client-side.
+These are gated by a user-agent `isMobile()` check, so the Processing menu, the
+Add Data menu, and the Layer panel's add-data group never offer them. Everything
+else runs client-side.
 
-PostgreSQL has one entry point that check does not cover: the Browser panel
-keeps its **Databases** section on every platform for discovery, so its ＋ still
-opens the PostgreSQL dialog. The dialog gates on `isDesktopRuntime()`
-(`isTauri() && !isMobile()`) rather than on `isTauri()` alone, so on Android it
-shows the "requires GeoLibre Desktop" notice and disables Connect instead of
-calling a sidecar that cannot exist (GeoLibre#2091).
+Add Data → **PostgreSQL** works differently on mobile. The app cannot launch
+the Martin tile server, so the database renders the vector tiles itself
+(`ST_AsMVT`, PostGIS 3.0 or later) and the app fetches them over a direct
+PostgreSQL connection. The database server must therefore be reachable from
+the device's network. Mobile layers are read-only: the editable mode needs the
+desktop app's Python sidecar.
+
+TLS follows libpq's `sslmode`. `prefer` (the default) tries TLS first but
+falls back to a plaintext connection when the server does not offer it; to
+make encryption mandatory, use `require`, `verify-ca` or `verify-full`.
+`require` encrypts without checking the server certificate, `verify-ca`
+checks the chain and `verify-full` also the host name, against the bundled
+public roots or the PEM file named by `sslrootcert`. Connections through PgBouncer and hosted poolers
+work: the 30-second query timeout is set after connecting, not as a startup
+parameter.
+
+The database sources have one entry point that check does not cover: the Browser
+panel keeps its **Databases** section on every platform for discovery, so its ＋
+still opens the connection dialog. The SQL Server dialog gates on
+`isDesktopRuntime()` (`isTauri() && !isMobile()`) rather than on `isTauri()`
+alone, so on Android it shows the "requires GeoLibre Desktop" notice and
+disables Connect instead of calling a helper that cannot exist (GeoLibre#2091).
+The PostgreSQL dialog opens its mobile form instead. Expanding a saved
+PostgreSQL connection in the Browser panel to list its tables still needs the
+desktop app.
 
 ## Toolchain setup (one time)
 
@@ -111,11 +132,19 @@ regression.
 ```bash
 cd apps/geolibre-desktop
 npx tauri android init                          # generate src-tauri/gen/android (once)
+cp -r src-tauri/icons/android/. src-tauri/gen/android/app/src/main/res/
+cp src-tauri/android/MainActivity.kt \
+  src-tauri/gen/android/app/src/main/java/org/geolibre/app/MainActivity.kt
 npx tauri android build --apk --split-per-abi    # release APKs, one per ABI (~40 MB each)
 npx tauri android build --aab                    # universal AAB for Google Play
 ```
 
-- `gen/android` is generated (git-ignored) and regenerated on demand.
+- `gen/android` is generated (git-ignored) and regenerated on demand. After
+  `init`, copy in the GeoLibre launcher icons and `src-tauri/android/MainActivity.kt`
+  (as above; CI does the same). The template's `MainActivity` draws edge-to-edge
+  without insetting the content, so on WebViews that report
+  `env(safe-area-inset-*)` as 0 the toolbar ends up under the status bar and
+  stops taking taps (GeoLibre#3044).
 - Build **release**, not `--debug`: the stripped, size-optimized Cargo profile
   makes each APK ~40 MB; a debug build is ~200 MB (unstripped `.so` with
   debuginfo).

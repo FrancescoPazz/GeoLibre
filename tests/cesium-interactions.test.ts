@@ -4,7 +4,7 @@ import { parseHTML } from "linkedom";
 import { Cartesian2, Event as CesiumEvent, ScreenSpaceEventType } from "@cesium/engine";
 import { useAppStore } from "../packages/core/src/store";
 import { IDENTIFY_ALL_LAYERS_ID } from "../packages/core/src/store";
-import type { GeoLibreLayer } from "../packages/core/src/types";
+import { DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "../packages/core/src/types";
 import { installCesiumInteractions } from "../packages/map/src/cesium-interactions";
 
 const original = {
@@ -72,24 +72,26 @@ function setup(options: { imagePopup?: boolean } = {}) {
     coordinates: [-83.9, 35.9],
     elevation: -12,
   };
-  const layers = [false, true, true].map((click, index): GeoLibreLayer => ({
-    id: String(index),
-    name: `Layer ${index}`,
-    type: "geojson",
-    source: {},
-    metadata: {},
-    visible: true,
-    opacity: 1,
-    style: {},
-    popup: {
-      click,
-      hover: true,
-      titleField: "name",
-      ...(options.imagePopup
-        ? { fields: [{ field: "image", label: "Camera", kind: "image" as const }] }
-        : {}),
-    },
-  }));
+  const layers = [false, true, true].map(
+    (click, index): GeoLibreLayer => ({
+      id: String(index),
+      name: `Layer ${index}`,
+      type: "geojson",
+      source: {},
+      metadata: {},
+      visible: true,
+      opacity: 1,
+      style: { ...DEFAULT_LAYER_STYLE },
+      popup: {
+        click,
+        hover: true,
+        titleField: "name",
+        ...(options.imagePopup
+          ? { fields: [{ field: "image", label: "Camera", kind: "image" as const }] }
+          : {}),
+      },
+    }),
+  );
   useAppStore.setState({
     layers,
     selectedLayerId: null,
@@ -378,4 +380,21 @@ it("clears the hover tooltip when the layer it shows is hidden", () => {
   assert.ok(f.document.querySelector(".geolibre-hover-tooltip"));
   hide("0");
   assert.equal(f.document.querySelector(".geolibre-hover-tooltip"), null);
+});
+
+it("turns hover off immediately and restores the configured layer on demand", () => {
+  const f = setup();
+  useAppStore.setState({ identifyLayerId: null });
+  f.hover();
+  f.flush();
+  assert.ok(f.document.querySelector(".geolibre-hover-tooltip"));
+  useAppStore.getState().setHoverTooltipsEnabled(false);
+  assert.equal(f.document.querySelector(".geolibre-hover-tooltip"), null);
+  f.hover();
+  f.flush();
+  assert.equal(f.document.querySelector(".geolibre-hover-tooltip"), null);
+  useAppStore.getState().setHoverTooltipsEnabled(true);
+  f.hover();
+  f.flush();
+  assert.ok(f.document.querySelector(".geolibre-hover-tooltip"));
 });

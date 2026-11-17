@@ -1,6 +1,8 @@
 import {
   applyProjectToStore,
   clearHistory,
+  DEFAULT_BASEMAP,
+  gateRegionalBasemap,
   serializeProject,
   useAppStore,
   type CollaborationMode,
@@ -16,6 +18,8 @@ import {
   buildCollaborationSnapshot,
   buildProjectEgressSnapshot,
 } from "../lib/build-project-snapshot";
+import { createBasemapEgressTracker } from "../lib/basemap-egress";
+import { notify } from "../lib/notify";
 import { projectChanged } from "../lib/project-broadcast-changed";
 import {
   CollabConnection,
@@ -29,6 +33,7 @@ import {
   participantCanEditLayer,
 } from "../lib/collab-protocol";
 import { mergeInboundCollaborationProject } from "../lib/collaboration-project";
+import { createViewOnlyNotice, notifyLayerLockedRejection } from "../lib/collab-local-edits";
 
 const SNAPSHOT_DEBOUNCE_MS = 250;
 const CURSOR_THROTTLE_MS = 40;
@@ -74,10 +79,16 @@ export function useCollaboration(
   const teardownRef = useRef<(() => void) | null>(null);
   const presenceTeardownRef = useRef<(() => void) | null>(null);
   const lastContentRef = useRef<string | null>(null);
+  // Carries a session regional basemap this deployment blocks back out
+  // unchanged, so this client's edits do not reset it for every other peer.
+  const basemapEgressRef = useRef(createBasemapEgressTracker());
   const revRef = useRef(0);
   const snapshotRequestRef = useRef(0);
   const selfIdRef = useRef<string | null>(null);
   const syncPausedRef = useRef(false);
+  // Set while a peer's snapshot is written, so it is not taken for a local edit.
+  const applyingRemoteRef = useRef(false);
+  const viewOnlyNoticeRef = useRef(createViewOnlyNotice());
   const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingConnectRef = useRef<{
     resolve: () => void;
@@ -152,6 +163,7 @@ export function useCollaboration(
       return;
     }
     if (request !== snapshotRequestRef.current || !canEdit() || syncPausedRef.current) return;
+    project = basemapEgressRef.current.apply(project);
     const content = serializeProject(project);
     if (content === lastContentRef.current) return;
     lastContentRef.current = content;
@@ -170,21 +182,58 @@ export function useCollaboration(
   };
 
   const applyRemoteSnapshot = (project: GeoLibreProject, initial: boolean): void => {
+    applyingRemoteRef.current = true;
+    try {
+      writeRemoteSnapshot(project, initial);
+    } finally {
+      applyingRemoteRef.current = false;
+    }
+  };
+
+  const writeRemoteSnapshot = (project: GeoLibreProject, initial: boolean): void => {
     const state = useAppStore.getState();
     const localView = mapControllerRef.current?.readView() ?? state.mapView;
     const merged = mergeInboundCollaborationProject(project, localView, state.projectPlugins);
+    // A deliberate exception to the regional-basemap prompt: the basemap is
+    // shared state of a session the user chose to join, so it applies without
+    // asking. A deployment block still applies, on the join and on every later
+    // snapshot (see docs/deployment-policy.md#regional-basemaps).
     if (initial) {
       useAppStore.getState().loadProject(merged, null, {
         rememberRecent: false,
         presenting: false,
+        trustBasemap: true,
       });
     } else {
       const applied = applyProjectToStore(merged);
+      const gated = gateRegionalBasemap(
+        applied.basemapStyleUrl,
+        state.regionalBasemapPolicy,
+        DEFAULT_BASEMAP,
+        true,
+      );
+      applied.basemapStyleUrl = gated.styleUrl;
+      // A peer switched the session to a basemap this deployment blocks: say
+      // why this map differs, once per basemap rather than on every snapshot.
+      if (
+        gated.held === "blocked" &&
+        basemapEgressRef.current.withheldStyleUrl() !== merged.basemapStyleUrl
+      ) {
+        notify.info(i18n.t("regionalBasemap.blockedNotice"), {
+          dedupeKey: "regional-basemap-blocked",
+        });
+      }
+      // Keep the layers update and the (deferred) generation bump separate:
+      // bindNetcdfProfileSamplesToProject treats a bump that lands together
+      // with new layers as a project switch and clears the inspected samples.
       useAppStore.setState({ ...applied });
       clearHistory();
       scheduleRestore();
     }
-    lastContentRef.current = serializeProject(buildProjectEgressSnapshot(mapControllerRef));
+    basemapEgressRef.current.noteInbound(merged.basemapStyleUrl);
+    lastContentRef.current = serializeProject(
+      basemapEgressRef.current.apply(buildProjectEgressSnapshot(mapControllerRef)),
+    );
   };
 
   const handleMessage = (message: ServerMessage): void => {
@@ -319,6 +368,10 @@ export function useCollaboration(
           pending.reject(new Error(message.message));
           return;
         }
+        if (message.code === "layer-locked") {
+          notifyLayerLockedRejection(message.message);
+          break;
+        }
         store.setCollaboration({ error: message.message });
         if (message.code === "too-large") syncPausedRef.current = true;
         break;
@@ -346,7 +399,16 @@ export function useCollaboration(
     };
 
     const unsubscribe = useAppStore.subscribe((state, prev) => {
-      if (projectChanged(state, prev)) scheduleSnapshot();
+      // Re-arm the view-only notice when edit rights return, even with no edit.
+      if (state.collaboration !== prev.collaboration && canEdit())
+        viewOnlyNoticeRef.current.reset();
+      if (!projectChanged(state, prev)) return;
+      scheduleSnapshot();
+      viewOnlyNoticeRef.current.onLocalChange({
+        active: state.collaboration.isActive,
+        applyingRemote: applyingRemoteRef.current,
+        canEdit: canEdit(),
+      });
     });
 
     conn.send({
@@ -409,8 +471,10 @@ export function useCollaboration(
   ): Promise<void> => {
     disconnect();
     syncPausedRef.current = false;
+    viewOnlyNoticeRef.current.reset();
     selfIdRef.current = crypto.randomUUID();
     lastContentRef.current = null;
+    basemapEgressRef.current.reset();
     revRef.current = 0;
 
     const normalizedCode = sessionId.trim().toUpperCase();

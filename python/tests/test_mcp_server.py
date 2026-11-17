@@ -22,8 +22,9 @@ from geolibre.mcp.workspace import Workspace, WorkspaceError
 
 mcp = pytest.importorskip("mcp", reason="the mcp SDK is an optional extra")
 
-from mcp.server.mcpserver.exceptions import ToolError  # noqa: E402 - after the skip guard
+from mcp.server.mcpserver.exceptions import ResourceError, ToolError  # noqa: E402
 
+import geolibre.mcp.server as server_module  # noqa: E402 - after the skip guard
 from geolibre.mcp.server import (  # noqa: E402 - after the skip guard
     _reports_its_errors,
     build_server,
@@ -206,7 +207,7 @@ def test_every_tool_reports_its_own_validation_errors(server):
     bare = [
         node.name
         for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.FunctionDef)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and any("server.tool" in ast.unparse(d) for d in node.decorator_list)
     ]
     assert not bare, f"tools registered without the error-reporting wrapper: {bare}"
@@ -216,21 +217,15 @@ def test_every_tool_reports_its_own_validation_errors(server):
     assert "map.txt" in message or "suffix" in message.lower()
 
 
-def test_an_async_tool_is_refused_rather_than_registered_unreported():
-    """A coroutine tool cannot be wrapped, so it is rejected where it is wrapped.
-
-    The wrapper is synchronous: an ``async def`` tool would hand the SDK an
-    unawaited coroutine, and the ``ValueError`` inside it would be raised after
-    the wrapper's ``try`` had exited, putting the tool right back to answering
-    with "Error executing tool <name>". Failing at registration keeps that from
-    reaching a caller unnoticed.
-    """
+def test_an_async_tool_reports_its_validation_error():
+    """The async wrapper awaits work inside the ToolError translation boundary."""
 
     async def make_map():
-        raise ValueError("never reached: the wrapper refuses this function")
+        raise ValueError("async validation rejected")
 
-    with pytest.raises(TypeError, match="async"):
-        _reports_its_errors(make_map)
+    wrapped = _reports_its_errors(make_map)
+    with pytest.raises(ToolError, match="async validation rejected"):
+        asyncio.run(wrapped())
 
 
 def test_create_project_writes_a_file(server, tmp_path):
@@ -424,6 +419,37 @@ def test_add_raster_layer_records_its_source(server, project_path):
     assert described["layers"][0]["name"] == "DEM"
 
 
+def test_add_planetary_computer_layer_writes_a_restorable_layer(server, project_path, tmp_path):
+    result = call(
+        server,
+        "add_planetary_computer_layer",
+        path=project_path,
+        collection="sentinel-2-l2a",
+        datetime="2024-06-01/2024-08-31",
+        max_cloud_cover=10,
+        preset="false-color",
+        bbox=[-123.5, 46.8, -121.0, 48.5],
+    )
+    assert result["layerCount"] == 1
+    saved = json.loads((tmp_path / project_path).read_text(encoding="utf-8"))
+    metadata = saved["layers"][0]["metadata"]
+    assert metadata["sourceKind"] == "planetary-computer-raster"
+    assert metadata["planetaryComputerLayerType"] == "mosaic"
+    assert metadata["presetName"] == "false-color"
+    assert metadata["stacSearchParams"]["datetime"] == "2024-06-01T00:00:00Z/2024-08-31T23:59:59Z"
+    assert metadata["bounds"] == [-123.5, 46.8, -121.0, 48.5]
+
+    error = call_error(
+        server,
+        "add_planetary_computer_layer",
+        path=project_path,
+        collection="sentinel-2-l2a",
+        item="S2_ITEM",
+        datetime="2024-06-01/2024-08-31",
+    )
+    assert "mosaic" in error
+
+
 @pytest.mark.parametrize(
     ("tool", "arguments", "expected_type"),
     [
@@ -440,6 +466,13 @@ def test_add_raster_layer_records_its_source(server, project_path):
             "vector-tiles",
         ),
         ("add_tile_layer", {"url": "https://example.com/{z}/{x}/{y}.png"}, "xyz"),
+        ("add_planetary_computer_layer", {"collection": "sentinel-2-l2a"}, "raster"),
+        (
+            "add_planetary_computer_layer",
+            {"collection": "sentinel-2-l2a", "item": "S2_ITEM", "preset": "ndvi"},
+            "raster",
+        ),
+        ("add_lidar_layer", {"url": "https://example.com/autzen.copc.laz"}, "lidar"),
         ("add_3d_tiles_layer", {"url": "https://example.com/tileset.json"}, "3d-tiles"),
         ("add_3d_tiles_layer", {"ion_asset_id": 96188}, "3d-tiles"),
         ("add_cesium_ion_layer", {"asset_id": 96188}, "3d-tiles"),
@@ -480,6 +513,152 @@ def test_each_layer_tool_adds_a_layer_of_its_type(
     described = call(server, "describe_project", path=project_path)
     assert described["layers"][0]["name"] == "Added"
     assert described["layers"][0]["type"] == expected_type
+
+
+def test_get_point_cloud_annotations_counts_labels_and_lists_boxes(server, project_path, tmp_path):
+    """Summarizes what the app's annotator saved, without echoing every point."""
+    import base64
+    import zlib
+
+    call(server, "add_lidar_layer", path=project_path, name="Autzen", url="https://x/a.laz")
+    saved = json.loads((tmp_path / project_path).read_text())
+    assert saved["layers"][0]["metadata"]["sourceKind"] == "lidar-url"
+    # Edits {0: 6, 1: 6, 2: 2} as the app encodes them (varint delta + class).
+    compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
+    node = compressor.compress(bytes([0, 6, 0, 6, 0, 2])) + compressor.flush()
+    saved.setdefault("plugins", {}).setdefault("settings", {})[
+        "geolibre-point-cloud-annotation"
+    ] = {
+        "version": 1,
+        "sources": [{"url": "https://x/a.laz", "nodes": {"file": base64.b64encode(node).decode()}}],
+        "cuboids": [
+            {
+                "url": "https://x/a.laz",
+                "boxes": [
+                    {"id": 1, "classCode": 6, "center": [0, 0, 1], "size": [2, 2, 2], "yaw": 0}
+                ],
+            }
+        ],
+    }
+    (tmp_path / project_path).write_text(json.dumps(saved))
+    result = call(server, "get_point_cloud_annotations", path=project_path)
+    assert result["labels"] == {"https://x/a.laz": {"6": 2, "2": 1}}
+    assert result["boxes"][0]["class_code"] == 6
+
+    # A signed source URL is reported without its credentials.
+    signed = "https://bucket.example.com/a.laz?X-Amz-Signature=abc&sig=zzz"
+    settings = saved["plugins"]["settings"]["geolibre-point-cloud-annotation"]
+    settings["sources"][0]["url"] = signed
+    settings["cuboids"][0]["url"] = signed
+    settings["vectors"] = [
+        {"url": signed, "items": [{"kind": "keypoint", "classCode": 15, "points": [[0, 0, 0]]}]}
+    ]
+    (tmp_path / project_path).write_text(json.dumps(saved))
+    result = call(server, "get_point_cloud_annotations", path=project_path)
+    assert all("zzz" not in url for url in result["labels"])
+    assert "zzz" not in result["boxes"][0]["url"]
+    assert "zzz" not in result["vectors"][0]["url"]
+
+    # Two signed links to the same cloud merge their counts.
+    settings["sources"].append(
+        {"url": signed.replace("abc", "def"), "nodes": {"file": base64.b64encode(node).decode()}}
+    )
+    (tmp_path / project_path).write_text(json.dumps(saved))
+    result = call(server, "get_point_cloud_annotations", path=project_path)
+    assert list(result["labels"].values()) == [{"6": 4, "2": 2}]
+
+
+def test_set_point_cloud_classes_tool_saves_the_schema(server, project_path, tmp_path):
+    """Custom classes land in the annotator's state and read back with the annotations."""
+    import base64
+    import zlib
+
+    call(server, "add_lidar_layer", path=project_path, name="Autzen", url="https://x/a.laz")
+    result = call(
+        server,
+        "set_point_cloud_classes",
+        path=project_path,
+        classes=[{"code": 64, "name": "Car", "color": "#E11D48"}],
+    )
+    assert result["classes"] == [{"code": 64, "name": "Car", "color": "#e11d48"}]
+    saved = json.loads((tmp_path / project_path).read_text())
+    state = saved["plugins"]["settings"]["geolibre-point-cloud-annotation"]
+    assert state["customClasses"] == result["classes"]
+    # Instance ids (app encoding: varint values) are summarized as point counts.
+    compressor = zlib.compressobj(9, zlib.DEFLATED, -15)
+    node = compressor.compress(bytes([0, 7, 0, 7, 0, 9])) + compressor.flush()
+    state["instances"] = [
+        {"url": "https://x/a.laz", "nodes": {"file": base64.b64encode(node).decode()}}
+    ]
+    (tmp_path / project_path).write_text(json.dumps(saved))
+    read = call(server, "get_point_cloud_annotations", path=project_path)
+    assert read["instances"] == {"https://x/a.laz": {"7": 2, "9": 1}}
+    assert read["vectors"] == []
+    assert read["classes"] == result["classes"]
+    error = call_error(
+        server,
+        "set_point_cloud_classes",
+        path=project_path,
+        classes=[{"code": 3, "name": "Low", "color": "#000000"}],
+    )
+    assert "19-255" in error
+    # A rejected schema leaves the file as it was.
+    assert json.loads((tmp_path / project_path).read_text()) == saved
+
+
+def test_point_cloud_file_tools_prelabel_and_write(server, project_path, tmp_path):
+    """Pre-label a LiDAR layer from a local file, then write the labelled file."""
+    laspy = pytest.importorskip("laspy")
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("whitebox_workflows")
+    xs, ys = np.meshgrid(np.arange(-30.0, 30.0), np.arange(-30.0, 30.0))
+    header = laspy.LasHeader(point_format=6, version="1.4")
+    header.scales = [0.01, 0.01, 0.01]
+    las = laspy.LasData(header)
+    las.x, las.y = xs.ravel() + 500000, ys.ravel() + 4800000
+    las.z = 100 + 0.02 * xs.ravel()
+    las.classification = np.ones(xs.size, dtype=np.uint8)
+    las.write(str(tmp_path / "field.las"))
+    url = "https://x/field.las"
+    call(server, "add_lidar_layer", path=project_path, name="Field", url=url)
+
+    result = call(
+        server, "prelabel_point_cloud", path=project_path, url=url, input_file="field.las"
+    )
+    assert result["relabelled"] > 3000
+    assert set(result["classes"]) == {"2"}
+    saved = call(server, "get_point_cloud_annotations", path=project_path)
+    assert saved["labels"][url] == result["classes"]
+
+    written = call(
+        server,
+        "write_labeled_point_cloud",
+        path=project_path,
+        url=url,
+        input_file="field.las",
+        output_file="labeled.laz",
+    )
+    assert written["points"] == xs.size
+    out = laspy.read(str(tmp_path / "labeled.laz"))
+    assert int((np.asarray(out.classification) == 2).sum()) == result["relabelled"]
+
+    # The URL must be one of the project's LiDAR layers, and the output a new file.
+    assert "No LiDAR layer" in call_error(
+        server,
+        "prelabel_point_cloud",
+        path=project_path,
+        url="https://x/other.las",
+        input_file="field.las",
+    )
+    assert "different file" in call_error(
+        server,
+        "write_labeled_point_cloud",
+        path=project_path,
+        url=url,
+        input_file="field.las",
+        output_file="field.las",
+        overwrite=True,
+    )
 
 
 def test_cesium_ion_tools_persist_the_asset_id(server, project_path, tmp_path):
@@ -572,6 +751,39 @@ def test_set_layer_popup_records_the_popup_and_image_sizes(server, project_path)
     assert result["popup"]["imageHeight"] == 320
 
 
+def test_set_layer_metadata_merges_and_validates(server, project_path):
+    call(server, "add_geojson_layer", path=project_path, name="Cities", data=json.dumps(POINT_FC))
+    result = call(
+        server,
+        "set_layer_metadata",
+        path=project_path,
+        layer="Cities",
+        title="Cities",
+        keywords=["towns"],
+        temporal_start="2020-01-01",
+    )
+    assert result["descriptiveMetadata"] == {
+        "title": "Cities",
+        "keywords": ["towns"],
+        "temporalExtent": {"start": "2020-01-01"},
+    }
+    merged = call(server, "set_layer_metadata", path=project_path, layer="Cities", license="MIT")
+    assert merged["descriptiveMetadata"]["title"] == "Cities"
+    assert merged["descriptiveMetadata"]["license"] == "MIT"
+    # Each temporal bound merges on its own: an end alone keeps the stored start.
+    ended = call(
+        server, "set_layer_metadata", path=project_path, layer="Cities", temporal_end="2020-12-31"
+    )
+    assert ended["descriptiveMetadata"]["temporalExtent"] == {
+        "start": "2020-01-01",
+        "end": "2020-12-31",
+    }
+    message = call_error(
+        server, "set_layer_metadata", path=project_path, layer="Cities", contact={"email": "x"}
+    )
+    assert "email" in message
+
+
 def test_set_layer_popup_tooltip_flags_the_named_fields(server, project_path):
     call(server, "add_geojson_layer", path=project_path, name="Cities", data=json.dumps(POINT_FC))
     result = call(
@@ -654,6 +866,19 @@ def test_add_legend_from_paired_labels_and_colors(server, project_path):
 def test_add_legend_rejects_mismatched_labels_and_colors(server, project_path):
     assert "same length" in call_error(
         server, "add_legend", path=project_path, labels=["a", "b"], colors=["#111"]
+    )
+
+
+def test_set_map_legend_shows_the_symbology_legend(server, project_path):
+    result = call(server, "set_map_legend", path=project_path, title="Cases", position="top-right")
+    assert result["mapLegend"]["title"] == "Cases"
+    assert result["mapLegend"]["panelVisible"] is True
+    assert "map-legend" in call(server, "describe_project", path=project_path)["mapControls"]
+
+
+def test_set_map_legend_rejects_a_bad_position(server, project_path):
+    assert "position must be one of" in call_error(
+        server, "set_map_legend", path=project_path, position="middle"
     )
 
 
@@ -744,7 +969,7 @@ def test_add_ogc_layer_rejects_an_unsupported_crs(server, project_path):
         service="wms",
         endpoint="https://example.com/wms",
         layers="CP.CadastralParcel",
-        crs="EPSG:25833",
+        crs="UTM32",
     )
 
 
@@ -890,3 +1115,130 @@ def test_renderer_tools_persist_pane_kinds(server, tmp_path):
     saved = json.loads(Path(path).read_text())
     assert saved["primaryRenderer"] == "cesium"
     assert saved["secondaryMapViews"][0]["viewKind"] == "cesium"
+
+
+def test_add_spaceborne_lidar_layer_reads_a_workspace_granule(server, project_path, tmp_path):
+    """Add GEDI L4A footprints from a local granule, confined to the workspace."""
+    h5py = pytest.importorskip("h5py")
+    np = pytest.importorskip("numpy")
+    with h5py.File(tmp_path / "GEDI04_A_test.h5", "w") as f:
+        f.attrs["short_name"] = np.bytes_(b"GEDI_L4A")
+        beam = f.create_group("BEAM0101")
+        beam["lat_lowestmode"] = np.array([10.0, 10.001, 10.002])
+        beam["lon_lowestmode"] = np.array([20.0, 20.0, 20.0])
+        beam["delta_time"] = np.array([1.0e8, 1.0e8 + 1, 1.0e8 + 2])
+        beam["agbd"] = np.array([50.0, 60.0, 70.0], dtype=np.float32)
+        beam["l4_quality_flag"] = np.array([1, 0, 1], dtype=np.uint8)
+
+    result = call(
+        server, "add_spaceborne_lidar_layer", path=project_path, input_file="GEDI04_A_test.h5"
+    )
+    assert result["layerName"] == "GEDI_L4A GEDI04_A_test"
+    assert result["footprints"] == {"product": "GEDI_L4A", "total": 3, "matched": 2, "kept": 2}
+    layer = json.loads((tmp_path / project_path).read_text())["layers"][-1]
+    assert layer["metadata"]["sourceKind"] == "spaceborne-lidar"
+    assert [f["properties"]["agbd"] for f in layer["geojson"]["features"]] == [50.0, 70.0]
+
+    outside = call_error(
+        server, "add_spaceborne_lidar_layer", path=project_path, input_file="/etc/passwd"
+    )
+    assert "workspace" in outside.lower() or "outside" in outside.lower()
+
+
+# -- in-chat preview (MCP Apps) -----------------------------------------------
+
+
+def test_show_map_links_ui_resource_and_registers_app_network_tools(server):
+    tools = {tool.name: tool for tool in asyncio.run(server.list_tools())}
+    assert tools["show_map"].model_dump(by_alias=True)["_meta"] == {
+        "ui": {"resourceUri": "ui://geolibre/show-map.html"}
+    }
+    assert tools["get_map_preview"].model_dump(by_alias=True)["_meta"] == {
+        "ui": {"visibility": ["app"]}
+    }
+    assert {"approve_map_origin", "fetch_map_resource", "close_map_preview"} <= set(tools)
+    assert all(
+        tools[name].model_dump(by_alias=True)["_meta"]["ui"]["visibility"] == ["app"]
+        for name in ("approve_map_origin", "fetch_map_resource", "close_map_preview")
+    )
+
+
+def test_show_map_view_resource_csp_has_no_external_domains(server, monkeypatch, tmp_path):
+    view = tmp_path / "view.html"
+    view.write_text("<!doctype html><title>x</title>", encoding="utf-8")
+    monkeypatch.setattr(server_module, "SHOW_MAP_HTML", view)
+    resources = asyncio.run(server.list_resources())
+    resource = next(item for item in resources if str(item.uri) == "ui://geolibre/show-map.html")
+    ui = resource.model_dump(by_alias=True)["_meta"]["ui"]
+    assert ui["csp"]["connectDomains"] == []
+    assert ui["csp"]["resourceDomains"] == []
+
+
+def test_show_map_view_is_an_mcp_app_resource(server, monkeypatch, tmp_path):
+    view = tmp_path / "view.html"
+    view.write_text("<!doctype html><title>x</title>", encoding="utf-8")
+    monkeypatch.setattr(server_module, "SHOW_MAP_HTML", view)
+    [content] = asyncio.run(server.read_resource("ui://geolibre/show-map.html"))
+    assert content.mime_type == "text/html;profile=mcp-app"
+    assert content.content == view.read_text(encoding="utf-8")
+
+
+def test_show_map_view_reports_a_missing_build(server, monkeypatch, tmp_path):
+    monkeypatch.setattr(server_module, "SHOW_MAP_HTML", tmp_path / "missing.html")
+    with pytest.raises(ResourceError):
+        asyncio.run(server.read_resource("ui://geolibre/show-map.html"))
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_show_map_preview_is_consent_gated_and_does_not_modify_project(
+    server,
+    project_path,
+    tmp_path,
+    scheme,
+):
+    call(server, "add_geojson_layer", path=project_path, name="Points", data=json.dumps(POINT_FC))
+    call(
+        server,
+        "add_ogc_layer",
+        path=project_path,
+        name="External WMS",
+        service="wms",
+        endpoint=f"{scheme}://maps.example.com/wms?api_key=SECRET123",
+        layers="demo:roads",
+    )
+    file = tmp_path / project_path
+    before = file.read_bytes()
+
+    summary = call(server, "show_map", path=project_path)
+    preview = call(server, "get_map_preview", path=project_path)
+
+    assert summary["layerCount"] == 2
+    assert "features" not in json.dumps(summary)
+    assert "SECRET123" not in json.dumps(summary)
+    assert preview["previewId"]
+    preview_json = json.dumps(preview)
+    assert f"{scheme}://maps.example.com/wms" in preview_json
+    assert "SECRET123" not in preview_json
+    assert preview["project"]["layers"][0]["geojson"]["features"] == POINT_FC["features"]
+    assert file.read_bytes() == before
+    error = call_error(
+        server,
+        "fetch_map_resource",
+        preview_id=preview["previewId"],
+        grant="unapproved",
+        url=f"{scheme}://maps.example.com/wms",
+    )
+    assert "consent grant" in error
+    assert call(server, "close_map_preview", preview_id=preview["previewId"]) == {"closed": True}
+    assert call(server, "close_map_preview", preview_id=preview["previewId"]) == {"closed": True}
+
+
+@pytest.mark.parametrize("tool", ["show_map", "get_map_preview"])
+def test_show_map_refuses_paths_outside_the_workspace(server, tool):
+    assert "outside this server's workspace" in call_error(server, tool, path="/etc/hosts")
+
+
+@pytest.mark.parametrize("tool", ["show_map", "get_map_preview"])
+def test_show_map_refuses_non_projects(server, tmp_path, tool):
+    (tmp_path / "package.json").write_text('{"name": "x"}', encoding="utf-8")
+    assert "missing version, mapView" in call_error(server, tool, path="package.json")

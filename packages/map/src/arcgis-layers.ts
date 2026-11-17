@@ -6,13 +6,16 @@ import {
   documentLocale,
   DEFAULT_LAYER_STYLE,
   extrusionColorValue,
+  extrusionBaseValue,
   extrusionHeightValue,
   generatorCircleRadiusValue,
+  isAdoptedVectorAwaitingFeatures,
   geojsonHasZCoordinates,
   heatmapRampColors,
   labelFieldTextField,
   normalizeHexColor,
   ruleBasedVisibilityFilter,
+  resolveLayerTileAddress,
   styleValue,
   transformGeojsonElevation,
   type GeoLibreLayer,
@@ -21,12 +24,13 @@ import {
 } from "@geolibre/core";
 import { createExpression, featureFilter } from "@maplibre/maplibre-gl-style-spec";
 import type { Feature, FeatureCollection, Geometry, Position } from "geojson";
-import { createFeatureStyleResolver, type FeatureSymbol } from "./cesium-feature-style";
+import { createFeatureStyleResolver, type FeatureSymbol } from "./feature-style";
 import { KML_ICON_URL_PROPERTY } from "./markers";
-import { compileMapboxLayer } from "./mapbox-layers";
-import { arcgisVectorStyle } from "./arcgis-vector-style";
+import { compileMapboxLayer } from "./gl-style-compiler";
+import { heatmapWeightMax, heatmapWeightNumber } from "./style-mapper";
+import { arcgisVectorStyle } from "./vector-style";
 import { proxyWmsTiles } from "./wms-proxy";
-import { hasRegisteredProtocol, protocolScheme } from "./cesium-protocol-imagery";
+import { hasRegisteredProtocol, protocolScheme } from "./protocol-tiles";
 import {
   isTileTemplate,
   needsTemplateTileLayer,
@@ -48,6 +52,11 @@ import {
   mapboxRenderableMask,
 } from "./derived-geometry";
 import { arcgisLineDecorationSymbol, hasLineDecoration } from "./arcgis-line-decoration";
+import { classifyLayer, hasLayerKindSupport, type SupportedLayerKinds } from "./layer-kind";
+
+// The pure point-on-geometry test both control hosts share; re-exported for
+// the engine and its tests, which have always read it from here.
+export { geometryContainsPoint } from "./geometry-hit";
 
 /**
  * Translate a store layer into what the ArcGIS Maps SDK can draw (issue #2421).
@@ -65,7 +74,7 @@ import { arcgisLineDecorationSymbol, hasLineDecoration } from "./arcgis-line-dec
  * all reach the SDK through that one path, so a new style mode landing in
  * `vector-color.ts` reaches this renderer too.
  *
- * Like `mapbox-layers.ts`, this module is pure — it never imports the SDK —
+ * Like `gl-style-compiler.ts`, this module is pure — it never imports the SDK —
  * and returns a plain, serializable plan that the engine instantiates. That is
  * what makes it unit-testable without a browser or the CDN.
  */
@@ -78,6 +87,11 @@ export const ARCGIS_LABEL_FIELD = "gl__label";
 export const ARCGIS_LABEL_CLASS_FIELD = "gl__lcls";
 /** Extrusion height in metres, read by the 3D renderer's size visual variable. */
 export const ARCGIS_HEIGHT_FIELD = "gl__height";
+/**
+ * Data-driven extrusion base in metres, read by the layer's elevation
+ * expression. Only written when the base varies per feature.
+ */
+export const ARCGIS_BASE_FIELD = "gl__base";
 export const ARCGIS_WEIGHT_FIELD = "gl__weight";
 
 /** The SDK's geometry kinds a GeoJSONLayer can hold; one layer per kind. */
@@ -161,9 +175,16 @@ export interface ArcgisGeoJsonPart {
   patternStyle?: LayerStyle;
   /**
    * How the SDK places the features vertically in a `SceneView`. Set on
-   * extruded polygons so the extrusion starts at the style's base height.
+   * extruded polygons so the extrusion starts at the style's base height: a
+   * flat `offset`, or an Arcade expression reading a per-feature base.
    */
-  elevationInfo?: { mode: "relative-to-ground" | "absolute-height"; offset: number };
+  elevationInfo?:
+    | { mode: "relative-to-ground" | "absolute-height"; offset: number }
+    | {
+        mode: "relative-to-ground";
+        featureExpressionInfo: { expression: string };
+        unit: "meters";
+      };
   hasZ?: boolean;
   featureReduction?: Record<string, unknown>;
   /**
@@ -216,6 +237,7 @@ const ARCGIS_RASTER_PLAN_KINDS: ReadonlySet<ArcgisLayerPlan["kind"]> = new Set([
   "tile-service",
   "map-image",
   "imagery",
+  "imagery-tile",
   "cog",
   "zarr",
   "archive",
@@ -313,6 +335,13 @@ export type ArcgisLayerPlan = ArcgisPlanBase &
     | { kind: "tile-service"; url: string }
     | { kind: "map-image"; url: string }
     | { kind: "imagery"; url: string }
+    /** A tiled imagery layer whose cache holds raw (LERC) pixel values. */
+    | {
+        kind: "imagery-tile";
+        url: string;
+        /** The access token the ArcGIS Layer panel put in the tile template. */
+        token?: string;
+      }
     | {
         kind: "media-image";
         url: string;
@@ -687,59 +716,6 @@ export function featurePassesFilters(
 }
 
 /**
- * Whether `lngLat` is on `geometry`, with `tolerance` in degrees of longitude
- * (already scaled for latitude by the caller) for points and lines. A pure
- * geometric test the engine uses for the synchronous identify, which the SDK
- * can only answer asynchronously.
- */
-export function geometryContainsPoint(
-  geometry: Geometry,
-  lngLat: [number, number],
-  tolerance: number,
-): boolean {
-  const [x, y] = lngLat;
-  const near = (p: Position) => Math.hypot(p[0] - x, p[1] - y) <= tolerance;
-  const nearSegment = (a: Position, b: Position) => {
-    const dx = b[0] - a[0],
-      dy = b[1] - a[1];
-    const length = dx * dx + dy * dy;
-    const t =
-      length === 0 ? 0 : Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / length));
-    return Math.hypot(a[0] + t * dx - x, a[1] + t * dy - y) <= tolerance;
-  };
-  const nearLine = (line: Position[]) => line.some((p, i) => i > 0 && nearSegment(line[i - 1], p));
-  const inRing = (ring: Position[]) => {
-    let inside = false;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const [xi, yi] = ring[i],
-        [xj, yj] = ring[j];
-      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
-    }
-    return inside;
-  };
-  const inPolygon = (rings: Position[][]) =>
-    rings.length > 0 && inRing(rings[0]) && !rings.slice(1).some(inRing);
-  switch (geometry.type) {
-    case "Point":
-      return near(geometry.coordinates);
-    case "MultiPoint":
-      return geometry.coordinates.some(near);
-    case "LineString":
-      return nearLine(geometry.coordinates);
-    case "MultiLineString":
-      return geometry.coordinates.some(nearLine);
-    case "Polygon":
-      return inPolygon(geometry.coordinates);
-    case "MultiPolygon":
-      return geometry.coordinates.some(inPolygon);
-    case "GeometryCollection":
-      return geometry.geometries.some((g) => geometryContainsPoint(g, lngLat, tolerance));
-    default:
-      return false;
-  }
-}
-
-/**
  * Compile the layer's active filters into one predicate, or `null` when the
  * layer has none (or one the style-spec rejects, in which case nothing is
  * filtered rather than everything hidden, matching how MapLibre reports a
@@ -984,9 +960,16 @@ function explodePoints(geometry: Geometry): Geometry[] {
  * rule-based colours, the advanced expressions, and an empty height property
  * (a flat extrusion) behave as on the 2D map. As there, the height is the top
  * of the extrusion and the base its bottom, both in metres above the ground.
+ * A data-driven base (`extrusionBaseValue`, e.g. floors stacked from a level
+ * field) is written per feature to {@link ARCGIS_BASE_FIELD}; a flat one stays
+ * the layer's elevation offset.
  */
 interface ExtrusionReader {
+  /** The flat base, used as the elevation offset when `dataDrivenBase` is false. */
   base: number;
+  /** Whether the base varies per feature (so it is written per feature). */
+  dataDrivenBase: boolean;
+  baseAt(feature: Feature, zoom: number): number;
   zoomDependent: boolean;
   height(feature: Feature, zoom: number): number;
   symbol(feature: Feature, zoom: number): ArcgisSymbolJson;
@@ -1018,18 +1001,41 @@ function featureValue(
 }
 
 function compileExtrusion(style: LayerStyle): ExtrusionReader {
-  const base = Number.isFinite(style.extrusionBase) ? style.extrusionBase : 0;
+  const baseValue = extrusionBaseValue(style);
+  // MapLibre clamps a negative fill-extrusion-base to the ground; so do the
+  // flat and per-feature bases here.
+  const flatBase =
+    typeof baseValue === "number" && Number.isFinite(baseValue) ? Math.max(0, baseValue) : 0;
+  const dataDrivenBase = Array.isArray(baseValue);
   const opacity = Number.isFinite(style.extrusionOpacity) ? style.extrusionOpacity : 0.8;
   const fallbackColor = style.extrusionColor || style.fillColor || "#3b82f6";
   const height = featureValue(extrusionHeightValue(style), "number");
   const color = featureValue(extrusionColorValue(style), "color");
+  const baseReader = featureValue(baseValue, "number");
+  // The compiler asks for a feature's base twice in a row (for its height and
+  // for ARCGIS_BASE_FIELD), so remember the last answer rather than
+  // evaluating the expression again.
+  let lastFeature: Feature | null = null;
+  let lastZoom = Number.NaN;
+  let lastBase = 0;
+  const baseAt = (feature: Feature, zoom: number): number => {
+    if (!dataDrivenBase) return flatBase;
+    if (feature === lastFeature && zoom === lastZoom) return lastBase;
+    const value = Number(baseReader.read(feature, zoom));
+    lastFeature = feature;
+    lastZoom = zoom;
+    lastBase = Number.isFinite(value) ? Math.max(0, value) : 0;
+    return lastBase;
+  };
   return {
-    base,
-    zoomDependent: height.zoomDependent || color.zoomDependent,
+    base: flatBase,
+    dataDrivenBase,
+    baseAt,
+    zoomDependent: height.zoomDependent || color.zoomDependent || baseReader.zoomDependent,
     height(feature, zoom) {
       const value = Number(height.read(feature, zoom));
       // The SDK extrudes by a size above the base; a top below the base is flat.
-      return Math.max(0, (Number.isFinite(value) ? value : 0) - base);
+      return Math.max(0, (Number.isFinite(value) ? value : 0) - baseAt(feature, zoom));
     },
     symbol(feature, zoom) {
       const value = color.read(feature, zoom);
@@ -1048,9 +1054,11 @@ function compileExtrusion(style: LayerStyle): ExtrusionReader {
   };
 }
 
-function heatmapWeight(feature: Feature, style: LayerStyle): number {
+function heatmapWeight(feature: Feature, style: LayerStyle, weightMax: number | null): number {
   const field = style.heatmapWeightProperty.trim();
-  const value = field ? Number(feature.properties?.[field] ?? 0) : 1;
+  // Scaled into 0..1 by the field maximum, as the MapLibre heatmap does (see
+  // `heatmapWeightMax`), so a weight in the millions does not saturate.
+  const value = field ? heatmapWeightNumber(feature.properties?.[field]) / (weightMax ?? 1) : 1;
   const intensity = Number.isFinite(style.heatmapIntensity)
     ? Math.max(0, style.heatmapIntensity)
     : 1;
@@ -1139,6 +1147,7 @@ function compileGeoJson(
   // label class, keyed through the symbol field.
   const textMarkers: Feature[] = [];
   const textColors = new Map<string, string>();
+  const weightMax = style.pointRenderer === "heatmap" ? heatmapWeightMax(style, geojson) : null;
   data.features.forEach((feature, index) => {
     if (!feature.geometry) return;
     if (filter.test && !filter.test(feature, zoom)) return;
@@ -1203,9 +1212,12 @@ function compileGeoJson(
           [ARCGIS_SYMBOL_FIELD]: symbolId,
           [ARCGIS_LABEL_FIELD]: text,
           ...(kind === "point" && style.pointRenderer === "heatmap"
-            ? { [ARCGIS_WEIGHT_FIELD]: heatmapWeight(feature, style) }
+            ? { [ARCGIS_WEIGHT_FIELD]: heatmapWeight(feature, style, weightMax) }
             : {}),
           ...(extruded ? { [ARCGIS_HEIGHT_FIELD]: extrusion.height(feature, zoom) } : {}),
+          ...(extruded && extrusion.dataDrivenBase
+            ? { [ARCGIS_BASE_FIELD]: extrusion.baseAt(feature, zoom) }
+            : {}),
         },
       };
       if (override) overridden.set(out, override);
@@ -1345,7 +1357,15 @@ function compileGeoJson(
               ? { patternStyle: style }
               : {}),
             ...(extruded
-              ? { elevationInfo: { mode: "relative-to-ground" as const, offset: extrusion.base } }
+              ? {
+                  elevationInfo: extrusion.dataDrivenBase
+                    ? {
+                        mode: "relative-to-ground" as const,
+                        featureExpressionInfo: { expression: `$feature.${ARCGIS_BASE_FIELD}` },
+                        unit: "meters" as const,
+                      }
+                    : { mode: "relative-to-ground" as const, offset: extrusion.base },
+                }
               : {}),
             ...(elevated
               ? { hasZ: true, elevationInfo: { mode: "absolute-height" as const, offset: 0 } }
@@ -1772,6 +1792,7 @@ function templateTileSource(
   layer: GeoLibreLayer,
   templates: string[],
   viaProtocol = false,
+  schemeOverride?: "xyz" | "tms",
 ): ArcgisTileTemplateSource | null {
   const { scheme, tileSize, minzoom, maxzoom } = layer.source as {
     scheme?: unknown;
@@ -1779,13 +1800,14 @@ function templateTileSource(
     minzoom?: unknown;
     maxzoom?: unknown;
   };
+  const tileScheme = schemeOverride ?? (scheme === "tms" ? "tms" : "xyz");
   const finite = (value: unknown): value is number =>
     typeof value === "number" && Number.isFinite(value);
   const size = finite(tileSize) && tileSize > 0 ? tileSize : 256;
   // MapLibre's own defaults (0 and 22) change nothing the plain path draws.
   if (
     !viaProtocol &&
-    scheme !== "tms" &&
+    tileScheme !== "tms" &&
     size === 256 &&
     !(finite(minzoom) && minzoom > 0) &&
     !(finite(maxzoom) && maxzoom < 22) &&
@@ -1801,7 +1823,7 @@ function templateTileSource(
   const layerBounds = bounds(layer);
   return {
     templates,
-    scheme: scheme === "tms" ? "tms" : "xyz",
+    scheme: tileScheme,
     tileSize: size,
     minzoom: finite(minzoom) ? Math.max(0, minzoom) : 0,
     maxzoom: finite(maxzoom) ? Math.max(0, maxzoom) : 22,
@@ -1853,9 +1875,6 @@ export function arcgisUnsupportedStyleSettings(
   return settings;
 }
 
-/** Store layer types the engine draws as a raster tile source. */
-const RASTER_TILE_TYPES = new Set(["raster", "wms", "wmts", "xyz"]);
-
 function bounds(layer: GeoLibreLayer): [number, number, number, number] | undefined {
   const value = layer.source.bounds ?? layer.metadata.bounds;
   return Array.isArray(value) && value.length === 4 && value.every((v) => Number.isFinite(v))
@@ -1870,6 +1889,9 @@ function bounds(layer: GeoLibreLayer): [number, number, number, number] | undefi
  * reported as an error.
  */
 export function isArcgisPluginLayer(layer: GeoLibreLayer): boolean {
+  // Its `source.url` may be GeoParquet or GeoPackage; the vector control fills
+  // `geojson` shortly (see isAdoptedVectorAwaitingFeatures).
+  if (isAdoptedVectorAwaitingFeatures(layer)) return true;
   if (layer.metadata.externalNativeLayer !== true) return false;
   if (layer.geojson || (layer.type === "cog" && cogSourceUrl(layer))) return false;
   const { url, urls, tiles, data } = layer.source as {
@@ -1886,13 +1908,53 @@ export function isArcgisPluginLayer(layer: GeoLibreLayer): boolean {
   );
 }
 
+/**
+ * What the ArcGIS engine's kind dispatch does with each layer kind: the
+ * `"native"` kinds go through {@link compileArcgisLayer} (which still rejects
+ * a record whose data it cannot read), and the `"plugin"` kinds are drawn only
+ * by a plugin on the map's deck.gl overlay ({@link isArcgisExternalDeckLayer}),
+ * so they need an engine whose capabilities include `deckOverlay`. The SDK has
+ * no renderer for the `"unsupported"` kinds.
+ */
+export const ARCGIS_SUPPORTED_LAYER_KINDS = Object.freeze({
+  geojson: "native",
+  "raster-tiles": "native",
+  "vector-tiles": "native",
+  arcgis: "native",
+  "tile-archive": "native",
+  zarr: "native",
+  lidar: "plugin",
+  "gaussian-splat": "unsupported",
+  "3d-tiles": "plugin",
+  cog: "native",
+  "vector-file": "unsupported",
+  "duckdb-query": "plugin",
+  "deckgl-viz": "plugin",
+  video: "unsupported",
+  image: "native",
+} as const satisfies SupportedLayerKinds);
+
+/**
+ * Whether a plugin draws the record through the ArcGIS map's deck.gl overlay
+ * (the deckgl-viz plugin, DuckDB query results, and the LiDAR and 3D Tiles
+ * controls' URL layers), so the engine only needs that overlay to exist.
+ */
 function isArcgisExternalDeckLayer(layer: GeoLibreLayer): boolean {
-  return (
-    (layer.type === "deckgl-viz" && layer.metadata.sourceKind === "deckgl-viz") ||
-    (layer.type === "lidar" && layer.metadata.sourceKind === "lidar-url") ||
-    (layer.type === "duckdb-query" && layer.metadata.sourceKind === "duckdb-query") ||
-    (layer.type === "3d-tiles" && layer.metadata.sourceKind === "3d-tiles-url")
-  );
+  const sourceKind = layer.metadata.sourceKind;
+  const kind = classifyLayer(layer);
+  // The other kinds are compiled natively (or rejected by the compiler) from
+  // the record itself.
+  if (!hasLayerKindSupport(ARCGIS_SUPPORTED_LAYER_KINDS, kind, "plugin")) return false;
+  switch (kind) {
+    case "deckgl-viz":
+      return sourceKind === "deckgl-viz";
+    case "lidar":
+      return sourceKind === "lidar-url";
+    case "duckdb-query":
+      return sourceKind === "duckdb-query";
+    case "3d-tiles":
+      return sourceKind === "3d-tiles-url";
+  }
 }
 
 /** Store layers are immutable records, so the answer is memoized per object. */
@@ -1917,6 +1979,53 @@ export function isArcgisSupportedLayer(layer: GeoLibreLayer, deckOverlay = true)
   }
   supportedLayerCache.set(layer, supported);
   return supported;
+}
+
+/**
+ * Whether an ImageServer record is a tiled imagery layer whose cache holds raw
+ * LERC pixel values, which only the SDK's ImageryTileLayer can draw.
+ *
+ * The ArcGIS Layer panel flags it from the service description
+ * (`arcgisRawTiles`). A record without the flag (a hand-written project, or
+ * one saved before the flag existed) is recognized by ArcGIS Online's hosted
+ * tiled imagery host, `tiledimageservices*.arcgis.com`: it hosts only tiled
+ * imagery layers, which are `TilesOnly` (no `/exportImage` for the SDK's
+ * ImageryLayer to call), and ImageryTileLayer draws such a layer whatever its
+ * tile encoding. `arcgisRawTiles: false` opts a record out.
+ *
+ * @param layer - The store layer.
+ * @param serviceUrl - The layer's ImageServer URL.
+ * @returns True when the layer should draw as an ImageryTileLayer.
+ */
+function isArcgisRawImageryTiles(layer: GeoLibreLayer, serviceUrl: string): boolean {
+  // A rendering rule is applied by the service's `/exportImage`, which the
+  // cache-reading ImageryTileLayer cannot honor.
+  if (layer.metadata.arcgisRenderingRule) return false;
+  if (layer.metadata.arcgisRawTiles === true) return true;
+  if (layer.metadata.arcgisRawTiles === false) return false;
+  try {
+    return /^tiledimageservices\d*\.arcgis\.com$/i.test(new URL(serviceUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The `token` query parameter of a tile template, if it has one.
+ *
+ * @param template - A tile URL template, possibly with `{z}`-style tokens.
+ * @returns The token, or undefined.
+ */
+function tileTemplateToken(template: string | undefined): string | undefined {
+  // Read the raw query rather than `URLSearchParams`, which decodes a literal
+  // `+` in a hand-edited, unencoded token as a space.
+  const raw = template ? /[?&]token=([^&#]*)/.exec(template)?.[1] : undefined;
+  if (!raw) return undefined;
+  try {
+    return decodeURIComponent(raw) || undefined;
+  } catch {
+    return raw;
+  }
 }
 
 const ARCGIS_SERVICE = /\/(FeatureServer|MapServer|ImageServer)(?:\/\d+)?\/?(?:\?|$)/i;
@@ -2072,7 +2181,9 @@ export function compileArcgisLayer(
       };
     }
     const kind = /ImageServer/i.test(serviceUrl)
-      ? "imagery"
+      ? isArcgisRawImageryTiles(layer, serviceUrl)
+        ? "imagery-tile"
+        : "imagery"
       : layer.metadata.arcgisTiled === true
         ? "tile-service"
         : "map-image";
@@ -2122,15 +2233,38 @@ export function compileArcgisLayer(
       tileOptions,
     };
   }
+  // An image service added through the ArcGIS Layer panel is a raster
+  // template record; one whose cache is raw LERC data has no template the SDK
+  // could draw, so it is drawn by the service itself. The panel carries a
+  // token in the tile template, which the SDK layer sends with each request.
+  if (
+    layer.metadata.sourceKind === "arcgis-image-service" &&
+    typeof layer.sourcePath === "string" &&
+    ARCGIS_SERVICE.test(layer.sourcePath) &&
+    isArcgisRawImageryTiles(layer, layer.sourcePath)
+  ) {
+    const token = tileTemplateToken(tiles[0]);
+    return {
+      ...base,
+      kind: "imagery-tile",
+      url: layer.sourcePath,
+      ...(token ? { token } : {}),
+    };
+  }
   // A GetMap template naming its layers is a WMS service the SDK can draw
   // natively. Other bounding-box templates typed `wms` (an ArcGIS
   // `/exportImage`, say) are plain image requests, drawn tile by tile below.
-  // WMS tiles go through the dev server's proxy, as on MapLibre.
+  // WMS tiles go through the dev server's proxy, as on MapLibre. The SDK's
+  // WMSLayer builds its own requests from the service URL and cannot be pointed
+  // through that proxy (it wraps the whole template in `?url=`), so a proxied
+  // service is drawn tile by tile below instead.
   const proxied = proxyWmsTiles(layer.type, tiles);
-  if (layer.type === "wms" && tiles.length && isWmsGetMap(tiles[0]))
+  if (layer.type === "wms" && tiles.length && isWmsGetMap(tiles[0]) && proxied[0] === tiles[0])
     return { ...base, kind: "wms", ...wmsLayerFromTemplate(proxied[0]) };
-  if (RASTER_TILE_TYPES.has(layer.type) && (tiles.length || url)) {
-    const templates = proxied.length ? proxied : [url!];
+  if (classifyLayer(layer) === "raster-tiles" && (tiles.length || url)) {
+    const addressed = resolveLayerTileAddress(layer, proxied.length ? proxied : [url!]);
+    const templates = addressed.tiles;
+    const schemeOverride = addressed.scheme;
     // `geolibre-wms://` (the desktop's CORS-exempt WMS fetcher), `cog://` and
     // friends are MapLibre protocol handlers. The template-tile layer asks the
     // registered handler for each tile, as the globe does; a scheme with no
@@ -2140,7 +2274,12 @@ export function compileArcgisLayer(
       throw new Error("MapLibre custom tile protocols are not supported by the ArcGIS renderer");
     const copyright =
       typeof layer.source.attribution === "string" ? { copyright: layer.source.attribution } : {};
-    const tileSource = templateTileSource(layer, templates, protocols.some(Boolean));
+    const tileSource = templateTileSource(
+      layer,
+      templates,
+      protocols.some(Boolean),
+      schemeOverride,
+    );
     // An ArcGIS export/tile template (the ArcGIS Layer panel's raster path) is
     // still a plain tile template; the SDK's own service classes are used only
     // for records that name the service itself (the `arcgis` type above).

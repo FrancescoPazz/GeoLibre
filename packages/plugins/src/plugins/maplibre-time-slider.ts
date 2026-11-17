@@ -6,7 +6,6 @@ import {
   type TimeSliderConfig,
   type TimeSliderOptions,
 } from "maplibre-gl-time-slider";
-import { loadMosaic } from "maplibre-gl-raster";
 import type { GeoLibreAppAPI, GeoLibreMapControlPosition, GeoLibrePlugin } from "../types";
 import {
   buildTimeFilter,
@@ -128,7 +127,9 @@ function stopThemeSync(): void {
   themeObserver = null;
 }
 
-let timeSliderPosition: GeoLibreMapControlPosition = "bottom-left";
+// The control is a dock pinned to the bottom of the map, so its corner is fixed
+// and the Plugins menu offers no Position submenu.
+const TIME_SLIDER_POSITION: GeoLibreMapControlPosition = "bottom-left";
 let timeSliderControl: TimeSliderControl | null = null;
 // The host the control was activated on, so the source reconciliation can ask
 // which renderer draws the map (see enforceEngineSupport).
@@ -180,7 +181,7 @@ export const maplibreTimeSliderPlugin: GeoLibrePlugin = {
     timeSliderControl = control;
     attachStoreSync(control);
 
-    const added = app.addMapControl(control, timeSliderPosition);
+    const added = app.addMapControl(control, TIME_SLIDER_POSITION);
     if (!added) {
       detachStoreSync?.();
       timeSliderControl = null;
@@ -199,32 +200,6 @@ export const maplibreTimeSliderPlugin: GeoLibrePlugin = {
     app.removeMapControl(timeSliderControl);
     timeSliderControl = null;
     removeAllTimeSliderStoreLayers();
-  },
-  getMapControlPosition: () => timeSliderPosition,
-  setMapControlPosition: (app: GeoLibreAppAPI, position: GeoLibreMapControlPosition) => {
-    timeSliderPosition = position;
-    if (!timeSliderControl) return;
-    // The library's onRemove destroys all adapters/layers and clears event
-    // handlers, so capture the full config first and rebuild a fresh control
-    // at the new position to preserve user-added layers.
-    const config = timeSliderControl.getConfig();
-    detachStoreSync?.();
-    app.removeMapControl(timeSliderControl);
-    const control = rememberConfigOnRemove(controlFromConfig(config));
-    timeSliderControl = control;
-    attachStoreSync(control);
-    const added = app.addMapControl(control, timeSliderPosition);
-    if (!added) {
-      detachStoreSync?.();
-      timeSliderControl = null;
-      // Preserve the captured config so a later activate() restores the user's
-      // layers, and drop the now-orphaned store layers (the previous control's
-      // map layers were already removed above).
-      savedConfig = config;
-      removeAllTimeSliderStoreLayers();
-      return false;
-    }
-    setTimeout(() => syncStoreLayers(control), 0);
   },
   getProjectState: () => {
     // A control its map already removed reports no sources; use its snapshot.
@@ -421,7 +396,86 @@ function normalizeConfig(state: unknown): TimeSliderConfig | null {
   return {
     ...candidate,
     endDate: candidate.endDate ?? undefined,
+    sources: rehydrateSources(candidate.sources as SourceSpec[]),
   } as TimeSliderConfig;
+}
+
+/**
+ * Rebuilds the parts of a saved source that JSON cannot carry.
+ *
+ * @param spec - A source read back from a saved project.
+ * @returns The source with its runtime parts restored, the source unchanged
+ *   when it is not the rehydrator's, or null to drop a source that cannot be
+ *   rebuilt.
+ */
+export type TimeSliderSourceRehydrator = (spec: SourceSpec) => SourceSpec | null | undefined;
+
+const sourceRehydrators = new Set<TimeSliderSourceRehydrator>();
+
+/**
+ * Lets another plugin restore a source whose URL is a resolver function.
+ *
+ * The library accepts a function for a source's `url`/`tiles` (one URL per
+ * date), and a function does not survive the project file. A plugin that adds
+ * such a source also stores a serializable description on the spec and
+ * registers a rehydrator here to turn that description back into the resolver
+ * when the project is reopened (the Planetary Computer panel's dated stacks).
+ *
+ * @param rehydrator - Recognizes the plugin's sources and restores them.
+ * @returns A function that unregisters the rehydrator.
+ */
+export function registerTimeSliderSourceRehydrator(
+  rehydrator: TimeSliderSourceRehydrator,
+): () => void {
+  sourceRehydrators.add(rehydrator);
+  return () => sourceRehydrators.delete(rehydrator);
+}
+
+function rehydrateSources(sources: SourceSpec[]): SourceSpec[] {
+  const restored: SourceSpec[] = [];
+  for (const source of sources) {
+    let next: SourceSpec | null = source;
+    for (const rehydrator of sourceRehydrators) {
+      const result: SourceSpec | null | undefined = rehydrator(next);
+      if (result === null) {
+        next = null;
+        break;
+      }
+      if (result) next = result;
+    }
+    if (next) restored.push(next);
+  }
+  return restored;
+}
+
+/**
+ * Opens the Time Slider (activating its plugin when needed) and replaces its
+ * timeline, for a plugin that hands it a dated stack.
+ *
+ * Unlike a project restore this takes a live config, so a source may carry a
+ * resolver function; pair it with {@link registerTimeSliderSourceRehydrator} if
+ * it should survive a saved project.
+ *
+ * @param app - The GeoLibre app API.
+ * @param build - Derives the new config from the dock's current one (null when it has none).
+ * @returns True when the timeline was applied.
+ */
+export async function applyTimeSliderConfig(
+  app: GeoLibreAppAPI,
+  build: (current: TimeSliderConfig | null) => TimeSliderConfig,
+): Promise<boolean> {
+  if (!timeSliderControl) {
+    const activated = await app.activatePlugin?.(TIME_SLIDER_PLUGIN_ID);
+    if (!activated || !timeSliderControl) return false;
+  }
+  const control = timeSliderControl;
+  const next = build(control.getConfig());
+  savedConfig = next;
+  if (configBeforeRemoval.has(control)) configBeforeRemoval.set(control, next);
+  control.setConfig(next);
+  if (next.collapsed === false) control.expand?.();
+  setTimeout(() => syncStoreLayers(control), 0);
+  return true;
 }
 
 // Only sourceadd/sourceremove change the store's layer set. statechange also
@@ -1120,6 +1174,7 @@ const COG_SOURCE_FIELDS = [
 export function enforceEngineSupport(
   control: Pick<TimeSliderControl, "getSources" | "removeSource" | "addSource">,
 ): void {
+  // eslint-disable-next-line local/no-renderer-kind-checks -- applies the Mapbox source support table
   if (activeHost?.getMapRenderer?.() !== "mapbox") return;
   // Snapshot: the loop removes and re-adds sources on the control it iterates.
   for (const spec of [...control.getSources()]) {
@@ -1209,14 +1264,12 @@ function normalizeBounds(value: unknown): [number, number, number, number] | nul
  */
 function ensureSourceBounds(control: TimeSliderControl, spec: SourceSpec): void {
   const id = spec.id;
-  if (!id || boundsAttempted.has(id)) return;
+  // A declared extent is read straight off the spec by createStoreLayer, so it
+  // is not cached: a cached copy would outlive a same-id replacement that
+  // declares none (a re-run Planetary Computer stack) and zoom to the old one.
+  if (!id || normalizeBounds((spec as { bounds?: unknown }).bounds)) return;
+  if (boundsAttempted.has(id)) return;
   boundsAttempted.add(id);
-
-  const declared = normalizeBounds((spec as { bounds?: unknown }).bounds);
-  if (declared) {
-    sourceBounds.set(id, declared);
-    return;
-  }
   if (spec.type !== "mosaic") return;
 
   const generation = boundsGeneration.get(id) ?? 0;
@@ -1226,6 +1279,7 @@ function ensureSourceBounds(control: TimeSliderControl, spec: SourceSpec): void 
       // Guard the fetch: an engine-rewritten COG also reports `type: "mosaic"`,
       // and parsing it as a manifest would download the whole GeoTIFF.
       if (!usesMosaicManifest(spec, url)) return;
+      const { loadMosaic } = await import("maplibre-gl-raster");
       const { bounds } = await loadMosaic(url);
       const extent = normalizeBounds([bounds.west, bounds.south, bounds.east, bounds.north]);
       // The control may have been rebuilt or torn down while the manifest was
@@ -1242,6 +1296,11 @@ function ensureSourceBounds(control: TimeSliderControl, spec: SourceSpec): void 
       // expected failure here and is not worth surfacing.
     }
   })();
+}
+
+/** Test seam for {@link ensureSourceBounds}. */
+export function __ensureSourceBoundsForTests(control: TimeSliderControl, spec: SourceSpec): void {
+  ensureSourceBounds(control, spec);
 }
 
 /** Drops a removed source's cached extent so a later source reusing the id
@@ -1292,7 +1351,10 @@ function shouldUpdateStoreLayer(existingLayer: GeoLibreLayer, nextLayer: GeoLibr
 export function createStoreLayer(spec: SourceSpec): GeoLibreLayer {
   const sourceId = spec.id as string;
   const layerType = spec.type === "geojson" ? "geojson" : "raster";
-  const authoredUrl = ["url", "tiles", "baseUrl", "data"]
+  // `referenceUrl` is for a source whose URL is a resolver function (one URL
+  // per date): its owner names a stable remote reference instead, so the mirror
+  // is still recognized as a hosted layer.
+  const authoredUrl = ["url", "tiles", "baseUrl", "data", "referenceUrl"]
     .map((key) => {
       const value = key in spec ? spec[key as keyof SourceSpec] : undefined;
       return typeof value === "string" ? value.trim() : "";

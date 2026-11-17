@@ -1,5 +1,5 @@
 import { useAppStore } from "@geolibre/core";
-import { TERRAIN_SETTINGS_EVENT } from "@geolibre/map";
+import { rendererCapabilities, TERRAIN_SETTINGS_EVENT } from "@geolibre/map";
 import {
   DEFAULT_EFFECTS_SETTINGS,
   type EffectsSettings,
@@ -12,6 +12,7 @@ import {
   flightSimulatorPlugin,
   isPluginEngineSupported,
   maplibreDirectionsPlugin,
+  maplibreLayerControlPlugin,
   maplibreEffectsPlugin,
   maplibreGraticulePlugin,
   maplibreReverseGeocodePlugin,
@@ -54,6 +55,7 @@ import { useHasQueryableLayer } from "../../../hooks/useHasQueryableLayer";
 import { useMapCapabilities } from "../../../hooks/useMapCapabilities";
 import { useMicrozonationConfig } from "../../../hooks/useMicrozonationConfig";
 import { isMaptoolkitBasemapActive } from "../../../lib/maptoolkit-basemap";
+import { useNavigationTool } from "../../../lib/navigation/store";
 import { isMenuItemVisible } from "../../../lib/ui-profile";
 import { useCoordsConverterUrl } from "../../panels/CoordsConverterPanel";
 import {
@@ -62,6 +64,8 @@ import {
   type ToolbarChrome,
   type ToolbarMapControl,
 } from "./constants";
+import { ImageControlDialog } from "./ImageControlDialog";
+import { PluginMenuContributions } from "./PluginMenuContributions";
 
 /**
  * Controls-menu entries that write to the project rather than only changing
@@ -78,12 +82,14 @@ interface ControlsMenuProps {
   controlsVisible: Record<ToolbarMapControl, boolean>;
   panels: ToolbarPanels;
   effectsActive: boolean;
+  layerControlActive: boolean;
   directionsActive: boolean;
   reverseGeocodeActive: boolean;
   graticuleActive: boolean;
   cloudsActive: boolean;
   precipitationActive: boolean;
   onToggleMapControl: (control: ToolbarMapControl) => void;
+  onToggleLayerControl: () => void;
   onToggleEffects: () => void;
   getEffectsSettings: () => EffectsSettings;
   onPreviewEffectsSettings: (next: Partial<EffectsSettings>) => void;
@@ -114,12 +120,14 @@ export function ControlsMenu({
   controlsVisible,
   panels,
   effectsActive,
+  layerControlActive,
   directionsActive,
   reverseGeocodeActive,
   graticuleActive,
   cloudsActive,
   precipitationActive,
   onToggleMapControl,
+  onToggleLayerControl,
   onToggleEffects,
   getEffectsSettings,
   onPreviewEffectsSettings,
@@ -144,11 +152,14 @@ export function ControlsMenu({
     primaryRenderer,
   );
   const directionsDisabled = !directionsSupported && !directionsActive;
+  // Navigation draws MapLibre style layers, so it needs a MapLibre primary map.
+  const navigationSupported = rendererCapabilities(primaryRenderer).nativeMapInstance;
   // A plugin the live renderer does not support cannot activate, so its entry
   // is greyed with the reason rather than toggling nothing (or opening a panel
   // that stays empty). One already on stays reachable so it can be turned off.
   const unsupported = (plugin: Parameters<typeof isPluginEngineSupported>[0], active: boolean) =>
     !isPluginEngineSupported(plugin, primaryRenderer) && !active;
+  const layerControlDisabled = unsupported(maplibreLayerControlPlugin, layerControlActive);
   const sunDisabled = unsupported(maplibreSunPlugin, panels.sun.visible);
   const routeAnimationDisabled = unsupported(
     maplibreRouteAnimationPlugin,
@@ -161,7 +172,7 @@ export function ControlsMenu({
   const graticuleDisabled = unsupported(maplibreGraticulePlugin, graticuleActive);
   // The measure control draws its sketch through the MapLibre/Mapbox style
   // API, which the ArcGIS view has no equivalent of.
-  const measureDisabled = primaryRenderer === "arcgis" && !panels.measure.visible;
+  const measureDisabled = !capabilities.measureTool && !panels.measure.visible;
   const effectsSupported = isPluginEngineSupported(maplibreEffectsPlugin, primaryRenderer);
   const reverseGeocodeDisabled = !reverseGeocodeSupported && !reverseGeocodeActive;
   const uiProfile = useDesktopSettingsStore((s) => s.desktopSettings.uiProfile);
@@ -214,6 +225,7 @@ export function ControlsMenu({
   // Whether the first group (built-in controls + atmosphere/routing toggles) has
   // any visible item, so the separator below it isn't left orphaned.
   const anyTopControls =
+    show("controls.layerControl") ||
     MAP_CONTROL_ITEMS.some((control) => show(`controls.mapControl.${control.id}`)) ||
     show("controls.atmosphereEffects") ||
     show("controls.clouds") ||
@@ -233,6 +245,7 @@ export function ControlsMenu({
     (show("controls.queryData") && queryableLayerPresent) ||
     (show("controls.microzonation") && microzonationConfigured) ||
     show("controls.directions") ||
+    show("controls.navigation") ||
     show("controls.reverseGeocode");
   // Whether the middle group (panels) has any visible item. The separator that
   // precedes the Field Collection / Record Tour group is gated on this so it
@@ -243,6 +256,7 @@ export function ControlsMenu({
     show("controls.colorbar") ||
     show("controls.legend") ||
     show("controls.html") ||
+    show("controls.image") ||
     show("controls.measure") ||
     show("controls.bookmark") ||
     show("controls.minimap") ||
@@ -250,6 +264,7 @@ export function ControlsMenu({
 
   return (
     <>
+      <ImageControlDialog panel={panels.image} />
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -265,6 +280,17 @@ export function ControlsMenu({
         <DropdownMenuContent align="start">
           <DropdownMenuLabel>{t("toolbar.item.mapControls")}</DropdownMenuLabel>
           <DropdownMenuSeparator />
+          {show("controls.layerControl") && (
+            <DropdownMenuItem
+              disabled={layerControlDisabled}
+              className={REASON_ON_HOVER}
+              title={layerControlDisabled ? t("renderer.pluginUnsupported") : undefined}
+              onClick={onToggleLayerControl}
+            >
+              {t("toolbar.plugin.maplibre-layer-control")}
+              {layerControlActive ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
           {MAP_CONTROL_ITEMS.filter(
             (control) =>
               !LOGO_CONTROL_IDS.has(control.id) && show(`controls.mapControl.${control.id}`),
@@ -474,6 +500,20 @@ export function ControlsMenu({
               {directionsActive ? " ✓" : ""}
             </DropdownMenuItem>
           )}
+          {show("controls.navigation") && (
+            <DropdownMenuItem
+              disabled={!navigationSupported}
+              className={REASON_ON_HOVER}
+              title={
+                navigationSupported
+                  ? t("toolbar.item.navigationTooltip")
+                  : t("renderer.pluginUnsupported")
+              }
+              onClick={() => useNavigationTool.getState().openNavigation()}
+            >
+              {t("toolbar.item.navigation")}
+            </DropdownMenuItem>
+          )}
           {show("controls.reverseGeocode") && (
             <DropdownMenuItem
               disabled={reverseGeocodeDisabled}
@@ -512,6 +552,12 @@ export function ControlsMenu({
             <DropdownMenuItem onSelect={panels.html.toggle}>
               {t("toolbar.item.html")}
               {panels.html.visible ? " ✓" : ""}
+            </DropdownMenuItem>
+          )}
+          {show("controls.image") && (
+            <DropdownMenuItem onSelect={panels.image.toggle}>
+              {t("toolbar.item.image")}
+              {panels.image.visible ? " ✓" : ""}
             </DropdownMenuItem>
           )}
           {show("controls.measure") && (
@@ -572,6 +618,9 @@ export function ControlsMenu({
               {t("toolbar.item.recordVideo")}
             </DropdownMenuItem>
           )}
+          {/* Plugins are authoring chrome, hidden from the read-only viewer
+              like plugin-registered toolbar menus. */}
+          {!viewer && <PluginMenuContributions target="controls" />}
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog
@@ -798,6 +847,26 @@ function AtmosphereEffectsSubmenu({
             onCommit={onCommit}
           />
         </div>
+        <DropdownMenuSeparator />
+        {(
+          [
+            ["showStars", "toolbar.atmosphere.showStars"],
+            ["showMilkyWay", "toolbar.atmosphere.showMilkyWay"],
+            ["showConstellations", "toolbar.atmosphere.showConstellations"],
+          ] as const
+        ).map(([key, label]) => (
+          <DropdownMenuItem
+            key={key}
+            onSelect={(e: Event) => {
+              e.preventDefault();
+              preview({ [key]: !settings[key] });
+              onCommit();
+            }}
+          >
+            {t(label)}
+            {settings[key] ? " ✓" : ""}
+          </DropdownMenuItem>
+        ))}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           // onSelect fires for mouse and keyboard alike. A discrete action:

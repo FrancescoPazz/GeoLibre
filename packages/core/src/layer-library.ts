@@ -17,6 +17,7 @@ import {
   LAYER_TYPES,
   type AttributeFormConfig,
   type GeoLibreLayer,
+  type LayerDescriptiveMetadata,
   type LayerJoin,
   type LayerLibraryEntry,
   type LayerPopupConfig,
@@ -25,6 +26,7 @@ import {
   type LayerVirtualField,
 } from "./types";
 import { sanitizeLayerStylePatch } from "./style-library";
+import { normalizeLayerDescriptiveMetadata } from "./layer-descriptive-metadata";
 import { hasPathTraversal, isAbsoluteFilesystemPath } from "./paths";
 import { isCredentialFieldName, redactUrlCredentials } from "./credentials";
 
@@ -108,7 +110,9 @@ export function hasRestorableLayerSource(
  * Every candidate is re-validated, because a hand-edited project or an imported
  * bundle can set these fields to anything.
  */
-function layerLocalPath(layer: Pick<GeoLibreLayer, "sourcePath" | "metadata">): string | undefined {
+export function layerLocalPath(
+  layer: Pick<GeoLibreLayer, "sourcePath" | "metadata">,
+): string | undefined {
   const metadata = layer.metadata ?? {};
   if (isReReadablePath(metadata.localFilePath)) return metadata.localFilePath;
   if (metadata.localFileReloadable !== true) return undefined;
@@ -334,6 +338,9 @@ export function captureLayerLibraryEntry(
     ...(layer.virtualFields?.length ? { virtualFields: structuredClone(layer.virtualFields) } : {}),
     ...(layer.attributeForm ? { attributeForm: structuredClone(layer.attributeForm) } : {}),
     ...(layer.popup ? { popup: structuredClone(layer.popup) } : {}),
+    ...(layer.descriptiveMetadata
+      ? { descriptiveMetadata: structuredClone(layer.descriptiveMetadata) }
+      : {}),
   };
   const withFeatures = embed && !controlPainted ? { ...base, geojson: embed } : base;
 
@@ -375,6 +382,7 @@ export interface LayerLibraryConfigPatch {
   virtualFields?: LayerVirtualField[];
   attributeForm?: AttributeFormConfig;
   popup?: LayerPopupConfig;
+  descriptiveMetadata?: LayerDescriptiveMetadata;
 }
 
 /** How an entry should be re-added to the current project. */
@@ -426,6 +434,9 @@ export function planLayerLibraryAdd(
       ...(entry.virtualFields ? { virtualFields: structuredClone(entry.virtualFields) } : {}),
       ...(entry.attributeForm ? { attributeForm: structuredClone(entry.attributeForm) } : {}),
       ...(entry.popup ? { popup: structuredClone(entry.popup) } : {}),
+      ...(entry.descriptiveMetadata
+        ? { descriptiveMetadata: structuredClone(entry.descriptiveMetadata) }
+        : {}),
     },
   };
 }
@@ -446,6 +457,9 @@ export function layerLibraryConfigPatch(entry: LayerLibraryEntry): LayerLibraryC
     ...(entry.virtualFields ? { virtualFields: structuredClone(entry.virtualFields) } : {}),
     ...(entry.attributeForm ? { attributeForm: structuredClone(entry.attributeForm) } : {}),
     ...(entry.popup ? { popup: structuredClone(entry.popup) } : {}),
+    ...(entry.descriptiveMetadata
+      ? { descriptiveMetadata: structuredClone(entry.descriptiveMetadata) }
+      : {}),
   };
 }
 
@@ -671,11 +685,15 @@ export function normalizeLayerLibraryEntries(value: unknown): LayerLibraryEntry[
         const virtualFields = validVirtualFields(candidate.virtualFields);
         const attributeForm = validAttributeForm(candidate.attributeForm);
         const popup = validPopup(candidate.popup);
+        const descriptiveMetadata = normalizeLayerDescriptiveMetadata(
+          candidate.descriptiveMetadata,
+        );
         return {
           ...(joins ? { joins } : {}),
           ...(virtualFields ? { virtualFields } : {}),
           ...(attributeForm ? { attributeForm } : {}),
           ...(popup ? { popup } : {}),
+          ...(descriptiveMetadata ? { descriptiveMetadata } : {}),
         };
       })(),
       ...(geojson ? { geojson: structuredClone(geojson) } : {}),

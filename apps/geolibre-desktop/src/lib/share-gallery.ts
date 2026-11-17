@@ -4,9 +4,10 @@
 //
 // `fetchSharedProjects` reads the public listing (`GET /api/projects`, no
 // token) with `limit` + `offset` pagination. `fetchMyProjects` authenticates
-// with a personal API token to also return the signed-in user's `unlisted` and
-// `private` projects.
+// with an OAuth access token or personal API token to also return the signed-in
+// user's `unlisted` and `private` projects.
 
+import { EXPECTED_STATUS_HEADER } from "./diagnostics";
 import { getShareFetch } from "./share-fetch";
 import { resolveShareBaseUrl } from "./share-geolibre";
 
@@ -22,6 +23,14 @@ export type GalleryErrorCode =
   | "invalid-response"
   | "unauthorized"
   | "username-required"
+  /** The destination namespace already uses the requested slug. */
+  | "slug-conflict"
+  /** The project already has a pending transfer. */
+  | "transfer-pending"
+  /** The transfer was cancelled or its initiator lost the right to offer it. */
+  | "transfer-invalid"
+  /** The transfer's target username does not exist. */
+  | "user-not-found"
   /** The deployment disabled sharing, or named a share host that was rejected. */
   | "not-configured";
 
@@ -73,6 +82,12 @@ export interface SharedProject {
   forkCount: number;
   versionCount: number;
   featured: boolean;
+  /**
+   * The owner's "prevent deletion" switch, or `null` when the share host does
+   * not expose it (an older deployment). `null` hides the toggle rather than
+   * showing one that would not work.
+   */
+  deleteProtected: boolean | null;
   createdAt: string;
   updatedAt: string;
   tags: string[];
@@ -139,6 +154,7 @@ interface RawSharedProject {
   forkCount?: unknown;
   versionCount?: unknown;
   featured?: unknown;
+  deleteProtected?: unknown;
   createdAt?: unknown;
   updatedAt?: unknown;
   tags?: unknown;
@@ -205,6 +221,7 @@ function normalizeProject(raw: RawSharedProject, base: string): SharedProject | 
     forkCount: asNumber(raw.forkCount),
     versionCount: asNumber(raw.versionCount),
     featured: raw.featured === true,
+    deleteProtected: typeof raw.deleteProtected === "boolean" ? raw.deleteProtected : null,
     createdAt: asString(raw.createdAt),
     updatedAt: asString(raw.updatedAt),
     tags: Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === "string") : [],
@@ -212,6 +229,50 @@ function normalizeProject(raw: RawSharedProject, base: string): SharedProject | 
     projectUrl: asString(raw.projectUrl),
     viewerUrl: asString(raw.viewerUrl),
   };
+}
+
+/**
+ * GET a public (unauthenticated) JSON endpoint on the share host and decode it.
+ *
+ * Sends no credentials, so a public read stays a simple CORS request.
+ *
+ * @throws {GalleryError} `timeout`, `network`, `http` (non-2xx), or
+ *   `invalid-response` (a body that is not JSON). A caller-initiated abort
+ *   propagates as the original `AbortError`.
+ */
+async function publicJsonGet(
+  url: string,
+  options: { signal?: AbortSignal; fetchImpl: typeof fetch },
+): Promise<unknown> {
+  // Combine the caller's abort signal (dialog close) with a hard deadline.
+  const timeout = AbortSignal.timeout(LISTING_TIMEOUT_MS);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+
+  let response: Response;
+  try {
+    response = await options.fetchImpl(url, {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException) {
+      if (error.name === "AbortError") throw error;
+      if (error.name === "TimeoutError") throw new GalleryError("timeout");
+    }
+    throw new GalleryError("network");
+  }
+
+  if (!response.ok) {
+    throw new GalleryError("http", response.status);
+  }
+
+  // A malformed/HTML 200 body must surface as a retryable error, not an empty
+  // gallery, so let a JSON parse failure throw rather than swallowing it.
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new GalleryError("invalid-response");
+  }
 }
 
 /**
@@ -239,40 +300,10 @@ export async function fetchSharedProjects(
   if (options.offset) params.set("offset", String(options.offset));
   if (options.featured) params.set("featured", "true");
   const query = params.toString();
-  const url = `${base}/api/projects${query ? `?${query}` : ""}`;
-
-  // Combine the caller's abort signal (dialog close) with a hard deadline.
-  const timeout = AbortSignal.timeout(LISTING_TIMEOUT_MS);
-  const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      headers: { Accept: "application/json" },
-      signal,
-    });
-  } catch (error) {
-    if (error instanceof DOMException) {
-      if (error.name === "AbortError") throw error;
-      if (error.name === "TimeoutError") throw new GalleryError("timeout");
-    }
-    throw new GalleryError("network");
-  }
-
-  if (!response.ok) {
-    throw new GalleryError("http", response.status);
-  }
-
-  // A malformed/HTML 200 body must surface as a retryable error, not an empty
-  // gallery, so let a JSON parse failure throw rather than swallowing it.
-  let payload: { projects?: RawSharedProject[] } | null;
-  try {
-    payload = (await response.json()) as {
-      projects?: RawSharedProject[];
-    } | null;
-  } catch {
-    throw new GalleryError("invalid-response");
-  }
+  const payload = (await publicJsonGet(`${base}/api/projects${query ? `?${query}` : ""}`, {
+    signal: options.signal,
+    fetchImpl,
+  })) as { projects?: RawSharedProject[] } | null;
   const rawProjects = Array.isArray(payload?.projects) ? payload.projects : [];
   const projects = rawProjects
     .map((raw) => normalizeProject(raw, base))
@@ -285,19 +316,201 @@ export async function fetchSharedProjects(
   return { projects, hasMore, rawCount: rawProjects.length };
 }
 
+/** A public collection (a curated group of projects) on the share host. */
+export interface SharedCollection {
+  id: string;
+  /** Owner's username; with `slug`, addresses the collection. */
+  username: string;
+  slug: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  /** Number of projects in the collection, as reported by the listing. */
+  projectCount: number;
+  /** Absolute cover thumbnail URL, or `null` when the collection has none. */
+  thumbnailUrl: string | null;
+}
+
+interface RawSharedCollection {
+  id?: unknown;
+  username?: unknown;
+  slug?: unknown;
+  title?: unknown;
+  description?: unknown;
+  createdAt?: unknown;
+  projectCount?: unknown;
+  thumbnailUrl?: unknown;
+  projects?: unknown;
+}
+
+/**
+ * Normalize one raw collection record. Returns `null` when it lacks the
+ * `username` + `slug` pair needed to fetch its projects.
+ */
+function normalizeCollection(raw: RawSharedCollection, base: string): SharedCollection | null {
+  const id = asString(raw.id);
+  const username = asString(raw.username);
+  const slug = asString(raw.slug);
+  if (!id || !username || !slug) return null;
+  return {
+    id,
+    username,
+    slug,
+    title: asString(raw.title),
+    description: asString(raw.description),
+    createdAt: asString(raw.createdAt),
+    projectCount: asNumber(raw.projectCount),
+    thumbnailUrl: resolveThumbnailUrl(raw.thumbnailUrl, base),
+  };
+}
+
+/**
+ * Filter collections by a case-insensitive query against their title, owner,
+ * and description. A blank query returns the list unchanged.
+ *
+ * @param collections - The loaded collections.
+ * @param query - The filter text; it is trimmed and lowercased here.
+ * @returns The matching collections, in their original order.
+ */
+export function filterCollections(
+  collections: SharedCollection[],
+  query: string,
+): SharedCollection[] {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return collections;
+  return collections.filter((c) =>
+    [c.title, c.username, c.description].join(" ").toLowerCase().includes(needle),
+  );
+}
+
+/**
+ * The collection's page on the share website
+ * (`{base}/{username}/collections/{slug}`).
+ *
+ * @param collection - The collection's owner and slug.
+ * @param baseUrl - Overrides the configured share host.
+ * @returns The absolute URL, or `null` when sharing is not configured.
+ */
+export function collectionPageUrl(
+  collection: Pick<SharedCollection, "username" | "slug">,
+  baseUrl?: string,
+): string | null {
+  const base = baseUrl ?? resolveShareBaseUrl();
+  if (!base) return null;
+  return `${base.replace(/\/+$/, "")}/${encodeURIComponent(collection.username)}/collections/${encodeURIComponent(collection.slug)}`;
+}
+
+export interface FetchCollectionsOptions {
+  /** Override the share host; defaults to the configured/production URL. */
+  baseUrl?: string;
+  signal?: AbortSignal;
+  /** Injected for testing; defaults to the share fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * List the public collections on the share host (`GET /api/collections/browse`,
+ * the same listing as the website's Collections page). The endpoint is not
+ * paginated, so the full set is returned at once.
+ *
+ * @param options - An optional host override, abort `signal`, and `fetchImpl`.
+ * @returns The normalized collections, in the server's order.
+ * @throws {GalleryError} On a network failure, timeout, non-2xx response, or
+ *   unparseable body. A caller-initiated abort propagates as `AbortError`.
+ */
+export async function fetchCollections(
+  options: FetchCollectionsOptions = {},
+): Promise<SharedCollection[]> {
+  const base = requireShareBase(options.baseUrl);
+  const payload = (await publicJsonGet(`${base}/api/collections/browse`, {
+    signal: options.signal,
+    fetchImpl: options.fetchImpl ?? getShareFetch(),
+  })) as { collections?: RawSharedCollection[] } | null;
+  const raw = Array.isArray(payload?.collections) ? payload.collections : [];
+  return raw
+    .map((item) => normalizeCollection(item, base))
+    .filter((item): item is SharedCollection => item !== null);
+}
+
+export interface FetchCollectionProjectsOptions extends FetchCollectionsOptions {
+  /** The collection owner's username. */
+  username: string;
+  /** The collection's slug. */
+  slug: string;
+}
+
+/**
+ * Fetch the projects in one public collection
+ * (`GET /api/collections/{username}/{slug}`). The endpoint returns every
+ * project at once, without pagination.
+ *
+ * @param options - The collection's `username` and `slug`, plus an optional
+ *   host override, abort `signal`, and `fetchImpl`.
+ * @returns The collection's normalized projects, in the server's order.
+ * @throws {GalleryError} On a network failure, timeout, non-2xx response (404
+ *   when the collection was deleted), or unparseable body.
+ */
+export async function fetchCollectionProjects(
+  options: FetchCollectionProjectsOptions,
+): Promise<SharedProject[]> {
+  const base = requireShareBase(options.baseUrl);
+  const path = `/api/collections/${encodeURIComponent(options.username)}/${encodeURIComponent(options.slug)}`;
+  const payload = (await publicJsonGet(`${base}${path}`, {
+    signal: options.signal,
+    fetchImpl: options.fetchImpl ?? getShareFetch(),
+  })) as { collection?: RawSharedCollection } | null;
+  const rawProjects = Array.isArray(payload?.collection?.projects)
+    ? (payload.collection.projects as RawSharedProject[])
+    : [];
+  return rawProjects
+    .map((raw) => normalizeProject(raw, base))
+    .filter((project): project is SharedProject => project !== null);
+}
+
+/**
+ * Issue an authenticated JSON request to the share host and decode its body.
+ *
+ * Read-only by default. The gallery's mutations (delete protection, transfers)
+ * pass `method` and `body`; a 204 (decline, cancel) resolves to `null`.
+ *
+ * @throws {GalleryError} `unauthorized` on 401/403, a typed code for the
+ *   refusals the UI must explain (`slug-conflict`, `transfer-pending`,
+ *   `transfer-invalid`, `user-not-found`), or `http`/`network`/`timeout`.
+ */
 async function shareAuthorizedJsonRequest(
   path: string,
   token: string,
   base: string,
-  options: { signal?: AbortSignal; fetchImpl?: typeof fetch } = {},
+  options: {
+    signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    body?: unknown;
+    /**
+     * The route is an optional server feature: a 404 means this server does
+     * not offer it, so the request resolves to null and Diagnostics records the
+     * 404 as info rather than an error.
+     */
+    optionalRoute?: boolean;
+  } = {},
 ): Promise<unknown> {
   const authFetch = shareAuthorizedFetch(token, base, options.fetchImpl ?? getShareFetch());
   const timeout = AbortSignal.timeout(LISTING_TIMEOUT_MS);
   const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
+  const headers: Record<string, string> = { Accept: "application/json" };
+  // A client-only marker; the Diagnostics fetch wrapper strips it.
+  if (options.optionalRoute) headers[EXPECTED_STATUS_HEADER] = "404";
+  let payload: string | undefined;
+  if (options.body !== undefined) {
+    headers["Content-Type"] = "application/json";
+    payload = JSON.stringify(options.body);
+  }
   let response: Response;
   try {
     response = await authFetch(`${base}${path}`, {
-      headers: { Accept: "application/json" },
+      method: options.method ?? "GET",
+      headers,
+      body: payload,
       signal,
     });
   } catch (error) {
@@ -310,9 +523,31 @@ async function shareAuthorizedJsonRequest(
   if (response.status === 401 || response.status === 403) {
     throw new GalleryError("unauthorized");
   }
+  if (response.status === 404 && options.optionalRoute) return null;
   if (!response.ok) {
+    // The server's refusals carry a stable `{"error": "..."}` phrase (see
+    // docs/server-api.md); map the ones the UI explains to a typed code and
+    // fall back to the plain status otherwise.
+    let detail = "";
+    try {
+      const errorBody = (await response.json()) as { error?: unknown } | null;
+      detail = typeof errorBody?.error === "string" ? errorBody.error : "";
+    } catch {
+      detail = "";
+    }
+    if (response.status === 409) {
+      if (detail.includes("slug already exists")) throw new GalleryError("slug-conflict");
+      if (detail.includes("transfer is already pending")) {
+        throw new GalleryError("transfer-pending");
+      }
+      if (detail.includes("no longer valid")) throw new GalleryError("transfer-invalid");
+    }
+    if (response.status === 404 && detail === "user not found") {
+      throw new GalleryError("user-not-found");
+    }
     throw new GalleryError("http", response.status);
   }
+  if (response.status === 204) return null;
   try {
     return (await response.json()) as unknown;
   } catch {
@@ -375,14 +610,9 @@ export function projectOpenToken(
 }
 
 /**
- * Wrap a fetch so requests to the share host carry the personal API token. The
- * `Authorization` header is attached only for same-origin-as-`base` URLs so the
- * token is never leaked to a third-party host (e.g. an external tile server
- * referenced by a project).
- *
- * @param baseFetch - The underlying fetch to wrap; defaults to the global
- *   `fetch`. Tests inject a stub here so production and test exercise the same
- *   same-origin gating logic.
+ * Attach the credential only to the share origin. Authenticated requests may
+ * not follow redirects: browser fetch enforces redirect:"error", and the
+ * native share transport translates that policy to maxRedirections:0.
  */
 export function shareAuthorizedFetch(
   token: string,
@@ -397,16 +627,26 @@ export function shareAuthorizedFetch(
   }
   return ((input: RequestInfo | URL, init: RequestInit = {}) => {
     const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    let sameHost = false;
+    let sameOrigin = false;
     try {
-      sameHost = baseOrigin != null && new URL(href).origin === baseOrigin;
+      sameOrigin = baseOrigin != null && new URL(href).origin === baseOrigin;
     } catch {
-      sameHost = false;
+      sameOrigin = false;
     }
-    if (!sameHost) return baseFetch(input, init);
-    const headers = new Headers(init.headers);
+    if (!sameOrigin) {
+      // A caller may pass a Request initialized for an issuer URL but resolved
+      // to a third-party project URL. Never forward its Authorization header.
+      const headers = new Headers(
+        init.headers ?? (input instanceof Request ? input.headers : undefined),
+      );
+      if (!headers.has("Authorization")) return baseFetch(input, init);
+      headers.delete("Authorization");
+      return baseFetch(input, { ...init, headers });
+    }
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     headers.set("Authorization", `Bearer ${token}`);
-    return baseFetch(input, { ...init, headers });
+    return baseFetch(input, { ...init, headers, redirect: "error" });
   }) as typeof fetch;
 }
 
@@ -550,6 +790,15 @@ export function isPublicSharingBlocked(
   return visibility === "public" && publicSharingRestriction(organization) !== null;
 }
 
+/** Whether this membership may own (create) organization projects; viewers are read-only. */
+export function canOwnOrganizationProjects(organization: ShareOrganization): boolean {
+  return (
+    organization.role === "administrator" ||
+    organization.role === "publisher" ||
+    organization.role === "member"
+  );
+}
+
 /** Match a shared project to the organizations shown by /api/organizations/mine. */
 export function isProjectInMyOrganizations(
   project: Pick<SharedProject, "organization">,
@@ -599,6 +848,10 @@ export async function fetchMyShareUsername(options: FetchMyProjectsOptions): Pro
 
 /**
  * Fetch the organizations the signed-in user belongs to.
+ *
+ * Organizations are a self-hosted GeoLibre server feature: the hosted
+ * share.geolibre.app has no `/api/organizations/mine`, so its 404 resolves to
+ * an empty list rather than an error.
  */
 export async function fetchMyOrganizations(
   options: FetchOrganizationsOptions,
@@ -608,7 +861,7 @@ export async function fetchMyOrganizations(
     "/api/organizations/mine",
     options.token,
     base,
-    { signal: options.signal, fetchImpl: options.fetchImpl },
+    { signal: options.signal, fetchImpl: options.fetchImpl, optionalRoute: true },
   )) as {
     organizations?: unknown[];
   } | null;
@@ -652,12 +905,16 @@ export async function fetchMyOrganizations(
 
 /**
  * Fetch the groups the signed-in user belongs to.
+ *
+ * Groups, like organizations, exist only on a self-hosted GeoLibre server, so
+ * the hosted share.geolibre.app's 404 resolves to an empty list.
  */
 export async function fetchMyGroups(options: FetchGroupsOptions): Promise<ShareGroup[]> {
   const base = requireShareBase(options.baseUrl);
   const payload = (await shareAuthorizedJsonRequest("/api/groups/mine", options.token, base, {
     signal: options.signal,
     fetchImpl: options.fetchImpl,
+    optionalRoute: true,
   })) as { groups?: unknown[] } | null;
   const raw = Array.isArray(payload?.groups) ? payload.groups : [];
   return raw
@@ -683,4 +940,260 @@ export async function fetchMyGroups(options: FetchGroupsOptions): Promise<ShareG
       };
     })
     .filter((g): g is ShareGroup => g !== null);
+}
+
+/** A project transfer as returned by the share server (GeoLibre#1670). */
+export interface ProjectTransfer {
+  id: string;
+  projectId: string;
+  projectTitle: string;
+  projectSlug: string;
+  /** The initiator's username, or `null` when the project left an organization. */
+  fromUsername: string | null;
+  /** The recipient user, or `null` for an organization transfer. */
+  toUsername: string | null;
+  toOrganization: { id: string; slug: string; name: string } | null;
+  /** The slug the project will take at its destination. */
+  slug: string;
+  status: "pending" | "accepted" | "declined" | "cancelled";
+  createdAt: string;
+  resolvedAt: string | null;
+}
+
+/** Normalize one transfer record, dropping malformed entries. */
+function normalizeTransfer(raw: unknown): ProjectTransfer | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Record<string, unknown>;
+  const id = asString(value.id);
+  const projectId = asString(value.projectId);
+  if (!id || !projectId) return null;
+  const status = value.status;
+  const organization = value.toOrganization;
+  let toOrganization: ProjectTransfer["toOrganization"] = null;
+  if (organization && typeof organization === "object") {
+    // Indexable view of a parsed JSON object; each field is checked below.
+    const record = organization as Record<string, unknown>;
+    if (typeof record.id === "string") {
+      toOrganization = {
+        id: record.id,
+        slug: typeof record.slug === "string" ? record.slug : "",
+        name: typeof record.name === "string" ? record.name : "",
+      };
+    }
+  }
+  return {
+    id,
+    projectId,
+    projectTitle: asString(value.projectTitle),
+    projectSlug: asString(value.projectSlug),
+    fromUsername: typeof value.fromUsername === "string" ? value.fromUsername : null,
+    toUsername: typeof value.toUsername === "string" ? value.toUsername : null,
+    toOrganization,
+    slug: asString(value.slug),
+    status:
+      status === "pending" ||
+      status === "accepted" ||
+      status === "declined" ||
+      status === "cancelled"
+        ? status
+        : "pending",
+    createdAt: asString(value.createdAt),
+    resolvedAt: typeof value.resolvedAt === "string" ? value.resolvedAt : null,
+  };
+}
+
+export interface SetProjectDeleteProtectionOptions {
+  token: string;
+  projectId: string;
+  deleteProtected: boolean;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Turn a project's "prevent deletion" switch on or off. While it is on the
+ * share server refuses `DELETE` with a 409 naming the switch.
+ *
+ * @throws {GalleryError} As {@link fetchMyProjects}, plus `invalid-response` if
+ *   the updated project is missing from the response.
+ */
+export async function setProjectDeleteProtection(
+  options: SetProjectDeleteProtectionOptions,
+): Promise<SharedProject> {
+  const base = requireShareBase(options.baseUrl);
+  const payload = (await shareAuthorizedJsonRequest(
+    `/api/projects/${encodeURIComponent(options.projectId)}`,
+    options.token,
+    base,
+    {
+      method: "PATCH",
+      body: { deleteProtected: options.deleteProtected },
+      signal: options.signal,
+      fetchImpl: options.fetchImpl,
+    },
+  )) as { project?: RawSharedProject } | null;
+  const project = payload?.project ? normalizeProject(payload.project, base) : null;
+  if (!project) throw new GalleryError("invalid-response");
+  return project;
+}
+
+/** The destination for a transfer: another user, or an organization you administer. */
+export type ProjectTransferTarget = { username: string } | { organizationId: string };
+
+export interface RequestProjectTransferOptions {
+  token: string;
+  projectId: string;
+  target: ProjectTransferTarget;
+  /** Overrides the destination slug; the server defaults to the current one. */
+  slug?: string;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
+export interface ProjectTransferResult {
+  transfer: ProjectTransfer;
+  /** The moved project, present once an organization transfer applies immediately. */
+  project: SharedProject | null;
+}
+
+/**
+ * Offer a project to another user (they must accept) or hand it to an
+ * organization the caller administers (applied immediately).
+ */
+export async function requestProjectTransfer(
+  options: RequestProjectTransferOptions,
+): Promise<ProjectTransferResult> {
+  const base = requireShareBase(options.baseUrl);
+  const payload = (await shareAuthorizedJsonRequest(
+    `/api/projects/${encodeURIComponent(options.projectId)}/transfers`,
+    options.token,
+    base,
+    {
+      method: "POST",
+      body: { ...options.target, ...(options.slug ? { slug: options.slug } : {}) },
+      signal: options.signal,
+      fetchImpl: options.fetchImpl,
+    },
+  )) as { transfer?: unknown; project?: RawSharedProject } | null;
+  const transfer = normalizeTransfer(payload?.transfer);
+  if (!transfer) throw new GalleryError("invalid-response");
+  return {
+    transfer,
+    project: payload?.project ? normalizeProject(payload.project, base) : null,
+  };
+}
+
+export interface FetchTransfersOptions {
+  token: string;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
+interface RawTransferList {
+  transfers?: unknown;
+}
+
+/** List the pending transfers offered to the signed-in user. */
+export async function fetchIncomingTransfers(
+  options: FetchTransfersOptions,
+): Promise<ProjectTransfer[]> {
+  const base = requireShareBase(options.baseUrl);
+  const payload = (await shareAuthorizedJsonRequest(
+    "/api/transfers/incoming",
+    options.token,
+    base,
+    { signal: options.signal, fetchImpl: options.fetchImpl },
+  )) as RawTransferList | null;
+  const raw = Array.isArray(payload?.transfers) ? payload.transfers : [];
+  return raw.map(normalizeTransfer).filter((item): item is ProjectTransfer => item !== null);
+}
+
+/** List the signed-in user's transfers still awaiting acceptance. */
+export async function fetchOutgoingTransfers(
+  options: FetchTransfersOptions,
+): Promise<ProjectTransfer[]> {
+  const base = requireShareBase(options.baseUrl);
+  const payload = (await shareAuthorizedJsonRequest(
+    "/api/transfers/outgoing",
+    options.token,
+    base,
+    { signal: options.signal, fetchImpl: options.fetchImpl },
+  )) as RawTransferList | null;
+  const raw = Array.isArray(payload?.transfers) ? payload.transfers : [];
+  return raw.map(normalizeTransfer).filter((item): item is ProjectTransfer => item !== null);
+}
+
+export interface AcceptProjectTransferOptions {
+  token: string;
+  transferId: string;
+  /** A replacement slug, used after the destination slug conflicts. */
+  slug?: string;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
+/** Accept a pending transfer, moving the project into the caller's namespace. */
+export async function acceptProjectTransfer(
+  options: AcceptProjectTransferOptions,
+): Promise<ProjectTransferResult> {
+  const base = requireShareBase(options.baseUrl);
+  const payload = (await shareAuthorizedJsonRequest(
+    `/api/transfers/${encodeURIComponent(options.transferId)}/accept`,
+    options.token,
+    base,
+    {
+      method: "POST",
+      body: options.slug ? { slug: options.slug } : {},
+      signal: options.signal,
+      fetchImpl: options.fetchImpl,
+    },
+  )) as { transfer?: unknown; project?: RawSharedProject } | null;
+  const transfer = normalizeTransfer(payload?.transfer);
+  if (!transfer) throw new GalleryError("invalid-response");
+  return {
+    transfer,
+    project: payload?.project ? normalizeProject(payload.project, base) : null,
+  };
+}
+
+export interface TransferIdOptions {
+  token: string;
+  transferId: string;
+  baseUrl?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}
+
+/** Decline a transfer offered to the caller. */
+export async function declineProjectTransfer(options: TransferIdOptions): Promise<void> {
+  const base = requireShareBase(options.baseUrl);
+  await shareAuthorizedJsonRequest(
+    `/api/transfers/${encodeURIComponent(options.transferId)}/decline`,
+    options.token,
+    base,
+    {
+      method: "POST",
+      signal: options.signal,
+      fetchImpl: options.fetchImpl,
+    },
+  );
+}
+
+/** Cancel a pending transfer the caller started or can still manage. */
+export async function cancelProjectTransfer(options: TransferIdOptions): Promise<void> {
+  const base = requireShareBase(options.baseUrl);
+  await shareAuthorizedJsonRequest(
+    `/api/transfers/${encodeURIComponent(options.transferId)}`,
+    options.token,
+    base,
+    {
+      method: "DELETE",
+      signal: options.signal,
+      fetchImpl: options.fetchImpl,
+    },
+  );
 }

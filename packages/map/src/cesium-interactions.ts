@@ -1,12 +1,15 @@
 import {
   effectiveLayerRenderState,
   IDENTIFY_ALL_LAYERS_ID,
+  identifyAllIncludes,
+  isMapClickClaimed,
   isPopupClickEnabled,
   isPopupHoverEnabled,
   resolvePopupMaxWidth,
   useAppStore,
 } from "@geolibre/core";
-import type { Cartesian2, CesiumWidget } from "@cesium/engine";
+import type { Cartesian2 } from "@cesium/core";
+import type { CesiumWidget } from "@cesium/engine";
 import type { Feature } from "geojson";
 import type { CesiumEngine } from "./cesium-engine";
 import {
@@ -164,7 +167,7 @@ export function installCesiumInteractions(
       hover?.remove();
       hover = null;
       hoverLayerId = null;
-      if (!point || moving || state.identifyLayerId) return;
+      if (!point || moving || state.identifyLayerId || !state.hoverTooltipsEnabled) return;
       if (!state.layers.some((layer) => isPopupHoverEnabled(layer.popup))) return;
       for (const hit of engine.identifyAtScreen(point)) {
         const layer = state.layers.find((item) => item.id === hit.layerId);
@@ -190,7 +193,8 @@ export function installCesiumInteractions(
     clearPopup();
     const state = useAppStore.getState();
     const target = state.identifyLayerId;
-    if (!target) return;
+    // A drawing map tool (Measure) owns the click: it is a vertex, not a pick.
+    if (!target || isMapClickClaimed()) return;
     const hits = engine.identifyAtScreen(
       event.position,
       target && target !== IDENTIFY_ALL_LAYERS_ID ? target : undefined,
@@ -207,6 +211,11 @@ export function installCesiumInteractions(
     for (const hit of hits) {
       const layer = state.layers.find((item) => item.id === hit.layerId);
       if (!layer || !isPopupClickEnabled(layer.popup)) continue;
+      if (
+        target === IDENTIFY_ALL_LAYERS_ID &&
+        !identifyAllIncludes(layer.id, state.identifyLayerIds)
+      )
+        continue;
       const configured = resolvePopupMaxWidth(layer.popup);
       const feature: Feature | null = hit.geometry
         ? { type: "Feature", properties: hit.properties, geometry: hit.geometry }
@@ -254,6 +263,7 @@ export function installCesiumInteractions(
   const popupLayerHidden = (state: ReturnType<typeof useAppStore.getState>) =>
     popupLayerIds.some((id) => layerHidden(state, id));
   const unsubscribe = useAppStore.subscribe((state, prev) => {
+    if (!state.hoverTooltipsEnabled && prev.hoverTooltipsEnabled) clearHover();
     if (state.preferences.map.showPointerElevation !== prev.preferences.map.showPointerElevation) {
       state.setPointerElevation(
         state.preferences.map.showPointerElevation && lastPointer

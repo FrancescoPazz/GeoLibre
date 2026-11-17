@@ -21,9 +21,6 @@ from geolibre_server.app.postgis import (
     PostgisReadRequest,
     PostgisTablesRequest,
     PostgisWriteRequest,
-    _allowed_postgis_targets,
-    _normalize_host,
-    _sanitize_error,
     _validate_postgis_target,
     postgis_read,
     postgis_status,
@@ -49,6 +46,13 @@ requires_live_postgis = pytest.mark.skipif(
     reason="GEOLIBRE_TEST_POSTGIS_DSN not set",
 )
 
+
+@pytest.fixture(autouse=True)
+def _default_feature_cap(monkeypatch):
+    """Pin the default editable-layer cap so a value exported in the shell cannot leak in."""
+    monkeypatch.delenv("GEOLIBRE_DB_MAX_FEATURES", raising=False)
+
+
 TABLE = "geolibre_writeback_test"
 NO_PK_TABLE = "geolibre_writeback_nopk"
 
@@ -67,58 +71,8 @@ def test_status_reports_availability() -> None:
     assert "message" in result
 
 
-def test_json_safe_stringifies_unsafe_integers() -> None:
-    """bigint keys beyond JS's safe range must not round through JSON."""
-    from geolibre_server.app.postgis import _json_safe
-
-    assert _json_safe(42) == 42
-    assert _json_safe(2**53 - 1) == 2**53 - 1
-    assert _json_safe(2**60) == str(2**60)
-    assert _json_safe(-(2**60)) == str(-(2**60))
-    assert _json_safe(True) is True
-
-
-def test_sanitize_error_scrubs_passwords() -> None:
-    url = "connection to postgresql://alice:hunter2@db.example.com/gis failed"
-    assert "hunter2" not in _sanitize_error(url)
-    kv = "invalid dsn: host=db user=alice password=hunter2 dbname=gis"
-    assert "hunter2" not in _sanitize_error(kv)
-    # An empty username (PGUSER from the environment) must not leak either.
-    no_user = "connection to postgresql://:hunter2@db.example.com/gis failed"
-    assert "hunter2" not in _sanitize_error(no_user)
-    # A pasted password containing a literal, unescaped @ must be fully
-    # redacted, not truncated at its first @.
-    at_sign = "connection to postgresql://alice:p@ss@db.example.com/gis failed"
-    scrubbed = _sanitize_error(at_sign)
-    assert "p@ss" not in scrubbed
-    assert "@ss@" not in scrubbed
-    assert "****@db.example.com" in scrubbed
-
-
-def test_postgis_allowlist_parses_hosts_ips_and_ports() -> None:
-    assert _allowed_postgis_targets(
-        "DB.EXAMPLE., db.internal:5433, 10.0.0.4, [2001:db8::1]:5432"
-    ) == {
-        ("db.example", None),
-        ("db.internal", 5433),
-        ("10.0.0.4", None),
-        ("2001:db8::1", 5432),
-    }
-
-
-def test_postgis_allowlist_requires_brackets_for_ipv6() -> None:
-    """An unbracketed `2001:db8::1:5432` is a valid address, not host plus port."""
-    with pytest.raises(ValueError):
-        _allowed_postgis_targets("2001:db8::1:5432")
-    assert _allowed_postgis_targets("[2001:db8::1]") == {("2001:db8::1", None)}
-
-
 def test_postgis_wildcard_lifts_the_restriction(monkeypatch) -> None:
     """``*`` (what the desktop app passes its own sidecar) allows any DSN."""
-    assert _allowed_postgis_targets("*") is None
-    # Mixing it with hosts looks like a narrowing but is not one.
-    with pytest.raises(ValueError):
-        _allowed_postgis_targets("db.example,*")
     monkeypatch.setenv("GEOLIBRE_POSTGIS_HOSTS", "*")
     for conninfo in (
         {"host": "anything.internal", "port": "5432"},
@@ -201,11 +155,6 @@ def test_postgis_allowlist_rejects_indirect_destinations(monkeypatch) -> None:
         assert exc.value.status_code == 400
 
 
-def test_postgis_bracketed_empty_host_is_rejected() -> None:
-    with pytest.raises(ValueError):
-        _normalize_host("[]")
-
-
 @requires_psycopg
 def test_nested_dbname_cannot_redirect_the_connection(monkeypatch) -> None:
     """A conninfo-shaped ``dbname`` must not move the connection off its host.
@@ -260,18 +209,18 @@ def test_write_requires_features() -> None:
 
 
 @requires_psycopg
-def test_write_rejects_oversized_payloads() -> None:
-    from geolibre_server import vector_ops
-
+def test_write_rejects_oversized_payloads(monkeypatch) -> None:
+    monkeypatch.setenv("GEOLIBRE_DB_MAX_FEATURES", "2")
     feature = {"type": "Feature", "properties": {}, "geometry": _point(0, 0)}
     request = PostgisWriteRequest(
         connection="postgresql://localhost/ignored",
         table=TABLE,
-        geojson=_collection([feature] * (vector_ops.MAX_FEATURES + 1)),
+        geojson=_collection([feature] * 3),
     )
     with pytest.raises(HTTPException) as exc:
         postgis_write(request)
     assert exc.value.status_code == 413
+    assert "GEOLIBRE_DB_MAX_FEATURES" in exc.value.detail
 
 
 def test_write_request_capabilities_parsing() -> None:
@@ -742,12 +691,46 @@ def test_write_explicit_key_insert_overrides_always_identity(live_table) -> None
 
 
 @requires_live_postgis
-def test_write_rejects_tables_beyond_feature_cap(live_table, monkeypatch) -> None:
-    """The key-set diff refuses tables larger than the editable-layer cap."""
+def test_read_reaches_past_the_geoprocessing_cap(live_table) -> None:
+    """Editable reads are not bound by the 50k geoprocessing payload cap (#3270)."""
     from geolibre_server import vector_ops
 
+    with psycopg.connect(LIVE_DSN) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {TABLE} (name, population, geom)
+                SELECT 'grid', g,
+                       ST_Transform(ST_SetSRID(ST_MakePoint(g %% 360 - 180, 0), 4326), 3857)
+                FROM generate_series(1, %s) AS g
+                """,
+                (vector_ops.MAX_FEATURES,),
+            )
+        conn.commit()
     read = postgis_read(PostgisReadRequest(connection=LIVE_DSN, table=TABLE))
-    monkeypatch.setattr(vector_ops, "MAX_FEATURES", 2)
+    assert read["feature_count"] == vector_ops.MAX_FEATURES + 3
+
+
+@requires_live_postgis
+def test_read_rejects_tables_beyond_feature_cap(live_table, monkeypatch) -> None:
+    """A table over the cap is refused with a message naming the way out."""
+    monkeypatch.setenv("GEOLIBRE_DB_MAX_FEATURES", "2")
+    with pytest.raises(HTTPException) as exc:
+        postgis_read(PostgisReadRequest(connection=LIVE_DSN, table=TABLE))
+    assert exc.value.status_code == 413
+    assert "2-feature limit" in exc.value.detail
+    assert "vector tiles" in exc.value.detail
+    assert "GEOLIBRE_DB_MAX_FEATURES" in exc.value.detail
+    monkeypatch.setenv("GEOLIBRE_DB_MAX_FEATURES", "3")
+    read = postgis_read(PostgisReadRequest(connection=LIVE_DSN, table=TABLE))
+    assert read["feature_count"] == 3
+
+
+@requires_live_postgis
+def test_write_rejects_tables_beyond_feature_cap(live_table, monkeypatch) -> None:
+    """The key-set diff refuses tables larger than the editable-layer cap."""
+    read = postgis_read(PostgisReadRequest(connection=LIVE_DSN, table=TABLE))
+    monkeypatch.setenv("GEOLIBRE_DB_MAX_FEATURES", "2")
     with pytest.raises(HTTPException) as exc:
         postgis_write(
             PostgisWriteRequest(

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import copy
 import csv
 import html as _html
@@ -56,6 +58,19 @@ MAP_CONTROLS = frozenset(
 )
 
 _VALID_PROJECTIONS = frozenset({"globe", "mercator"})
+
+#: Units the Measure panel accepts for :meth:`Map.show_control`. Mirrors
+#: ``MEASURE_DISTANCE_UNITS`` / ``MEASURE_AREA_UNITS`` in
+#: ``packages/plugins/src/plugins/components/measure.ts``.
+MEASURE_DISTANCE_UNITS = frozenset(
+    {"meters", "kilometers", "miles", "feet", "yards", "nautical-miles"}
+)
+MEASURE_AREA_UNITS = frozenset(
+    {"square-meters", "square-kilometers", "square-miles", "hectares", "acres", "square-feet"}
+)
+
+#: Panels that take a ``collapsed`` option in :meth:`Map.show_control`.
+_COLLAPSIBLE_PANELS = frozenset({"measure", "minimap"})
 
 # CSV/tabular input is inlined into the project exactly like GeoJSON is, so the
 # same 50 MB ceiling applies to a fetched response or a local file.
@@ -245,6 +260,8 @@ def render_project_html(
     width: str = "100%",
     height: str = "800px",
     app_url: str | None = None,
+    layout: str | None = None,
+    theme: str | None = None,
 ) -> str:
     """Render a project dict as a standalone HTML page.
 
@@ -263,13 +280,18 @@ def render_project_html(
         height: CSS height of the embedded map.
         app_url: Base URL of the GeoLibre app to embed. Defaults to
             :data:`DEFAULT_HTML_APP_URL`.
+        layout: The app chrome to embed with: ``"embed"``, ``"full"``, or
+            ``"maponly"``, as for :class:`Map`. ``None`` leaves the app's
+            default chrome.
+        theme: ``"light"`` or ``"dark"``; ``None`` follows the viewer's OS.
 
     Returns:
         The HTML document as a string.
 
     Raises:
-        ValueError: If ``width`` or ``height`` is not a plain CSS dimension, or
-            ``app_url`` is not an ``http``/``https`` URL.
+        ValueError: If ``width`` or ``height`` is not a plain CSS dimension,
+            ``app_url`` is not an ``http``/``https`` URL, or ``layout`` or
+            ``theme`` is not a recognized value.
     """
     base_url = app_url or DEFAULT_HTML_APP_URL
     # The project is posted into the frame, so the app URL decides where it
@@ -286,9 +308,36 @@ def render_project_html(
     # fragment would otherwise swallow a trailing "?embed=1" (browsers read it
     # as part of the fragment), so the app never sees the flag. partition keeps
     # the fragment and its "#" intact when present and yields "" when absent.
+    # The chrome flags ride along the same way, matching the query the widget
+    # front-end builds, so the export looks like the notebook map (#2764).
+    if layout is not None and layout not in _VALID_LAYOUTS:
+        raise ValueError(f"to_html: layout must be one of {sorted(_VALID_LAYOUTS)}, got {layout!r}")
+    if theme is not None and theme not in _VALID_THEMES:
+        raise ValueError(f"to_html: theme must be one of {sorted(_VALID_THEMES)}, got {theme!r}")
+    flags = ["embed=1"]
+    if layout == "maponly":
+        flags.append("maponly=1")
+    elif layout == "embed":
+        flags.append("layout=embed")
+    if theme is not None:
+        flags.append(f"theme={theme}")
     base, hash_sep, fragment = base_url.partition("#")
+    # A layout/theme key the app_url already sets wins, like the in-app
+    # exporter's flags. embed=1 is forced: without embed mode the app never
+    # accepts the posted project, and the app reads only the first "embed", so
+    # an app_url "embed" that does not enable it is dropped rather than kept.
+    path, query_sep, query = base.partition("?")
+    kept = [
+        pair
+        for pair in query.split("&")
+        if pair and not (pair.split("=", 1)[0] == "embed" and pair not in ("embed=1", "embed=true"))
+    ]
+    base = f"{path}{query_sep if kept else ''}{'&'.join(kept)}"
+    preset = {pair.split("=", 1)[0] for pair in kept}
+    flags = [flag for flag in flags if flag.split("=", 1)[0] not in preset]
     separator = "&" if "?" in base else "?"
-    iframe_src = f"{base}{separator}embed=1{hash_sep}{fragment}"
+    query = "&".join(flags)
+    iframe_src = f"{base}{separator if query else ''}{query}{hash_sep}{fragment}"
     # width/height land inside a <style> rule; _html_escape does not neutralise
     # CSS metacharacters like "}" or ";", so validate them as plain CSS
     # dimensions to keep a stray value from closing the rule and injecting CSS.
@@ -349,16 +398,20 @@ class Map(anywidget.AnyWidget):
     # port proxy.
     _remote_mode = traitlets.Unicode("").tag(sync=True)
     height = traitlets.Unicode("800px").tag(sync=True)
-    # "embed" (compact chrome), "full" (desktop chrome), or "maponly".
-    layout = traitlets.Unicode("embed").tag(sync=True)
+    # "embed" (compact chrome), "full" (desktop chrome), or "maponly". Not named
+    # ``layout``: that trait belongs to ipywidgets.DOMWidget and holds the Layout
+    # widget every frontend resolves when it displays the view.
+    app_layout = traitlets.Unicode("embed").tag(sync=True)
     theme = traitlets.Unicode("light").tag(sync=True)
     # Bumped on every Python-initiated project change; echoed by the app.
     _seq = traitlets.Int(0).tag(sync=True)
     # Last error reported by the app (e.g. an invalid project).
     error = traitlets.Unicode("").tag(sync=True)
-    # UI state the project does not carry, replayed into the app whenever it
-    # loads: ``identify`` (a layer id, "all", or None) and ``controls`` (a
-    # control or panel name -> shown). Set through set_identify/show_control.
+    # UI state replayed into the app whenever it loads: ``identify`` (a layer
+    # id, a list of layer ids, "all", or None) and ``controls`` (a control or
+    # panel name -> shown). Set through set_identify/show_control. The live
+    # project does not carry it; exports write it as the project's
+    # ``interaction`` block (see _project_with_ui).
     _ui = traitlets.Dict().tag(sync=True)
 
     def __init__(
@@ -369,7 +422,8 @@ class Map(anywidget.AnyWidget):
         basemap: str | None = None,
         renderer: str = "maplibre",
         height: str = "800px",
-        layout: str = "embed",
+        app_layout: str | None = None,
+        layout: Any = None,
         theme: str = "light",
         server_proxy: bool | str = "auto",
         **kwargs: Any,
@@ -382,8 +436,11 @@ class Map(anywidget.AnyWidget):
             basemap: A basemap name or MapLibre style URL for the background.
             renderer: ``"maplibre"`` (default), ``"cesium"``, ``"mapbox"``, or ``"arcgis"``.
             height: CSS height of the widget (e.g. ``"800px"``).
-            layout: ``"embed"`` (compact UI), ``"full"`` (full desktop UI), or
-                ``"maponly"`` (map without chrome).
+            app_layout: ``"embed"`` (compact UI, the default), ``"full"`` (full
+                desktop UI), or ``"maponly"`` (map without chrome).
+            layout: An ``ipywidgets.Layout`` for the widget, as on any other
+                ipywidgets widget. Its ``height`` overrides ``height``. Passing
+                an ``app_layout`` string here is deprecated.
             theme: ``"light"`` or ``"dark"``.
             server_proxy: How the browser reaches the bundled app.
                 ``"auto"`` (default) serves the app directly from localhost for
@@ -401,14 +458,31 @@ class Map(anywidget.AnyWidget):
                 always uses its own port proxy.
             **kwargs: Forwarded to ``anywidget.AnyWidget``.
         """
-        if layout not in _VALID_LAYOUTS:
-            raise ValueError(f"layout must be one of {sorted(_VALID_LAYOUTS)}, got {layout!r}")
+        if isinstance(layout, str):
+            if app_layout is not None:
+                raise TypeError("Pass the app chrome as app_layout only, not also as layout")
+            warnings.warn(
+                "Map(layout=<str>) is deprecated; use Map(app_layout=<str>). "
+                "layout now holds the ipywidgets Layout.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            app_layout, layout = layout, None
+        if app_layout is None:
+            app_layout = "embed"
+        if app_layout not in _VALID_LAYOUTS:
+            raise ValueError(
+                f"app_layout must be one of {sorted(_VALID_LAYOUTS)}, got {app_layout!r}"
+            )
         if theme not in _VALID_THEMES:
             raise ValueError(f"theme must be one of {sorted(_VALID_THEMES)}, got {theme!r}")
+        if layout is not None:
+            kwargs["layout"] = layout
         super().__init__(**kwargs)
         self.height = height
-        self.layout = layout
+        self.app_layout = app_layout
         self.theme = theme
+        self._watch_layout_height(self.layout)
         self._remote_mode = self._resolve_remote_mode(server_proxy)
         # Always start the localhost bundle server. Locally it is the app origin;
         # under "remote" it backs the jupyter-server-proxy route (and serves the
@@ -443,9 +517,54 @@ class Map(anywidget.AnyWidget):
         )
         self.on_msg(self._on_custom_msg)
 
+    def _watch_layout_height(self, layout: Any) -> None:
+        """Follow a Layout widget's height, applying the one it already has.
+
+        ipywidgets sizes only the view's outer element from the Layout. The app
+        iframe inside it is sized by the ``height`` trait, so without this
+        ``m.layout.height = "100%"`` would leave the map at its old height.
+
+        Args:
+            layout: The ``ipywidgets.Layout`` now assigned to this widget.
+        """
+        layout.observe(self._on_layout_height, "height")
+        if layout.height:
+            self.height = layout.height
+
+    def _on_layout_height(self, change: dict[str, Any]) -> None:
+        """Copy a Layout height change onto the ``height`` trait.
+
+        Args:
+            change: The traitlets change notification. Clearing the Layout's
+                height leaves the current ``height`` in place.
+        """
+        if change["new"]:
+            self.height = change["new"]
+
+    @traitlets.observe("layout")
+    def _on_layout_replaced(self, change: dict[str, Any]) -> None:
+        """Move the height watcher when ``m.layout`` is assigned a new Layout.
+
+        Args:
+            change: The traitlets change notification for the ``layout`` trait.
+        """
+        old = change["old"]
+        if old is not None and old is not traitlets.Undefined:
+            old.unobserve(self._on_layout_height, "height")
+        self._watch_layout_height(change["new"])
+
     def close(self) -> None:
         """Close the widget and remove rasters materialized from xarray data."""
         try:
+            # The Layout outlives this widget in the ipywidgets registry, so its
+            # observer would otherwise keep a closed Map alive. traitlets raises
+            # ValueError once it is gone, as on a repeated close(). Read the stored
+            # value: a rejected constructor reaches here through __del__, and
+            # self.layout would create a new Layout widget just to discard it.
+            layout = self._trait_values.get("layout")
+            if layout is not None:
+                with contextlib.suppress(ValueError):
+                    layout.unobserve(self._on_layout_height, "height")
             super().close()
         finally:
             _remove_temporary_rasters(getattr(self, "_temporary_rasters", []))
@@ -525,15 +644,36 @@ class Map(anywidget.AnyWidget):
         msg_type = content.get("type")
         if msg_type == "geolibre:result":
             slot = self._pending.get(content.get("requestId"))
-            if slot is None:
-                # A reply for a request that already timed out / was cleaned up.
+            if slot is None or slot["done"]:
+                # A reply for a request that already timed out / was cleaned
+                # up, or a duplicate reply.
                 return
             slot["ok"] = bool(content.get("ok"))
             slot["value"] = content.get("value")
             slot["error"] = content.get("error")
             slot["done"] = True
+            future = slot.get("future")
+            if future is not None:
+                # Async request: wake the awaiting coroutine on its own loop.
+                # Replies may arrive on any thread (the Jupyter kernel's,
+                # Shiny's event loop, ...), so go through call_soon_threadsafe.
+                try:
+                    future.get_loop().call_soon_threadsafe(self._resolve_future, future)
+                except RuntimeError:
+                    # The awaiting coroutine's loop already closed.
+                    pass
         elif msg_type == "geolibre:event":
             self._dispatch_event(content.get("event"), content.get("payload"))
+
+    @staticmethod
+    def _resolve_future(future: asyncio.Future) -> None:
+        """Resolve a pending async-request future, if nobody beat us to it.
+
+        A future can already be done when its waiter timed out
+        (``asyncio.wait_for`` cancels it) but the reply arrived anyway.
+        """
+        if not future.done():
+            future.set_result(None)
 
     def _dispatch_event(self, event: Any, payload: Any) -> None:
         """Invoke every callback registered for an event, isolating failures."""
@@ -548,12 +688,19 @@ class Map(anywidget.AnyWidget):
 
     @staticmethod
     def _wait_for_result(slot: dict[str, Any], method: str, timeout: float) -> None:
-        """Block the kernel until a result slot resolves or the timeout elapses.
+        """Block until a result slot resolves or the timeout elapses.
 
         Jupyter comms are asynchronous, so the kernel must keep processing
         incoming messages while the calling cell blocks. ``jupyter_ui_poll``
         pumps the kernel's event loop re-entrantly (handling the ipykernel
         version differences) so the ``on_msg`` reply lands and fills the slot.
+
+        Outside Jupyter there is no kernel to pump (e.g., inside a Shiny app,
+        where the reply is delivered by the app's asyncio event loop). Blocking
+        is then only legitimate on a thread that is not running an event loop
+        (e.g., a worker thread), which keeps the loop that delivers the reply
+        free; a plain sleep-poll is enough. Blocking a thread that is running
+        an event loop would deadlock, so that case raises instead.
 
         Args:
             slot: The pending request slot, resolved in place by ``_on_custom_msg``.
@@ -562,15 +709,14 @@ class Map(anywidget.AnyWidget):
 
         Raises:
             TimeoutError: If no reply arrives within ``timeout`` seconds.
-            RuntimeError: If ``jupyter_ui_poll`` is not installed.
+            RuntimeError: If no kernel pump is available and the calling
+                thread is running an asyncio event loop.
         """
         try:
             from jupyter_ui_poll import ui_events
-        except ImportError as exc:
-            raise RuntimeError(
-                "Interactive GeoLibre queries require the 'jupyter_ui_poll' "
-                "package. Install it with `pip install jupyter_ui_poll`."
-            ) from exc
+        except ImportError:
+            ui_events = None  # type: ignore[assignment]
+
         deadline = time.monotonic() + timeout
 
         def _check_deadline() -> None:
@@ -579,21 +725,60 @@ class Map(anywidget.AnyWidget):
                     f"GeoLibre command {method!r} timed out after {timeout}s. "
                     "The map must be displayed and loaded before it can "
                     "answer; show the map, then retry or pass a larger "
-                    "timeout=."
+                    "timeout=. Outside Jupyter and Shiny, the reply must come "
+                    "from a running app on another thread."
                 )
 
-        with ui_events() as poll:
-            while not slot["done"]:
-                # Check before and after pumping: a slow poll() with a large event
-                # backlog could otherwise overrun a very small timeout.
-                _check_deadline()
-                poll(10)
-                if slot["done"]:
-                    break
-                _check_deadline()
-                # 20 Hz: imperceptible latency, far less CPU than a 100 Hz spin
-                # (jupyter_ui_poll already pumps 10 kernel events per iteration).
-                time.sleep(0.05)
+        if ui_events is not None:
+            # Only entering the pump is guarded: an AttributeError or
+            # RuntimeError raised later (by poll() or a reply handler) is a real
+            # failure and must reach the caller instead of being swallowed.
+            with contextlib.ExitStack() as stack:
+                try:
+                    poll = stack.enter_context(ui_events())
+                except (AttributeError, RuntimeError):
+                    # No live kernel for ui_events to pump (e.g., inside a Shiny
+                    # app). Fall through to the kernel-free path below.
+                    poll = None
+                if poll is not None:
+                    while not slot["done"]:
+                        # Check before and after pumping: a slow poll() with a
+                        # large event backlog could otherwise overrun a very
+                        # small timeout.
+                        _check_deadline()
+                        poll(10)
+                        if slot["done"]:
+                            break
+                        _check_deadline()
+                        # 20 Hz: imperceptible latency, far less CPU than a 100
+                        # Hz spin (jupyter_ui_poll already pumps 10 kernel
+                        # events per iteration).
+                        time.sleep(0.05)
+                    return
+
+        # No kernel pump available. The reply arrives via an event loop on
+        # another thread, so blocking is only safe when this thread is not
+        # itself running an event loop.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass  # No loop on this thread (e.g., a worker thread): safe to block.
+        else:
+            raise RuntimeError(
+                f"GeoLibre's {method}() blocks until the running app replies, "
+                "but this thread is running the event loop that would deliver "
+                "the reply, so waiting here would deadlock. In Jupyter, "
+                "install 'jupyter_ui_poll' to pump the kernel's event loop "
+                "instead. In Shiny, call blocking methods from a worker "
+                "thread -- e.g., inside `reactive.extended_task`, via "
+                "`asyncio.get_running_loop().run_in_executor(None, ...)` -- "
+                "or use a non-blocking alternative (e.g., set_center() "
+                "instead of fly_to(), or read the synced `project` trait "
+                "instead of get_center())."
+            )
+        while not slot["done"]:
+            _check_deadline()
+            time.sleep(0.05)
 
     def request(
         self,
@@ -645,6 +830,71 @@ class Map(anywidget.AnyWidget):
             raise RuntimeError(slot["error"] or f"GeoLibre command {method!r} failed")
         return slot["value"]
 
+    async def request_async(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float = 10.0,
+    ) -> Any:
+        """Send a command to the running app and asynchronously await its reply.
+
+        Async counterpart of :meth:`request`, with the same command set,
+        arguments, return value, and errors. Because awaiting suspends the
+        coroutine instead of blocking a thread, this works on the thread
+        running the asyncio event loop that delivers the reply -- e.g.
+        directly inside an async Shiny for Python observer or
+        ``reactive.extended_task``, with no worker thread and no
+        ``jupyter_ui_poll`` pumping. It also works with top-level ``await``
+        in Jupyter.
+
+        Args:
+            method: The command name (e.g. ``"getCenter"``).
+            params: Command parameters.
+            timeout: Seconds to wait for the reply.
+
+        Returns:
+            The command's result value.
+
+        Raises:
+            TimeoutError: If the app does not reply in time.
+            RuntimeError: If the app reports the command failed.
+        """
+        loop = asyncio.get_running_loop()
+        request_id = uuid.uuid4().hex
+        slot: dict[str, Any] = {
+            "done": False,
+            "ok": False,
+            "value": None,
+            "error": None,
+            "future": loop.create_future(),
+        }
+        try:
+            # Register and send inside the try so a failing send() still cleans
+            # up the slot in finally.
+            self._pending[request_id] = slot
+            self.send(
+                {
+                    "type": "geolibre:command",
+                    "requestId": request_id,
+                    "method": method,
+                    "params": params or {},
+                }
+            )
+            await asyncio.wait_for(slot["future"], timeout)
+        except TimeoutError:
+            raise TimeoutError(
+                f"GeoLibre command {method!r} timed out after {timeout}s. "
+                "The map must be displayed and loaded before it can "
+                "answer; show the map, then retry or pass a larger "
+                "timeout=."
+            ) from None
+        finally:
+            self._pending.pop(request_id, None)
+        if not slot["ok"]:
+            raise RuntimeError(slot["error"] or f"GeoLibre command {method!r} failed")
+        return slot["value"]
+
     def on(self, event: str, callback: Callable[[Any], None]) -> Callable[[], None]:
         """Register a callback for an app event.
 
@@ -688,13 +938,25 @@ class Map(anywidget.AnyWidget):
         """Return the live camera ``{center, zoom, bearing, pitch, bbox}``."""
         return self.request("getView", timeout=timeout)
 
+    async def get_view_async(self, *, timeout: float = 10.0) -> dict[str, Any]:
+        """Async variant of :meth:`get_view`; see :meth:`request_async`."""
+        return await self.request_async("getView", timeout=timeout)
+
     def get_center(self, *, timeout: float = 10.0) -> list[float]:
         """Return the live map center as ``[lng, lat]``."""
         return self.request("getCenter", timeout=timeout)
 
+    async def get_center_async(self, *, timeout: float = 10.0) -> list[float]:
+        """Async variant of :meth:`get_center`; see :meth:`request_async`."""
+        return await self.request_async("getCenter", timeout=timeout)
+
     def get_bounds(self, *, timeout: float = 10.0) -> list[float]:
         """Return the live viewport bounds as ``[west, south, east, north]``."""
         return self.request("getBounds", timeout=timeout)
+
+    async def get_bounds_async(self, *, timeout: float = 10.0) -> list[float]:
+        """Async variant of :meth:`get_bounds`; see :meth:`request_async`."""
+        return await self.request_async("getBounds", timeout=timeout)
 
     def fly_to(
         self,
@@ -718,6 +980,40 @@ class Map(anywidget.AnyWidget):
             duration: Animation duration in milliseconds.
             timeout: Seconds to wait for acknowledgement.
         """
+        self.request(
+            "flyTo",
+            self._fly_to_params(lng, lat, zoom, bearing, pitch, duration),
+            timeout=timeout,
+        )
+
+    async def fly_to_async(
+        self,
+        lng: float | None = None,
+        lat: float | None = None,
+        *,
+        zoom: float | None = None,
+        bearing: float | None = None,
+        pitch: float | None = None,
+        duration: float | None = None,
+        timeout: float = 10.0,
+    ) -> None:
+        """Async variant of :meth:`fly_to`; see :meth:`request_async`."""
+        await self.request_async(
+            "flyTo",
+            self._fly_to_params(lng, lat, zoom, bearing, pitch, duration),
+            timeout=timeout,
+        )
+
+    @staticmethod
+    def _fly_to_params(
+        lng: float | None,
+        lat: float | None,
+        zoom: float | None,
+        bearing: float | None,
+        pitch: float | None,
+        duration: float | None,
+    ) -> dict[str, Any]:
+        """Build the ``flyTo`` command params; only provided fields change."""
         params: dict[str, Any] = {}
         if lng is not None and lat is not None:
             params["center"] = [float(lng), float(lat)]
@@ -729,7 +1025,7 @@ class Map(anywidget.AnyWidget):
             params["pitch"] = float(pitch)
         if duration is not None:
             params["duration"] = float(duration)
-        self.request("flyTo", params, timeout=timeout)
+        return params
 
     def fit_bounds(
         self,
@@ -738,6 +1034,24 @@ class Map(anywidget.AnyWidget):
         timeout: float = 10.0,
     ) -> None:
         """Fit the camera to ``[west, south, east, north]``."""
+        values = self._validate_bounds(bounds)
+        self.request("fitBounds", {"bounds": values}, timeout=timeout)
+
+    async def fit_bounds_async(
+        self,
+        bounds: list[float] | tuple[float, float, float, float],
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        """Async variant of :meth:`fit_bounds`; see :meth:`request_async`."""
+        values = self._validate_bounds(bounds)
+        await self.request_async("fitBounds", {"bounds": values}, timeout=timeout)
+
+    @staticmethod
+    def _validate_bounds(
+        bounds: list[float] | tuple[float, float, float, float],
+    ) -> list[float]:
+        """Validate ``[west, south, east, north]`` bounds and return them as floats."""
         values = [float(b) for b in bounds]
         if len(values) != 4:
             raise ValueError("bounds must contain [west, south, east, north]")
@@ -746,7 +1060,7 @@ class Map(anywidget.AnyWidget):
         west, south, east, north = values
         if west > east or south > north:
             raise ValueError("bounds must satisfy west <= east and south <= north")
-        self.request("fitBounds", {"bounds": values}, timeout=timeout)
+        return values
 
     def zoom_to_bounds(
         self,
@@ -757,10 +1071,24 @@ class Map(anywidget.AnyWidget):
         """Fit the map to bounds (leafmap-style alias of :meth:`fit_bounds`)."""
         self.fit_bounds(bounds, timeout=timeout)
 
+    async def zoom_to_bounds_async(
+        self,
+        bounds: list[float] | tuple[float, float, float, float],
+        *,
+        timeout: float = 10.0,
+    ) -> None:
+        """Async variant of :meth:`zoom_to_bounds`; see :meth:`request_async`."""
+        await self.fit_bounds_async(bounds, timeout=timeout)
+
     def zoom_to_layer(self, layer: str | Layer, *, timeout: float = 10.0) -> None:
         """Fit the map to a layer, addressed by id, name, or layer handle."""
         resolved = self._resolve_layer(layer)
         self.request("zoomToLayer", {"layerId": resolved.id}, timeout=timeout)
+
+    async def zoom_to_layer_async(self, layer: str | Layer, *, timeout: float = 10.0) -> None:
+        """Async variant of :meth:`zoom_to_layer`; see :meth:`request_async`."""
+        resolved = self._resolve_layer(layer)
+        await self.request_async("zoomToLayer", {"layerId": resolved.id}, timeout=timeout)
 
     def identify(
         self,
@@ -787,6 +1115,20 @@ class Map(anywidget.AnyWidget):
             params["layerId"] = layer_id
         return self.request("identify", params, timeout=timeout)
 
+    async def identify_async(
+        self,
+        lng: float,
+        lat: float,
+        *,
+        layer_id: str | None = None,
+        timeout: float = 10.0,
+    ) -> list[dict[str, Any]]:
+        """Async variant of :meth:`identify`; see :meth:`request_async`."""
+        params: dict[str, Any] = {"lngLat": [float(lng), float(lat)]}
+        if layer_id is not None:
+            params["layerId"] = layer_id
+        return await self.request_async("identify", params, timeout=timeout)
+
     def get_features(self, layer_id: str, *, timeout: float = 10.0) -> list[Feature]:
         """Return a layer's features as :class:`Feature` (GeoJSON) objects.
 
@@ -802,6 +1144,18 @@ class Map(anywidget.AnyWidget):
             A list of :class:`Feature` objects (each also a plain GeoJSON dict).
         """
         features = self.request("getLayerFeatures", {"layerId": layer_id}, timeout=timeout)
+        return self._wrap_features(features)
+
+    async def get_features_async(self, layer_id: str, *, timeout: float = 10.0) -> list[Feature]:
+        """Async variant of :meth:`get_features`; see :meth:`request_async`."""
+        features = await self.request_async(
+            "getLayerFeatures", {"layerId": layer_id}, timeout=timeout
+        )
+        return self._wrap_features(features)
+
+    @staticmethod
+    def _wrap_features(features: Any) -> list[Feature]:
+        """Wrap raw GeoJSON feature dicts as :class:`Feature` objects."""
         return [Feature(f) for f in features or []]
 
     @staticmethod
@@ -854,7 +1208,15 @@ class Map(anywidget.AnyWidget):
             the result is an empty list; use :meth:`identify` for those layers.
         """
         features = self.request("getSelectedFeatures", timeout=timeout)
-        feats = [Feature(f) for f in features or []]
+        feats = self._wrap_features(features)
+        return self._features_to_gdf(feats) if as_gdf else feats
+
+    async def get_selected_features_async(
+        self, *, as_gdf: bool = False, timeout: float = 10.0
+    ) -> list[Feature] | Any:
+        """Async variant of :meth:`get_selected_features`; see :meth:`request_async`."""
+        features = await self.request_async("getSelectedFeatures", timeout=timeout)
+        feats = self._wrap_features(features)
         return self._features_to_gdf(feats) if as_gdf else feats
 
     def get_drawn_features(
@@ -876,7 +1238,15 @@ class Map(anywidget.AnyWidget):
             ``as_gdf`` is true.
         """
         features = self.request("getDrawnFeatures", timeout=timeout)
-        feats = [Feature(f) for f in features or []]
+        feats = self._wrap_features(features)
+        return self._features_to_gdf(feats) if as_gdf else feats
+
+    async def get_drawn_features_async(
+        self, *, as_gdf: bool = False, timeout: float = 10.0
+    ) -> list[Feature] | Any:
+        """Async variant of :meth:`get_drawn_features`; see :meth:`request_async`."""
+        features = await self.request_async("getDrawnFeatures", timeout=timeout)
+        feats = self._wrap_features(features)
         return self._features_to_gdf(feats) if as_gdf else feats
 
     @property
@@ -900,6 +1270,10 @@ class Map(anywidget.AnyWidget):
             :meth:`run_algorithm`.
         """
         return self.request("listAlgorithms", timeout=timeout)
+
+    async def list_algorithms_async(self, *, timeout: float = 10.0) -> list[dict[str, Any]]:
+        """Async variant of :meth:`list_algorithms`; see :meth:`request_async`."""
+        return await self.request_async("listAlgorithms", timeout=timeout)
 
     def run_algorithm(
         self,
@@ -926,6 +1300,20 @@ class Map(anywidget.AnyWidget):
             timeout=timeout,
         )
 
+    async def run_algorithm_async(
+        self,
+        algorithm_id: str,
+        parameters: dict[str, Any] | None = None,
+        *,
+        timeout: float = 120.0,
+    ) -> dict[str, Any]:
+        """Async variant of :meth:`run_algorithm`; see :meth:`request_async`."""
+        return await self.request_async(
+            "runAlgorithm",
+            {"id": algorithm_id, "params": parameters or {}},
+            timeout=timeout,
+        )
+
     def run_model_builder(
         self,
         graph: dict[str, Any],
@@ -940,6 +1328,15 @@ class Map(anywidget.AnyWidget):
         """
         return self.request("runModelBuilder", {"graph": graph}, timeout=timeout)
 
+    async def run_model_builder_async(
+        self,
+        graph: dict[str, Any],
+        *,
+        timeout: float = 600.0,
+    ) -> dict[str, Any]:
+        """Async variant of :meth:`run_model_builder`; see :meth:`request_async`."""
+        return await self.request_async("runModelBuilder", {"graph": graph}, timeout=timeout)
+
     def list_whitebox_tools(self, *, timeout: float = 30.0) -> list[dict[str, Any]]:
         """List the bundled Whitebox/GeoLibre WASM tools and their parameters.
 
@@ -947,6 +1344,10 @@ class Map(anywidget.AnyWidget):
         runtime executes the tools. Display the map before calling this method.
         """
         return self.request("listWhiteboxTools", timeout=timeout)
+
+    async def list_whitebox_tools_async(self, *, timeout: float = 30.0) -> list[dict[str, Any]]:
+        """Async variant of :meth:`list_whitebox_tools`; see :meth:`request_async`."""
+        return await self.request_async("listWhiteboxTools", timeout=timeout)
 
     def run_whitebox_tool(
         self,
@@ -972,15 +1373,34 @@ class Map(anywidget.AnyWidget):
         Returns:
             ``{"logs": [...], "resultLayerIds": [...]}``.
         """
-        resolved = {
-            key: self._resolve_layer(value).id if isinstance(value, Layer) else value
-            for key, value in (parameters or {}).items()
-        }
+        resolved = self._resolve_tool_params(parameters)
         return self.request(
             "runWhiteboxTool",
             {"id": str(tool_id), "params": resolved},
             timeout=timeout,
         )
+
+    async def run_whitebox_tool_async(
+        self,
+        tool_id: str,
+        parameters: dict[str, Any] | None = None,
+        *,
+        timeout: float = 300.0,
+    ) -> dict[str, Any]:
+        """Async variant of :meth:`run_whitebox_tool`; see :meth:`request_async`."""
+        resolved = self._resolve_tool_params(parameters)
+        return await self.request_async(
+            "runWhiteboxTool",
+            {"id": str(tool_id), "params": resolved},
+            timeout=timeout,
+        )
+
+    def _resolve_tool_params(self, parameters: dict[str, Any] | None) -> dict[str, Any]:
+        """Replace :class:`Layer` handles in tool parameters with their layer ids."""
+        return {
+            key: self._resolve_layer(value).id if isinstance(value, Layer) else value
+            for key, value in (parameters or {}).items()
+        }
 
     def to_image(self, path: str | None = None, *, timeout: float = 30.0) -> bytes | None:
         """Capture the current map view as a PNG.
@@ -994,6 +1414,18 @@ class Map(anywidget.AnyWidget):
             The PNG bytes, or ``None`` when written to ``path``.
         """
         data_url = self.request("toImage", timeout=timeout)
+        return self._png_from_data_url(data_url, path)
+
+    async def to_image_async(
+        self, path: str | None = None, *, timeout: float = 30.0
+    ) -> bytes | None:
+        """Async variant of :meth:`to_image`; see :meth:`request_async`."""
+        data_url = await self.request_async("toImage", timeout=timeout)
+        return self._png_from_data_url(data_url, path)
+
+    @staticmethod
+    def _png_from_data_url(data_url: Any, path: str | None) -> bytes | None:
+        """Decode a ``toImage`` data URL to PNG bytes, optionally writing ``path``."""
         _, sep, encoded = str(data_url).partition(",")
         if not sep:
             raise ValueError(f"toImage returned an unexpected value: {data_url!r}")
@@ -1018,7 +1450,8 @@ class Map(anywidget.AnyWidget):
 
         The page embeds the GeoLibre app in an ``<iframe>`` and injects the
         current project into it over the same ``postMessage`` bridge the widget
-        uses, so it renders the map exactly as configured here. Unlike
+        uses, so it renders the map exactly as configured here, in this map's
+        :attr:`app_layout` and :attr:`theme`. Unlike
         :meth:`to_image` this needs no running kernel to view; by default it
         loads the hosted GeoLibre app over the network so the file stays
         portable.
@@ -1045,11 +1478,13 @@ class Map(anywidget.AnyWidget):
             URLs or tile sources for a fully self-contained export.
         """
         html = render_project_html(
-            self.project,
+            self._project_with_ui(copy.deepcopy(self.project)),
             title=title,
             width=width,
             height=height or self.height,
             app_url=app_url,
+            layout=self.app_layout,
+            theme=self.theme,
         )
         if path is not None:
             out = pathlib.Path(path).expanduser()
@@ -1225,6 +1660,379 @@ class Map(anywidget.AnyWidget):
         """Drop a layer's popup config, restoring the default popup."""
         handle = self._resolve_layer(layer)
         self._update_project(lambda project: _authoring.clear_popup(project, handle.id))
+
+    def set_layer_metadata(
+        self, layer: str | Layer, *, merge: bool = False, **fields: Any
+    ) -> dict[str, Any] | None:
+        """Set a layer's descriptive (catalog) metadata.
+
+        The app shows and edits it in the layer's Metadata dialog, exports it
+        as a STAC Item, and writes it into GeoParquet exports.
+
+        Args:
+            layer: The layer, by id, name, or handle.
+            merge: Keep existing fields that ``fields`` does not name.
+            **fields: Any of ``title``, ``abstract``, ``keywords`` (list or
+                comma-separated string), ``license`` (SPDX id or free text),
+                ``attribution``, ``contact`` (mapping with ``name``,
+                ``email``, ``organization``), ``lineage``,
+                ``temporal_extent`` (``(start, end)`` ISO 8601 dates), and
+                ``links`` (URLs or mappings with ``href``, ``rel``, ``title``).
+
+        Returns:
+            The layer's metadata block after the change, or ``None`` when empty.
+
+        Raises:
+            ValueError: If a value fails validation (email, dates, URLs).
+
+        Example:
+            >>> m.set_layer_metadata(
+            ...     "Rivers",
+            ...     title="Rivers of Tennessee",
+            ...     keywords=["hydrology", "rivers"],
+            ...     license="CC-BY-4.0",
+            ...     contact={"name": "Ada", "email": "ada@example.org"},
+            ...     temporal_extent=("2019-01-01", "2019-12-31"),
+            ... )
+        """
+        handle = self._resolve_layer(layer)
+        self._update_project(
+            lambda project: _authoring.set_layer_metadata(project, handle.id, merge=merge, **fields)
+        )
+        return handle.descriptive_metadata or None
+
+    def clear_layer_metadata(self, layer: str | Layer) -> None:
+        """Drop a layer's descriptive metadata."""
+        handle = self._resolve_layer(layer)
+        self._update_project(lambda project: _authoring.clear_layer_metadata(project, handle.id))
+
+    def set_layer_filter(self, layer: str | Layer, expression: Any) -> None:
+        """Hide a layer's features that do not match a boolean expression.
+
+        Writes the layer's saved ``filterExpression`` -- the same filter the
+        app's **Select by Expression -> Filter layer** creates. The data is
+        untouched; non-matching features are just not drawn.
+
+        Args:
+            layer: The layer, by id, name, or handle.
+            expression: A boolean MapLibre expression, as a list or a JSON
+                string, e.g. ``[">=", ["get", "population"], 100000]``.
+                ``None`` clears the filter.
+
+        Example:
+            >>> m.set_layer_filter("Cities", ["==", ["get", "state"], "TN"])
+        """
+        handle = self._resolve_layer(layer)
+        self._update_project(
+            lambda project: _authoring.set_layer_filter(project, handle.id, expression)
+        )
+
+    def set_floor_picker(
+        self,
+        layer: str | Layer,
+        field: str | None = "level",
+        level: Any = None,
+        *,
+        mode: str | None = None,
+    ) -> None:
+        """Link a multi-floor layer to the app's on-map floor picker.
+
+        The picker lists the floors in ``field`` across every linked layer and
+        draws one floor, or a floor and the ones below it. It reads
+        OpenStreetMap ``level`` values (``"0"``, ``"0;1"``, ``"-1-0"``),
+        numbers and IMDF ordinals. Combine it with an extrusion base from the
+        same field to stack the floors in 3D.
+
+        Args:
+            layer: The layer, by id, name, or handle.
+            field: The property holding the floor; ``None`` unlinks the layer.
+            level: The floor to show, e.g. ``"0"`` or ``-1``. Applies to every
+                linked layer. ``None`` keeps the floor already shown; pass
+                ``mode="all"`` to show every floor.
+            mode: ``"only"`` (the default for a level), ``"below"`` to also
+                show the floors under it, or ``"all"``.
+
+        Example:
+            >>> m.set_floor_picker("Rooms", "level", "0", mode="below")
+        """
+        handle = self._resolve_layer(layer)
+        self._update_project(
+            lambda project: _authoring.set_floor_picker(project, handle.id, field, level, mode=mode)
+        )
+
+    def set_labels(
+        self,
+        layer: str | Layer,
+        field: str | None = None,
+        *,
+        expression: Any = None,
+        enabled: bool | None = None,
+        **options: Any,
+    ) -> dict[str, Any]:
+        """Label a vector layer's features from an attribute or an expression.
+
+        Options left out keep the layer's current label settings.
+
+        Args:
+            layer: The layer, by id, name, or handle.
+            field: Property whose value becomes the label text.
+            expression: MapLibre expression for the label text, overriding
+                ``field`` (e.g. ``["concat", ["get", "name"], " ", ["get",
+                "pop"]]``).
+            enabled: ``False`` hides the labels but keeps their settings;
+                omitted, they keep their current state (on for a new layer).
+            **options: ``placement`` (``"point"``/``"line"``), ``size``,
+                ``color``, ``halo_color``, ``halo_width``, ``min_zoom``,
+                ``max_zoom``, ``allow_overlap``, ``anchor``, ``offset_x``,
+                ``offset_y``, ``rotation``, ``max_width``, ``transform``
+                (``"none"``/``"uppercase"``/``"lowercase"``),
+                ``number_format``, ``number_decimals``, ``number_locale``,
+                ``dedupe`` (``"off"``/``"unique"``/``"concatenate"``), and the
+                data-defined ``size_expression``, ``color_expression``,
+                ``opacity_expression``, ``visibility_expression``,
+                ``priority_expression``.
+
+        Returns:
+            The layer's labels object after the change.
+
+        Example:
+            >>> m.set_labels("Cities", "name", size=14, halo_width=2, anchor="top")
+        """
+        handle = self._resolve_layer(layer)
+        result: dict[str, Any] = {}
+
+        def _apply(project: dict[str, Any]) -> None:
+            result.update(
+                _authoring.set_labels(
+                    project, handle.id, field, expression=expression, enabled=enabled, **options
+                )
+            )
+
+        self._update_project(_apply)
+        return result
+
+    def set_plugin_state(
+        self,
+        plugin_id: str,
+        state: Any = None,
+        *,
+        position: str | None = None,
+        activate: bool = True,
+        allow_unknown: bool = False,
+        clear: bool = False,
+    ) -> dict[str, Any]:
+        """Store a plugin's saved state in the project, as the app saves it.
+
+        Each plugin reads its own state shape when the project opens (the
+        Time Slider's timeline config, a grid plugin's resolution, ...). Use
+        :meth:`add_swipe`, :meth:`add_legend`, and :meth:`add_colorbar` for
+        those controls; they build validated state.
+
+        Args:
+            plugin_id: A built-in plugin id from
+                ``geolibre.project.PLUGIN_STATE_IDS``, or an external plugin's
+                id with ``allow_unknown=True``.
+            state: The plugin's settings, as plain JSON. ``None`` keeps the
+                stored settings (to change only ``position``/``activate``).
+            position: Optional control corner (``"top-left"``, ...).
+            activate: Start the plugin active when the project opens.
+            allow_unknown: Accept an id that is not a built-in plugin.
+            clear: Remove the stored settings only, leaving activation and
+                position as they were.
+
+        Returns:
+            ``{"pluginId", "active", "position", "state"}`` as stored.
+        """
+        result: dict[str, Any] = {}
+
+        def _apply(project: dict[str, Any]) -> None:
+            result.update(
+                _authoring.set_plugin_state(
+                    project,
+                    plugin_id,
+                    state,
+                    position=position,
+                    activate=activate,
+                    allow_unknown=allow_unknown,
+                    clear=clear,
+                )
+            )
+
+        self._update_project(_apply)
+        return result
+
+    def set_story_map(self, **settings: Any) -> dict[str, Any]:
+        """Set the story map's title block and presentation settings.
+
+        Args:
+            **settings: ``title``, ``subtitle``, ``byline``, ``footer``,
+                ``theme`` (``"light"``/``"dark"``), ``show_markers``,
+                ``marker_color``, ``inset``, ``inset_position``,
+                ``hide_chapter_nav``, ``start_slide`` and ``end_slide``
+                (``"none"``, ``"blank"``, ``"black"``, ``"global"``,
+                ``"adjacent"``).
+
+        Returns:
+            The story settings with each chapter's id and title.
+        """
+        result: dict[str, Any] = {}
+        self._update_project(lambda p: result.update(_authoring.set_story_map(p, **settings)))
+        return result
+
+    def add_story_chapter(
+        self,
+        title: str,
+        *,
+        description: str = "",
+        center: tuple[float, float] | None = None,
+        zoom: float | None = None,
+        pitch: float | None = None,
+        bearing: float | None = None,
+        image: str | None = None,
+        alignment: str = "left",
+        hidden: bool = False,
+        map_animation: str = "flyTo",
+        rotate_animation: bool = False,
+        on_enter: list[dict[str, Any]] | None = None,
+        on_exit: list[dict[str, Any]] | None = None,
+        index: int | None = None,
+    ) -> dict[str, Any]:
+        """Add a chapter to the map's story (Project -> Story Map).
+
+        A camera value left out is taken from the map's current saved view.
+
+        Args:
+            title: Chapter heading.
+            description: Chapter body text.
+            center: Camera target ``(lng, lat)``.
+            zoom: Camera zoom, 0-24.
+            pitch: Camera tilt in degrees, 0-85.
+            bearing: Camera rotation in degrees.
+            image: Optional image URL shown in the chapter panel.
+            alignment: ``"left"``, ``"center"``, ``"right"``, or ``"full"``.
+            hidden: Hide the text panel while still moving the map.
+            map_animation: ``"flyTo"``, ``"easeTo"``, or ``"jumpTo"``.
+            rotate_animation: Slowly rotate the camera once the move settles.
+            on_enter: Layer opacity changes on entering the chapter, as
+                ``{"layer": <id, name or Layer>, "opacity": 0-1,
+                "duration": ms}`` entries.
+            on_exit: Layer opacity changes on leaving, in the same form.
+            index: Position to insert at; appended when omitted.
+
+        Returns:
+            The chapter that was added, including its ``id``.
+
+        Example:
+            >>> m.add_story_chapter("Downtown", center=(-83.92, 35.96), zoom=14,
+            ...                     description="Where it started.")
+        """
+
+        def _layer_refs(entries: Any) -> Any:
+            if not isinstance(entries, (list, tuple)):
+                return entries
+            return [
+                {**entry, "layer": entry["layer"].id}
+                if isinstance(entry, dict) and isinstance(entry.get("layer"), Layer)
+                else entry
+                for entry in entries
+            ]
+
+        result: dict[str, Any] = {}
+
+        def _apply(project: dict[str, Any]) -> None:
+            result.update(
+                _authoring.add_story_chapter(
+                    project,
+                    title,
+                    description=description,
+                    center=center,
+                    zoom=zoom,
+                    pitch=pitch,
+                    bearing=bearing,
+                    image=image,
+                    alignment=alignment,
+                    hidden=hidden,
+                    map_animation=map_animation,
+                    rotate_animation=rotate_animation,
+                    on_enter=_layer_refs(on_enter),
+                    on_exit=_layer_refs(on_exit),
+                    index=index,
+                )
+            )
+
+        self._update_project(_apply)
+        return result
+
+    def remove_story_chapter(self, chapter: str | int) -> None:
+        """Remove a story chapter by id, title, or 0-based index."""
+        self._update_project(lambda p: _authoring.remove_story_chapter(p, chapter))
+
+    def move_story_chapter(self, chapter: str | int, index: int) -> None:
+        """Move a story chapter (by id, title, or index) to a new position."""
+        self._update_project(lambda p: _authoring.move_story_chapter(p, chapter, index))
+
+    def add_bookmark(
+        self,
+        name: str,
+        *,
+        center: tuple[float, float] | None = None,
+        zoom: float | None = None,
+        pitch: float | None = None,
+        bearing: float | None = None,
+        folder: str | None = None,
+        visible_layers: list[str | Layer] | None = None,
+    ) -> dict[str, Any]:
+        """Add a saved map view to the Bookmarks panel (Controls -> Bookmarks).
+
+        Bookmarks are saved in the project, so they travel with the file. A
+        camera value left out is taken from the map's current saved view.
+
+        Args:
+            name: Bookmark name.
+            center: Camera target ``(lng, lat)``.
+            zoom: Camera zoom, 0-24.
+            pitch: Camera tilt in degrees, 0-85.
+            bearing: Camera rotation in degrees.
+            folder: A folder id or name to file it under; a new name creates
+                the folder.
+            visible_layers: Layers (ids, names, or handles) to show when the
+                bookmark is opened; the others are hidden. Omit to leave layer
+                visibility alone.
+
+        Returns:
+            The bookmark that was added, including its ``id``.
+
+        Example:
+            >>> m.add_bookmark("Downtown", center=(-83.92, 35.96), zoom=14,
+            ...                folder="Neighborhoods")
+        """
+        layer_refs = (
+            [layer.id if isinstance(layer, Layer) else layer for layer in visible_layers]
+            if visible_layers is not None
+            else None
+        )
+        result: dict[str, Any] = {}
+
+        def _apply(project: dict[str, Any]) -> None:
+            result.update(
+                _authoring.add_bookmark(
+                    project,
+                    name,
+                    center=center,
+                    zoom=zoom,
+                    pitch=pitch,
+                    bearing=bearing,
+                    folder=folder,
+                    visible_layers=layer_refs,
+                )
+            )
+
+        self._update_project(_apply)
+        return result
+
+    def remove_bookmark(self, bookmark: str | int) -> None:
+        """Remove a bookmark by id, name, or 0-based index."""
+        self._update_project(lambda p: _authoring.remove_bookmark(p, bookmark))
 
     def rename_layer(self, layer: str | Layer, name: str) -> None:
         """Rename a layer addressed by id, name, or handle.
@@ -1935,6 +2743,96 @@ class Map(anywidget.AnyWidget):
             )
         )
 
+    def add_planetary_computer(
+        self,
+        collection: str,
+        item: str | None = None,
+        name: str | None = None,
+        *,
+        datetime: str | tuple[str, str] | list[str] | None = None,
+        bbox: list[float] | tuple[float, ...] | None = None,
+        preset: str | None = None,
+        assets: list[str] | None = None,
+        expression: str | None = None,
+        rescale: tuple[float, float] | list[float] | None = None,
+        colormap: str | None = None,
+        max_cloud_cover: float | None = None,
+        visible: bool = True,
+        opacity: float = 1.0,
+    ) -> str:
+        """Add Microsoft Planetary Computer imagery as a raster layer.
+
+        With ``item`` the layer draws that one STAC item. Without it the layer
+        is a mosaic: every item of the collection matching ``datetime`` and
+        ``max_cloud_cover``, composited into one seamless layer. No credentials
+        are needed, and nothing is fetched here: the app's Planetary Computer
+        panel builds the layer when it opens the project, lists it in its
+        Layers tab, and can restyle it. It needs the MapLibre renderer.
+
+        Examples:
+            A cloud-free summer composite and an NDVI of one scene::
+
+                m.add_planetary_computer(
+                    "sentinel-2-l2a",
+                    datetime="2024-06-01/2024-08-31",
+                    max_cloud_cover=10,
+                )
+                m.add_planetary_computer(
+                    "sentinel-2-l2a",
+                    "S2A_MSIL2A_20240906T190921_R056_T10TET_20240907T023150",
+                    preset="ndvi",
+                )
+
+        Args:
+            collection: STAC collection id, e.g. ``"sentinel-2-l2a"``.
+            item: STAC item id to draw. Omit for a mosaic of the collection.
+            name: Layer display name. Defaults to the item id, or to the
+                collection id with the date range for a mosaic.
+            datetime: Mosaic only. The date range to composite: a
+                ``"start/end"`` string or a ``(start, end)`` pair.
+            bbox: ``[west, south, east, north]`` extent of the layer.
+            preset: Name of a render preset for the collection, e.g.
+                ``"true-color"``, ``"false-color"``, ``"ndvi"``. The
+                collection's default preset is used when no render option is
+                given.
+            assets: Asset names to render, e.g. ``["B08", "B04", "B03"]``.
+            expression: Band-math expression over assets, e.g.
+                ``"(B08-B04)/(B08+B04)"``.
+            rescale: ``(min, max)`` value range stretched to the output colors.
+            colormap: Named colormap, e.g. ``"viridis"``.
+            max_cloud_cover: Mosaic only. Keep items at or below this cloud
+                cover percentage.
+            visible: Whether the layer starts visible.
+            opacity: Layer opacity from 0 to 1.
+
+        Returns:
+            The id of the added layer.
+
+        Raises:
+            ValueError: If the options are inconsistent (see
+                :func:`geolibre.project.planetary_computer_layer`) or
+                ``opacity`` is outside 0 to 1.
+        """
+        opacity_value = float(opacity)
+        if not 0 <= opacity_value <= 1:
+            raise ValueError("opacity must be between 0 and 1")
+        layer = _project.planetary_computer_layer(
+            collection,
+            item,
+            name=name,
+            datetime=datetime,
+            bbox=bbox,
+            preset=preset,
+            assets=assets,
+            expression=expression,
+            rescale=rescale,
+            colormap=colormap,
+            max_cloud_cover=max_cloud_cover,
+        )
+        layer["visible"] = bool(visible)
+        layer["opacity"] = opacity_value
+        return self._add_layer(layer)
+
     def add_ee_layer(
         self,
         ee_object: Any,
@@ -2383,10 +3281,11 @@ class Map(anywidget.AnyWidget):
                 ``"1.3.0"``. Version 1.3.0 sends ``CRS`` instead of ``SRS``;
                 some servers accept only one version.
             crs: The CRS tiles are requested in, ``"EPSG:3857"`` when None.
-                For a server without Web Mercator, a geographic CRS it lists
-                (``"EPSG:4326"``, ``"EPSG:4258"``, ``"EPSG:6706"``,
-                ``"CRS:84"``): the desktop app redraws those tiles into Web
-                Mercator.
+                For a server without Web Mercator, a CRS it lists: a
+                geographic one (``"EPSG:4326"``, ``"EPSG:4258"``,
+                ``"EPSG:6706"``, ``"CRS:84"``) or a projected
+                ``"EPSG:<code>"`` such as ``"EPSG:25832"``. The desktop app
+                redraws those tiles into Web Mercator.
             bounds: Optional ``[west, south, east, north]`` request bounds, in
                 WGS84. A WMS layer has no geometry to derive an extent from,
                 so without these "zoom to layer" cannot reach it.
@@ -2687,10 +3586,12 @@ class Map(anywidget.AnyWidget):
         request_headers: dict[str, str] | None = None,
         **style: Any,
     ) -> str:
-        """Add a 3D Tiles layer from a ``tileset.json`` URL or a Cesium Ion asset.
+        """Add a 3D Tiles layer, an ArcGIS I3S scene layer, or a Cesium Ion asset.
 
         Args:
-            url: URL of the 3D Tiles ``tileset.json``. Omit for an Ion asset.
+            url: URL of the 3D Tiles ``tileset.json``, or of an ArcGIS I3S
+                scene layer (``.../SceneServer/layers/<n>``), which is added as
+                a scene layer. Omit for an Ion asset.
             name: Layer display name.
             ion_asset_id: A Cesium Ion asset id (for example 96188, Cesium OSM
                 Buildings). Renders on the 3D globe only, with the app's Ion token.
@@ -2711,6 +3612,267 @@ class Map(anywidget.AnyWidget):
                 **style,
             )
         )
+
+    def add_lidar(self, url: str, name: str | None = None, **style: Any) -> str:
+        """Add a LiDAR point cloud from a LAS, LAZ, COPC or EPT URL.
+
+        COPC and EPT stream by level of detail; LAS/LAZ download whole. Open the
+        app's **Plugins → Point Cloud Annotation** to label its points.
+
+        Args:
+            url: HTTP(S) URL of a ``.las``, ``.laz``, ``.copc.laz`` file or an
+                EPT ``ept.json``.
+            name: Layer display name (defaults to the file name).
+            **style: Style overrides.
+
+        Returns:
+            The id of the added layer.
+        """
+        if name is None and isinstance(url, str):
+            tail = url.split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+            name = tail or "LiDAR"
+        return self._add_layer(_project.lidar_layer(name, url, **style))
+
+    def add_icesat2(
+        self,
+        source: str | os.PathLike[str],
+        name: str | None = None,
+        *,
+        beams: Sequence[str] | None = None,
+        fields: Sequence[Any] | None = None,
+        quality_filter: bool = True,
+        bbox: Sequence[float] | None = None,
+        max_points: int | None = 100_000,
+        color_by: str | None = None,
+        colormap: str = "viridis",
+        **style: Any,
+    ) -> str:
+        """Add ICESat-2 ATL06 or ATL08 footprints from an HDF5 granule.
+
+        Reads the granule locally (with h5py) the way the app's Add Data →
+        ICESat-2 / GEDI does: one point per along-track segment in each ground
+        track, the product's quality filter applied, and ``beam``,
+        ``beam_type`` (strong/weak), ``time`` and ``distance_km`` on every
+        point, colored by the main field (``h_li`` for ATL06,
+        ``h_te_best_fit`` for ATL08). Download granules with ``earthaccess``
+        (``earthaccess.download(...)``) or from NASA Earthdata Search.
+
+        Args:
+            source: Path to an ATL06 or ATL08 ``.h5`` granule.
+            name: Layer name; ``"<product> <file name>"`` by default.
+            beams: Ground tracks to read, e.g. ``["gt1l", "gt2l"]`` (all by default).
+            fields: Fields to attach: default names (``"h_canopy"``) or dataset
+                paths relative to the ground track (the product defaults when
+                omitted).
+            quality_filter: Drop segments the product's quality flag rejects.
+            bbox: ``[west, south, east, north]`` to keep only segments inside.
+            max_points: Cap on points; every beam is thinned evenly to stay
+                under it. ``None`` keeps every segment.
+            color_by: Field to color by; ``""`` for a single color.
+            colormap: Color ramp for the graduated colors.
+            **style: Style overrides (e.g. ``circleRadius=4``).
+
+        Returns:
+            The id of the added layer.
+
+        Raises:
+            ImportError: Without h5py (``pip install "geolibre[spaceborne]"``).
+            ValueError: For a GEDI or unsupported granule, or no footprints kept.
+        """
+        return self._add_spaceborne_lidar(
+            ("ICESat-2",),
+            source,
+            name,
+            beams=beams,
+            fields=fields,
+            quality_filter=quality_filter,
+            bbox=bbox,
+            max_points=max_points,
+            color_by=color_by,
+            colormap=colormap,
+            **style,
+        )
+
+    def add_gedi(
+        self,
+        source: str | os.PathLike[str],
+        name: str | None = None,
+        *,
+        beams: Sequence[str] | None = None,
+        fields: Sequence[Any] | None = None,
+        quality_filter: bool = True,
+        bbox: Sequence[float] | None = None,
+        max_points: int | None = 100_000,
+        color_by: str | None = None,
+        colormap: str = "viridis",
+        **style: Any,
+    ) -> str:
+        """Add GEDI L2A, L2B or L4A shots from an HDF5 granule.
+
+        Reads the granule locally (with h5py) the way the app's Add Data →
+        ICESat-2 / GEDI does: one point per shot in each beam, the product's
+        quality flag applied, and ``beam``, ``beam_type`` (power/coverage),
+        ``time`` and ``distance_km`` on every point, colored by the main field
+        (``rh98`` for L2A, ``cover`` for L2B, ``agbd`` for L4A). A full orbit
+        holds millions of shots, so pass ``bbox`` for a regional subset.
+
+        Args:
+            source: Path to a GEDI L2A, L2B or L4A ``.h5`` granule.
+            name: Layer name; ``"<product> <file name>"`` by default.
+            beams: Beams to read, e.g. ``["BEAM0101"]`` (all by default).
+            fields: Fields to attach: default names (``"rh50"``) or dataset
+                paths relative to the beam (the product defaults when omitted).
+            quality_filter: Drop shots the product's quality flag rejects.
+            bbox: ``[west, south, east, north]`` to keep only shots inside.
+            max_points: Cap on points; every beam is thinned evenly to stay
+                under it. ``None`` keeps every shot.
+            color_by: Field to color by; ``""`` for a single color.
+            colormap: Color ramp for the graduated colors.
+            **style: Style overrides (e.g. ``circleRadius=4``).
+
+        Returns:
+            The id of the added layer.
+
+        Raises:
+            ImportError: Without h5py (``pip install "geolibre[spaceborne]"``).
+            ValueError: For an ICESat-2 or unsupported granule, or no shots kept.
+        """
+        return self._add_spaceborne_lidar(
+            ("GEDI",),
+            source,
+            name,
+            beams=beams,
+            fields=fields,
+            quality_filter=quality_filter,
+            bbox=bbox,
+            max_points=max_points,
+            color_by=color_by,
+            colormap=colormap,
+            **style,
+        )
+
+    def _add_spaceborne_lidar(
+        self,
+        missions: tuple[str, ...],
+        source: str | os.PathLike[str],
+        name: str | None,
+        **options: Any,
+    ) -> str:
+        """Build and add a footprint layer for :meth:`add_icesat2` / :meth:`add_gedi`.
+
+        Args:
+            missions: The missions the calling method accepts.
+            source: Path to the granule.
+            name: Layer name, or None for the default.
+            **options: Reader and style options.
+
+        Returns:
+            The id of the added layer.
+        """
+        from .spaceborne_lidar import spaceborne_lidar_layer
+
+        layer, _result = spaceborne_lidar_layer(source, name, missions=missions, **options)
+        return self._add_layer(layer)
+
+    def point_cloud_annotations(self) -> dict[str, Any]:
+        """The point labels and 3D boxes saved by the app's point cloud annotator.
+
+        Returns:
+            ``{"labels", "instances", "boxes", "classes"}``; see
+            :func:`geolibre.project.point_cloud_annotations`. Apply the
+            labels of a whole-file LAS/LAZ source to ``laspy`` data with
+            :func:`geolibre.project.apply_point_labels`.
+        """
+        return _project.point_cloud_annotations(self.project)
+
+    def prelabel_point_cloud(
+        self,
+        url: str,
+        input_file: str,
+        tool: str = "ground",
+        *,
+        only_unclassified: bool = True,
+    ) -> dict[str, int]:
+        """Pre-label a LiDAR layer with a Whitebox classifier, without the app.
+
+        Runs the app's Pre-label classifiers on a local copy of the layer's file
+        and saves the changed classes as annotator labels for the layer, so
+        they show when the project opens. Needs ``geolibre[pointcloud]``.
+
+        Args:
+            url: The LiDAR layer's source URL (as passed to :meth:`add_lidar`).
+            input_file: A local copy of that point cloud (LAS/LAZ/COPC).
+            tool: ``"ground"`` or ``"ground-vegetation"``.
+            only_unclassified: Only relabel points still 0 or 1.
+
+        Returns:
+            Class code -> number of points relabelled into it.
+
+        Raises:
+            ValueError: When no LiDAR layer uses ``url``, or for an unknown tool.
+        """
+        from . import pointcloud as _pointcloud
+
+        if url not in _authoring.lidar_source_urls(self.project):
+            raise ValueError("No LiDAR layer in this map uses that URL; add it with add_lidar().")
+        current, _ = _pointcloud.labels_for_source(self.project, url)
+        labels = _pointcloud.prelabel_point_cloud(
+            input_file, tool, current=current, only_unclassified=only_unclassified
+        )
+        self._update_project(lambda project: _authoring.merge_point_labels(project, url, labels))
+        counts: dict[int, int] = {}
+        for edits in labels.values():
+            for code in edits.values():
+                counts[code] = counts.get(code, 0) + 1
+        return counts
+
+    def write_labeled_point_cloud(
+        self, url: str, input_file: str, output_file: str
+    ) -> dict[str, int]:
+        """Write a LiDAR layer's file with this map's point labels applied.
+
+        Streams ``input_file`` (a local copy of the layer's LAS/LAZ/COPC file)
+        and writes every point with the annotator's saved classes and instance
+        ids applied. Needs ``geolibre[pointcloud]``.
+
+        Args:
+            url: The LiDAR layer's source URL whose labels to apply.
+            input_file: A local copy of that point cloud.
+            output_file: The ``.las`` or ``.laz`` file to write.
+
+        Returns:
+            ``{"points", "relabelled", "instanced"}`` counts.
+        """
+        from . import pointcloud as _pointcloud
+
+        if url not in _authoring.lidar_source_urls(self.project):
+            raise ValueError("No LiDAR layer in this map uses that URL; add it with add_lidar().")
+        labels, instances = _pointcloud.labels_for_source(self.project, url)
+        return _pointcloud.write_labeled_point_cloud(input_file, output_file, labels, instances)
+
+    def set_point_cloud_classes(self, classes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Define custom point cloud classes for the app's annotator.
+
+        Custom classes (codes 19-255) extend the ASPRS standard classes: the
+        annotator can assign them, and the LiDAR layer draws them in their
+        colour and names them in its legend.
+
+        Args:
+            classes: ``{"code", "name", "color"}`` dicts, e.g.
+                ``[{"code": 64, "name": "Car", "color": "#e11d48"}]``;
+                ``color`` may also be an ``(r, g, b)`` triple. An empty list
+                clears them.
+
+        Returns:
+            The validated classes as saved.
+
+        Raises:
+            ValueError: For an invalid class.
+        """
+        # Validate first so a bad class raises before the project changes.
+        schema = _project.point_cloud_class_schema(classes)
+        self._update_project(lambda project: _authoring.set_point_cloud_classes(project, schema))
+        return schema
 
     def add_cesium_ion(
         self,
@@ -2831,15 +3993,13 @@ class Map(anywidget.AnyWidget):
         # Disarm before the project sync, not after: the two traits sync
         # independently, so clearing second leaves a window where the front end
         # replays `identify` for a layer the project push just deleted.
-        if self._ui.get("identify") == resolved_id:
-            self._set_ui(identify=None)
+        self._drop_identify_layers(lambda layer_id: layer_id == resolved_id)
         self._update_project(lambda p: _authoring.remove_layer(p, resolved_id))
 
     def clear_layers(self) -> None:
         """Remove all layers from the map."""
         # Disarm first, for the reason given in `remove_layer`.
-        if self._ui.get("identify") not in (None, "all"):
-            self._set_ui(identify=None)
+        self._drop_identify_layers(lambda _layer_id: True)
         self._update_project(lambda p: p.update({"layers": []}))
 
     # -- view / basemap API ---------------------------------------------
@@ -2976,7 +4136,55 @@ class Map(anywidget.AnyWidget):
         """
         self._ui = {**self._ui, **changes}
 
-    def set_identify(self, layer: str | Layer | None = "all") -> None:
+    def _drop_identify_layers(self, removed: Callable[[str], bool]) -> None:
+        """Drop removed layers from the Identify target in ``_ui``.
+
+        A list that keeps one layer narrows to that layer, and one that keeps
+        none turns Identify off, matching what the app does when those layers
+        are deleted there. ``"all"`` and ``None`` are left alone.
+
+        Args:
+            removed: Returns ``True`` for the id of a layer being removed.
+        """
+        identify = self._ui.get("identify")
+        if identify is None or identify == "all":
+            return
+        if isinstance(identify, str):
+            if removed(identify):
+                self._set_ui(identify=None)
+            return
+        kept = [layer_id for layer_id in identify if not removed(layer_id)]
+        if len(kept) == len(identify):
+            return
+        self._set_ui(identify=kept[0] if len(kept) == 1 else (kept or None))
+
+    def _project_with_ui(self, project: dict[str, Any]) -> dict[str, Any]:
+        """Write the Identify and control state into ``project`` for export.
+
+        :meth:`set_identify` and :meth:`show_control` keep their state out of
+        the live project so a project push never reopens a panel the user
+        closed. A saved or exported project has no kernel to replay it, so it
+        carries the state as its ``interaction`` block, which the app applies
+        when the project opens.
+
+        Args:
+            project: A detached project dict, modified in place.
+
+        Returns:
+            ``project``, for chaining.
+        """
+        interaction: dict[str, Any] = {}
+        identify = self._ui.get("identify")
+        if identify is not None:
+            interaction["identify"] = list(identify) if isinstance(identify, list) else identify
+        controls = self._ui.get("controls")
+        if controls:
+            interaction["controls"] = copy.deepcopy(controls)
+        if interaction:
+            project["interaction"] = interaction
+        return project
+
+    def set_identify(self, layer: str | Layer | Sequence[str | Layer] | None = "all") -> None:
         """Arm the Identify tool so clicking a feature opens its popup.
 
         Popups (including those configured with :meth:`set_popup` or the
@@ -2986,26 +4194,50 @@ class Map(anywidget.AnyWidget):
         in the app. The choice is applied when the map loads, so it can be
         made before the map is displayed.
 
-        Identify is armed on one layer or on every visible layer at a time,
-        and hover tooltips pause while it is armed, as they do in the app.
+        Identify is armed on one layer, on a list of layers, or on every
+        visible layer, and hover tooltips pause while it is armed, as they do
+        in the app. The choice is saved by :meth:`save_project`,
+        :meth:`to_project` and :meth:`to_html`, so a shared map opens with
+        Identify armed the same way.
 
         Args:
             layer: A layer id, display name, or :class:`Layer` handle to
-                identify on that layer; ``"all"`` (the default) to identify
-                every visible queryable layer; or ``None`` to turn Identify off.
-                ``"all"`` is matched before the lookup, so a layer whose id or
-                display name is literally ``"all"`` cannot be targeted on its
-                own.
+                identify on that layer; a list of them to identify only those
+                layers (clicking opens popups for them and not for the rest);
+                ``"all"`` (the default) to identify every visible queryable
+                layer; or ``None`` to turn Identify off. ``"all"`` is matched
+                before the lookup, so a layer whose id or display name is
+                literally ``"all"`` cannot be targeted on its own.
 
         Raises:
-            ValueError: If ``layer`` matches no layer.
+            ValueError: If ``layer`` (or any entry of a list) matches no layer,
+                or a list is empty.
         """
-        if layer is None or layer == "all":
+        if layer is None or (isinstance(layer, str) and layer == "all"):
             self._set_ui(identify=layer)
             return
-        self._set_ui(identify=self._resolve_layer(layer).id)
+        if isinstance(layer, (str, Layer)):
+            self._set_ui(identify=self._resolve_layer(layer).id)
+            return
+        if not isinstance(layer, Sequence):
+            raise ValueError(
+                "set_identify: layer must be a layer id, name, handle, a list of them, "
+                f'"all", or None, got {type(layer).__name__}'
+            )
+        ids = list(dict.fromkeys(self._resolve_layer(item).id for item in layer))
+        if not ids:
+            raise ValueError("set_identify: the list of layers is empty")
+        self._set_ui(identify=ids[0] if len(ids) == 1 else ids)
 
-    def show_control(self, name: str, visible: bool = True) -> None:
+    def show_control(
+        self,
+        name: str,
+        visible: bool = True,
+        *,
+        collapsed: bool | None = None,
+        distance_unit: str | None = None,
+        area_unit: str | None = None,
+    ) -> None:
         """Show (or hide) a map control or toolbar panel.
 
         Covers the panels in the app's Controls menu (``"bookmark"``,
@@ -3013,24 +4245,64 @@ class Map(anywidget.AnyWidget):
         built-in map controls (``"navigation"``, ``"fullscreen"``,
         ``"compass"``, ``"geolocate"``, ``"globe"``, ``"scale"``,
         ``"attribution"``, ``"logo"``). The choice is applied when the map
-        loads, so it can be made before the map is displayed. It is not saved
-        in the project.
+        loads, so it can be made before the map is displayed. It is saved by
+        :meth:`save_project`, :meth:`to_project` and :meth:`to_html`, so a
+        shared map opens with the same controls.
 
         Hiding ``"globe"`` removes the globe/flat toggle button only; use
         :meth:`set_projection` to change how the map is drawn.
 
+        The Measure panel opens expanded with the tool active, so a viewer's
+        first clicks on the map place measurement points. For a shared map,
+        ``m.show_control("measure", collapsed=True)`` shows only its ruler
+        button until the viewer clicks it, and ``distance_unit`` /
+        ``area_unit`` pick the units it starts in.
+
         Args:
             name: The control or panel name.
             visible: ``True`` to show it, ``False`` to hide it.
+            collapsed: For ``"measure"`` and ``"minimap"``, ``True`` shows only
+                the control's on-map button, ``False`` opens it expanded.
+                ``None`` (the default) keeps the app's default, expanded.
+            distance_unit: For ``"measure"``, the distance unit: one of
+                ``"meters"``, ``"kilometers"`` (the app's default),
+                ``"miles"``, ``"feet"``, ``"yards"`` or ``"nautical-miles"``.
+            area_unit: For ``"measure"``, the area unit: one of
+                ``"square-meters"``, ``"square-kilometers"`` (the app's
+                default), ``"square-miles"``, ``"hectares"``, ``"acres"`` or
+                ``"square-feet"``.
 
         Raises:
-            ValueError: If ``name`` is not a known control or panel.
+            ValueError: If ``name`` is not a known control or panel, or an
+                option does not apply to it or has an unknown value.
         """
         if name not in MAP_PANELS and name not in MAP_CONTROLS:
             raise ValueError(
                 f"Unknown control {name!r}; expected one of {sorted(MAP_PANELS | MAP_CONTROLS)}"
             )
-        self._set_ui(controls={**self._ui.get("controls", {}), name: bool(visible)})
+        options: dict[str, Any] = {}
+        if collapsed is not None:
+            if name not in _COLLAPSIBLE_PANELS:
+                raise ValueError(f"collapsed applies only to {sorted(_COLLAPSIBLE_PANELS)}")
+            if not isinstance(collapsed, bool):
+                raise ValueError("collapsed must be a boolean")
+            options["collapsed"] = collapsed
+        for key, value, units in (
+            ("distanceUnit", distance_unit, MEASURE_DISTANCE_UNITS),
+            ("areaUnit", area_unit, MEASURE_AREA_UNITS),
+        ):
+            if value is None:
+                continue
+            if name != "measure":
+                raise ValueError(f"{key} applies only to 'measure'")
+            if value not in units:
+                raise ValueError(f"Unknown {key} {value!r}; expected one of {sorted(units)}")
+            options[key] = value
+        shown = bool(visible)
+        setting: bool | dict[str, Any] = (
+            {"visible": shown, **options} if options and shown else shown
+        )
+        self._set_ui(controls={**self._ui.get("controls", {}), name: setting})
 
     def hide_control(self, name: str) -> None:
         """Hide a map control or toolbar panel (see :meth:`show_control`).
@@ -3207,6 +4479,48 @@ class Map(anywidget.AnyWidget):
             )
         )
 
+    def set_map_legend(
+        self,
+        title: str | None = None,
+        *,
+        position: str | None = None,
+        group_by_layer: bool | None = None,
+        visible: bool | None = None,
+        collapsed: bool | None = None,
+    ) -> None:
+        """Show the map legend, the panel behind the app's Controls -> Legend.
+
+        Its rows come from each visible layer's symbology, so a classified or
+        categorized layer gets a matching legend without restating its colors
+        (use :meth:`add_legend` for hand-written entries). A map has one;
+        calling this again updates it.
+
+        Args:
+            title: Heading drawn above the entries; keeps the current one when
+                omitted.
+            position: ``"top-left"``, ``"top-right"``, ``"bottom-left"``, or
+                ``"bottom-right"``; keeps the current corner when omitted.
+            group_by_layer: Group each layer's classes under a layer heading;
+                keeps the current setting when omitted.
+            visible: Whether the on-map panel is open; keeps the current state
+                when omitted, and opens it when the map has no legend yet.
+            collapsed: Whether the open panel is collapsed to its header bar;
+                keeps the current state when omitted.
+
+        Raises:
+            ValueError: If ``position`` is not a map corner.
+        """
+        self._update_project(
+            lambda p: _authoring.set_map_legend(
+                p,
+                title,
+                position=position,
+                group_by_layer=group_by_layer,
+                visible=visible,
+                collapsed=collapsed,
+            )
+        )
+
     def add_colorbar(
         self,
         *,
@@ -3288,10 +4602,14 @@ class Map(anywidget.AnyWidget):
         Credentials are removed by default so a returned project is safe to
         serialize or commit. Pass ``keep_credentials=True`` only for a trusted
         local workflow that must preserve authenticated layer configuration.
+
+        The Identify target and control visibility set with
+        :meth:`set_identify` and :meth:`show_control` are included as the
+        project's ``interaction`` block.
         """
         if keep_credentials:
-            return copy.deepcopy(self.project)
-        return _project.redact_credentials(self.project)
+            return self._project_with_ui(copy.deepcopy(self.project))
+        return self._project_with_ui(_project.redact_credentials(self.project))
 
     def load_project(self, source: Any) -> None:
         """Replace the current project.
@@ -3350,22 +4668,69 @@ class Map(anywidget.AnyWidget):
             project["layers"] = []
         elif not isinstance(layers, list):
             raise ValueError("Invalid project: 'layers' must be a list")
+        layer_ids = {layer.get("id") for layer in project["layers"] if isinstance(layer, dict)}
+        # A saved project carries its Identify target and controls as an
+        # `interaction` block. Move it into `_ui`, which is what the widget
+        # replays, so the live project never carries a second copy that a
+        # project push would re-apply.
+        interaction = project.pop("interaction", None)
         # A pinned Identify target belongs to the project being replaced, so
         # drop it unless the incoming project still has that layer. Leaving it
         # would replay `setIdentify` for a missing layer on the next sync, which
         # the front end rejects into a reply nobody reads -- Identify would end
         # up disarmed anyway, just via a stray error. "all" and None survive any
         # project, as in `clear_layers`.
-        identify = self._ui.get("identify")
-        if identify not in (None, "all") and not any(
-            isinstance(layer, dict) and layer.get("id") == identify for layer in project["layers"]
-        ):
-            self._set_ui(identify=None)
+        self._drop_identify_layers(lambda layer_id: layer_id not in layer_ids)
         self._seq += 1
         self.project = project
+        if isinstance(interaction, dict):
+            self._apply_interaction(interaction, layer_ids)
+
+    def _apply_interaction(self, interaction: dict[str, Any], layer_ids: set[Any]) -> None:
+        """Load a saved project's ``interaction`` block into ``_ui``.
+
+        Entries the app would ignore are skipped rather than raised on: the
+        block may come from a hand-edited file or a newer app version.
+
+        Args:
+            interaction: The project's ``interaction`` block.
+            layer_ids: Ids of the layers in the loaded project.
+        """
+        changes: dict[str, Any] = {}
+        if "identify" in interaction:
+            identify = interaction["identify"]
+            if identify is None or identify == "all":
+                changes["identify"] = identify
+            else:
+                raw = [identify] if isinstance(identify, str) else identify
+                ids = (
+                    list(dict.fromkeys(i for i in raw if i in layer_ids))
+                    if isinstance(raw, list)
+                    else []
+                )
+                changes["identify"] = ids[0] if len(ids) == 1 else (ids or None)
+        controls = interaction.get("controls")
+        if isinstance(controls, dict):
+            changes["controls"] = {
+                **self._ui.get("controls", {}),
+                **{
+                    name: dict(shown) if isinstance(shown, dict) else shown
+                    for name, shown in controls.items()
+                    if (name in MAP_PANELS or name in MAP_CONTROLS)
+                    and (
+                        isinstance(shown, bool)
+                        or (isinstance(shown, dict) and isinstance(shown.get("visible"), bool))
+                    )
+                },
+            }
+        if changes:
+            self._set_ui(**changes)
 
     def save_project(self, path: str, *, keep_credentials: bool = False) -> None:
         """Write the current project to a ``.geolibre.json`` file.
+
+        Like :meth:`to_project`, the file carries the Identify target and
+        control visibility as its ``interaction`` block.
 
         Args:
             path: Destination file path. Parent directories are created if
@@ -3375,11 +4740,7 @@ class Map(anywidget.AnyWidget):
         """
         out = pathlib.Path(path).expanduser()
         out.parent.mkdir(parents=True, exist_ok=True)
-        project = (
-            copy.deepcopy(self.project)
-            if keep_credentials
-            else _project.redact_credentials(self.project)
-        )
+        project = self.to_project(keep_credentials=keep_credentials)
         out.write_text(json.dumps(project, indent=2), encoding="utf-8")
 
 
@@ -3532,6 +4893,16 @@ class Layer:
         """This layer's popup/tooltip config, or ``{}`` when it has none."""
         config = self._layer().get("popup")
         return copy.deepcopy(config) if isinstance(config, dict) else {}
+
+    @property
+    def descriptive_metadata(self) -> dict[str, Any]:
+        """This layer's descriptive (catalog) metadata, or ``{}`` when it has none."""
+        block = self._layer().get("descriptiveMetadata")
+        return copy.deepcopy(block) if isinstance(block, dict) else {}
+
+    def set_metadata(self, *, merge: bool = False, **fields: Any) -> dict[str, Any] | None:
+        """Set this layer's descriptive metadata (see :meth:`Map.set_layer_metadata`)."""
+        return self._map.set_layer_metadata(self, merge=merge, **fields)
 
     def set_popup(self, fields: Any = None, **kwargs: Any) -> dict[str, Any]:
         """Configure this layer's popup (see :meth:`Map.set_popup`)."""

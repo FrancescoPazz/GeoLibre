@@ -9,6 +9,7 @@ import {
 import {
   PROVIDER_DOCS_URL,
   PROVIDER_FIELDS,
+  type ProviderField,
 } from "../apps/geolibre-desktop/src/lib/assistant/provider-fields";
 
 // Build a runtime env that fills exactly the chosen fields of a provider. A
@@ -24,11 +25,16 @@ function envFrom(provider: AssistantProviderId, envKeys: readonly string[]): Run
   return env;
 }
 
+// A ChatGPT plan is signed in to, not configured with fields
+// (assistant-chatgpt.test.ts covers it).
+const KEYED_PROVIDER_IDS = ASSISTANT_PROVIDER_IDS.filter((provider) => provider !== "chatgpt");
+
 describe("PROVIDER_FIELDS", () => {
-  it("defines at least one field for every provider", () => {
-    for (const provider of ASSISTANT_PROVIDER_IDS) {
+  it("defines at least one field for every keyed provider", () => {
+    for (const provider of KEYED_PROVIDER_IDS) {
       assert.ok(PROVIDER_FIELDS[provider].length > 0, `${provider} has no fields`);
     }
+    assert.equal(PROVIDER_FIELDS.chatgpt.length, 0);
   });
 
   it("uses non-empty, unique env keys within each provider", () => {
@@ -57,7 +63,7 @@ describe("PROVIDER_FIELDS", () => {
   });
 
   it("marks a provider configured once all its required fields are filled", () => {
-    for (const provider of ASSISTANT_PROVIDER_IDS) {
+    for (const provider of KEYED_PROVIDER_IDS) {
       const required = PROVIDER_FIELDS[provider]
         .filter((field) => field.required)
         .map((field) => field.envKey);
@@ -90,7 +96,10 @@ describe("PROVIDER_FIELDS", () => {
 
   it("declares only aliases the resolver actually accepts", () => {
     for (const provider of ASSISTANT_PROVIDER_IDS) {
-      for (const field of PROVIDER_FIELDS[provider]) {
+      // Widened to the interface: `as const` drops `aliases` from fields that
+      // declare none.
+      const fields: readonly ProviderField[] = PROVIDER_FIELDS[provider];
+      for (const field of fields) {
         const required = PROVIDER_FIELDS[provider].filter((f) => f.required).map((f) => f.envKey);
         for (const alias of field.aliases ?? []) {
           // Fill the required fields but swap this field's canonical key for the

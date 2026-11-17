@@ -1,13 +1,24 @@
+import { type GeoLibreLayer, unionLonLatExtents } from "@geolibre/core";
 import type { FeatureCollection } from "geojson";
 import { AsyncUnzipInflate, strFromU8, Unzip, UnzipPassThrough, type UnzipFile } from "fflate";
+import { isFileHandlerDataType } from "@geolibre/plugins/file-handler-registry";
+import { kmlFileNameFromUrl, kmlImportFile } from "./kml-import-file";
+import {
+  type DataUrlFileHandlers,
+  offerRemoteFileToHandlers,
+  openRemoteFileWithHandler,
+  STYLE_WITH_HANDLER_MESSAGE,
+  waitForReady,
+  type RemoteFileHandlerResult,
+} from "./data-url-file-handlers";
 
 /**
  * A `dataType` hint naming the format of a `data` URL that its path cannot
- * reveal, such as an extensionless API endpoint.
+ * reveal, such as an extensionless API endpoint: the built-in `"lidar"`, or a
+ * name a plugin file handler declares in its `dataTypes`. Any lower-case
+ * `[a-z0-9-]` name parses; whether a handler declares it is decided at load time.
  */
-export type DataTypeHint = "lidar";
-
-const DATA_TYPE_HINTS = new Set<string>(["lidar"]);
+export type DataTypeHint = string;
 
 export interface DataUrlParameter {
   dataUrl: string;
@@ -73,7 +84,11 @@ export type RemoteData =
   | { kind: "pmtiles"; name: string; url: string }
   | { kind: "vector"; name: string; url: string; format: "geoparquet" }
   | { kind: "lidar"; name: string; url: string }
-  | { kind: "geojson"; layers: RemoteGeoJsonLayer[] };
+  /** A KML/KMZ document, handed to the host KML importer the way a drop is. */
+  | { kind: "kml"; name: string; file: File }
+  | { kind: "geojson"; layers: RemoteGeoJsonLayer[] }
+  /** A plugin file handler took the file; it adds its own layers. */
+  | ({ kind: "handled" } & RemoteFileHandlerResult);
 
 const MAX_ZIP_GEOJSON_BYTES = 250 * 1024 * 1024;
 
@@ -102,12 +117,21 @@ function httpUrl(value: string | null): string | null {
   }
 }
 
+/**
+ * The STAC catalog, API, or API collection a `?stac=` deep link asks the STAC Catalogs browser to
+ * connect to, or null when the parameter is missing or not an http(s) URL.
+ */
+export function stacUrlParameter(search: string): string | null {
+  return httpUrl(new URLSearchParams(search).get("stac"));
+}
+
 /** Read remote-layer deep links without claiming the project loader's `url` parameter. */
 export function dataUrlParameters(search: string): DataUrlParameter[] | null {
   const params = new URLSearchParams(search);
   const styles = params.getAll("style");
-  // Paired with `data` by position, like `style`; an empty or unknown value
-  // leaves that entry to be classified from its URL.
+  // Paired with `data` by position, like `style`; an empty or malformed value
+  // leaves that entry to be classified from its URL. Whether a well-formed name
+  // is known is decided at load time, once plugins have registered.
   const dataTypes = params.getAll("dataType");
   const entries = params
     .getAll("data")
@@ -115,10 +139,16 @@ export function dataUrlParameters(search: string): DataUrlParameter[] | null {
       const dataUrl = httpUrl(value);
       if (!dataUrl) return null;
       const hint = dataTypes[index]?.trim().toLowerCase() ?? "";
+      if (hint && !isFileHandlerDataType(hint)) {
+        console.warn(
+          `[GeoLibre] Ignoring the malformed dataType "${hint}" in the ?data= link: ` +
+            "use lower-case letters, digits and hyphens, at most 32 characters.",
+        );
+      }
       return {
         dataUrl,
         styleUrl: httpUrl(styles[index] ?? null),
-        dataType: DATA_TYPE_HINTS.has(hint) ? (hint as DataTypeHint) : null,
+        dataType: isFileHandlerDataType(hint) ? hint : null,
       };
     })
     .filter((entry): entry is DataUrlParameter => entry !== null);
@@ -141,9 +171,45 @@ export function remoteName(url: string): string {
   return (
     name
       .replace(/\.copc\.laz$/i, "")
-      .replace(/\.(?:geojson|json|tiff?|cog|zip|pmtiles|geoparquet|parquet|las|laz)$/i, "") ||
-    "data"
+      .replace(
+        /\.(?:geojson|json|tiff?|cog|zip|pmtiles|geoparquet|parquet|las|laz|kml|kmz)$/i,
+        "",
+      ) || "data"
   );
+}
+
+/**
+ * The file name a download carries, for handing it to a plugin file handler:
+ * the `Content-Disposition` filename when there is one, else the last path
+ * segment. Unlike {@link remoteName} the extension is kept, since a handler
+ * filters by it.
+ */
+export function remoteFileName(url: string, disposition: string | null): string {
+  const encoded = disposition?.match(/filename\*\s*=\s*[^']*'[^']*'([^;]+)/i)?.[1];
+  const quoted = disposition
+    ?.match(/filename\s*=\s*"((?:[^"\\]|\\.)*)"/i)?.[1]
+    ?.replace(/\\(.)/g, "$1");
+  const bare = disposition?.match(/filename\s*=\s*([^;"]+)/i)?.[1];
+  const candidates = [encoded, quoted, bare, new URL(url).pathname.split("/").at(-1)];
+  for (const raw of candidates) {
+    let name = raw?.trim() ?? "";
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      // Keep the undecoded name, as remoteName does.
+    }
+    // A name is a base name: no directories, no control characters, and at
+    // most 255 characters, keeping the end so the extension survives.
+    name = name
+      .split(/[\\/]/)
+      .at(-1)!
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001f\u007f]/g, "")
+      .trim()
+      .slice(-255);
+    if (name) return name;
+  }
+  return "data";
 }
 
 function extension(url: string): string {
@@ -198,7 +264,7 @@ async function fetchOk(url: string, signal: AbortSignal | undefined, fetchImpl: 
  * payload has been read. Falls back to `arrayBuffer()` for a response with no
  * readable stream.
  */
-async function readCappedBytes(response: Response, url: string): Promise<Uint8Array> {
+export async function readCappedBytes(response: Response, url: string): Promise<Uint8Array> {
   const tooLarge = () => new Error(`${url} is too large to open from a URL.`);
   const body = response.body;
   if (!body?.getReader) {
@@ -370,13 +436,58 @@ async function checkLidarDownloadSize(
 }
 
 /**
+ * Whether a download is a KML or KMZ document: by the URL's extension, a
+ * Google Earth media type, or a `.kml`/`.kmz` attachment name (an endpoint
+ * without a suffix).
+ *
+ * @param ext - The URL path's lower-cased extension.
+ * @param contentType - The lower-cased `Content-Type` header.
+ * @param disposition - The lower-cased `Content-Disposition` header.
+ * @returns True when the payload should go to the KML importer.
+ */
+export function isKmlDownload(ext: string, contentType: string, disposition: string): boolean {
+  return (
+    ext === "kml" ||
+    ext === "kmz" ||
+    contentType.includes("vnd.google-earth.km") ||
+    /filename\*?=[^;]*\.km[lz](?:[;"']|$)/i.test(disposition)
+  );
+}
+
+/**
  * Classify or fetch a supported data URL into startup-loadable layers. A
  * `dataType` hint overrides classification by the URL's path.
  */
 export async function fetchRemoteData(
   url: string,
-  options: { signal?: AbortSignal; fetchImpl?: typeof fetch; dataType?: DataTypeHint | null } = {},
+  options: {
+    signal?: AbortSignal;
+    fetchImpl?: typeof fetch;
+    dataType?: DataTypeHint | null;
+    /**
+     * Plugin file handlers to offer the download to. Left out, the load never
+     * reaches a handler.
+     */
+    fileHandlers?: DataUrlFileHandlers;
+    /** Whether a style accompanies the URL, which a plugin hint cannot take. */
+    hasStyle?: boolean;
+  } = {},
 ): Promise<RemoteData> {
+  const { fileHandlers } = options;
+  // A plugin's hint skips detection. `lidar` is built in and never reaches a handler.
+  let hinted: ReturnType<DataUrlFileHandlers["forDataType"]>;
+  if (fileHandlers && options.dataType && options.dataType !== "lidar") {
+    await waitForReady(fileHandlers.ready, options.signal);
+    hinted = fileHandlers.forDataType(options.dataType);
+  }
+  if (hinted) {
+    // Before downloading anything: a plugin opens the file itself, so a style has nothing to apply to.
+    if (options.hasStyle) throw new Error(STYLE_WITH_HANDLER_MESSAGE);
+    const response = await fetchOk(url, options.signal, options.fetchImpl ?? fetch);
+    const bytes = await readCappedBytes(response, url);
+    const name = remoteFileName(url, response.headers.get("content-disposition"));
+    return { kind: "handled", ...(await openRemoteFileWithHandler(hinted, name, bytes)) };
+  }
   if (options.dataType === "lidar" || isLidarUrl(url)) {
     if (!isStreamedLidarUrl(url)) {
       await checkLidarDownloadSize(url, options.signal, options.fetchImpl ?? fetch);
@@ -408,6 +519,24 @@ export async function fetchRemoteData(
     contentType.includes("zip") ||
     /filename\*?=[^;]*\.zip(?:[;"']|$)/i.test(disposition) ||
     zipSignature;
+  if (isKmlDownload(ext, contentType, disposition)) {
+    // A KMZ is a ZIP too, but of a KML document and its images, not of GeoJSON:
+    // it goes to the host KML importer, as a dropped file does. Checked before
+    // the plugin offer, which would rename it `.kmz.zip` for a `.zip` handler.
+    const name = kmlFileNameFromUrl(url, bytes);
+    return { kind: "kml", name: remoteName(url), file: kmlImportFile(name, bytes) };
+  }
+  if (fileHandlers) {
+    await waitForReady(fileHandlers.ready, options.signal);
+    const handlers = fileHandlers.list();
+    if (handlers.length > 0) {
+      let name = remoteFileName(url, response.headers.get("content-disposition"));
+      // A file already known to be a zip matches `.zip` handlers whatever the URL calls it.
+      if (isZip && !name.toLowerCase().endsWith(".zip")) name = `${name}.zip`;
+      const result = await offerRemoteFileToHandlers(name, bytes, handlers);
+      if (result.opened.length + result.failed.length > 0) return { kind: "handled", ...result };
+    }
+  }
   if (!isZip) {
     return {
       kind: "geojson",
@@ -600,4 +729,100 @@ export function parseRasterUrlStyle(input: unknown): RasterUrlStyle {
     throw new Error("The remote raster style does not contain any supported raster fields.");
   }
   return result;
+}
+
+/** The URL a `pmtiles://` protocol address reads, or the value unchanged. */
+function withoutPmtilesScheme(value: unknown): unknown {
+  return typeof value === "string" && value.startsWith("pmtiles://")
+    ? value.slice("pmtiles://".length)
+    : value;
+}
+
+/**
+ * Whether a store layer records the given URL as the data it was loaded from.
+ * A PMTiles layer records its archive behind the `pmtiles://` protocol, so the
+ * scheme is ignored on both sides.
+ *
+ * @param layer - The store layer.
+ * @param url - The URL the load used.
+ * @returns True when the layer's source path or source URL names `url`.
+ */
+export function layerPointsAt(layer: Pick<GeoLibreLayer, "source" | "sourcePath">, url: string) {
+  const target = withoutPmtilesScheme(url);
+  if (withoutPmtilesScheme(layer.sourcePath) === target) return true;
+  const source = layer.source as { url?: unknown };
+  return withoutPmtilesScheme(source.url) === target;
+}
+
+/**
+ * Loads every entry of a repeated `?data=` link in order, keeping the layers
+ * of the entries that load when others fail, so one bad entry does not take
+ * the rest of the link down. The batch rejects only when no entry produced a
+ * layer (with the first error, the others still reported), or when the load
+ * was aborted, which also takes back the layers already added.
+ *
+ * @param entries - The link's entries, in link order.
+ * @param load - Loads one entry, resolving to the ids of the layers it added.
+ * @param options.removeLayer - Removes one added layer (on abort).
+ * @param options.onEntryError - Reports one failed entry.
+ * @returns The ids of every layer the batch added.
+ */
+export async function loadDataUrlBatch<Entry>(
+  entries: readonly Entry[],
+  load: (entry: Entry) => Promise<string[]>,
+  options: { removeLayer: (id: string) => void; onEntryError: (error: unknown) => void },
+): Promise<string[]> {
+  const layerIds: string[] = [];
+  const errors: unknown[] = [];
+  for (const entry of entries) {
+    try {
+      layerIds.push(...(await load(entry)));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        for (const layerId of layerIds) options.removeLayer(layerId);
+        throw error;
+      }
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0 && layerIds.length === 0) {
+    // The first failure becomes the link's own error; the rest still show.
+    for (const error of errors.slice(1)) options.onEntryError(error);
+    throw errors[0];
+  }
+  for (const error of errors) options.onEntryError(error);
+  return layerIds;
+}
+
+type Bounds = [number, number, number, number];
+
+/**
+ * The combined extent of the layers to frame, or `pending` while a COG among
+ * them that is still in the store has not reported its extent yet.
+ *
+ * @param layers - The store's layers.
+ * @param fitLayerIds - The ids to frame.
+ * @param waitForAll - Whether a COG without an extent should hold the fit back.
+ * @param boundsOf - A layer's extent, or null while it is unknown.
+ * @returns The union of the known extents, null when none is known, or `pending`.
+ */
+export function dataUrlFitBounds(
+  layers: readonly GeoLibreLayer[],
+  fitLayerIds: readonly string[],
+  waitForAll: boolean,
+  boundsOf: (layer: GeoLibreLayer) => Bounds | null,
+): Bounds | null | "pending" {
+  const bounds: Bounds[] = [];
+  for (const layer of layers) {
+    if (!fitLayerIds.includes(layer.id)) continue;
+    const box = boundsOf(layer);
+    if (box) bounds.push(box);
+    // Only a COG learns its extent after it is added (from its header, as it
+    // first renders); any other layer without one never gets it, so it must
+    // not hold the fit back. Nor does a COG that failed to load.
+    else if (waitForAll && layer.type === "cog" && !layer.metadata.error) return "pending";
+  }
+  if (!bounds.length) return null;
+  // Short way round the antimeridian, not a plain min/max (GeoLibre#3469).
+  return unionLonLatExtents(bounds);
 }

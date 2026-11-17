@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
 import pytest
 
 import geolibre.geolibre as gmod
-from geolibre.geolibre import MAP_CONTROLS, MAP_PANELS, Map
+from geolibre.geolibre import (
+    MAP_CONTROLS,
+    MAP_PANELS,
+    MEASURE_AREA_UNITS,
+    MEASURE_DISTANCE_UNITS,
+    Map,
+)
 
 
 @pytest.fixture
@@ -90,6 +97,53 @@ def test_show_control_rejects_unknown_name(m):
         m.show_control("terrain")
 
 
+def test_show_control_measure_options(m):
+    """Measure options are stored with the visibility (issue #3241)."""
+    m.show_control("measure", collapsed=True, distance_unit="feet", area_unit="acres")
+    assert m._ui["controls"]["measure"] == {
+        "visible": True,
+        "collapsed": True,
+        "distanceUnit": "feet",
+        "areaUnit": "acres",
+    }
+    m.show_control("minimap", collapsed=True)
+    assert m._ui["controls"]["minimap"] == {"visible": True, "collapsed": True}
+    # A plain call keeps the boolean form, and hiding drops the options.
+    m.show_control("measure")
+    assert m._ui["controls"]["measure"] is True
+    m.show_control("minimap", False, collapsed=True)
+    assert m._ui["controls"]["minimap"] is False
+
+
+@pytest.mark.parametrize(
+    ("name", "kwargs", "match"),
+    [
+        ("search", {"collapsed": True}, "collapsed applies only"),
+        ("minimap", {"distance_unit": "feet"}, "applies only to 'measure'"),
+        ("measure", {"distance_unit": "furlongs"}, "Unknown distanceUnit"),
+        ("measure", {"area_unit": "feet"}, "Unknown areaUnit"),
+        ("measure", {"collapsed": "false"}, "collapsed must be a boolean"),
+    ],
+)
+def test_show_control_rejects_bad_options(m, name, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        m.show_control(name, **kwargs)
+
+
+def test_measure_options_round_trip(m, tmp_path):
+    """Control options survive save_project and load_project."""
+    m.show_control("measure", collapsed=True, distance_unit="miles")
+    expected = {
+        "controls": {"measure": {"visible": True, "collapsed": True, "distanceUnit": "miles"}}
+    }
+    assert m.to_project()["interaction"] == expected
+    out = tmp_path / "map.geolibre.json"
+    m.save_project(str(out))
+    other = Map()
+    other.load_project(str(out))
+    assert other._ui["controls"] == expected["controls"]
+
+
 def test_set_projection_writes_project_preferences(m):
     assert m.projection == "globe"
     m.set_projection("mercator")
@@ -137,6 +191,106 @@ def test_remove_layer_disarms_identify_before_the_project_sync(m):
     assert m._ui["identify"] is None
 
 
+def test_set_identify_accepts_a_list_of_layers(m):
+    """A list limits Identify to those layers, resolved and de-duplicated."""
+    a = m.add_marker(-100, 40, name="A")
+    m.add_marker(-95, 38, name="B")
+    c = m.add_marker(-90, 35, name="C")
+    m.set_identify(["A", m.get_layer(c), a])
+    assert m._ui["identify"] == [a, c]
+
+
+def test_set_identify_list_of_one_is_a_single_layer(m):
+    a = m.add_marker(-100, 40, name="A")
+    m.set_identify(["A"])
+    assert m._ui["identify"] == a
+
+
+def test_set_identify_list_rejects_unknown_or_empty(m):
+    m.add_marker(-100, 40, name="A")
+    with pytest.raises(ValueError):
+        m.set_identify(["A", "missing"])
+    with pytest.raises(ValueError, match="empty"):
+        m.set_identify([])
+    with pytest.raises(ValueError, match="got int"):
+        m.set_identify(7)
+    assert "identify" not in m._ui
+
+
+def test_removing_a_listed_layer_narrows_the_list(m):
+    a = m.add_marker(-100, 40, name="A")
+    b = m.add_marker(-95, 38, name="B")
+    c = m.add_marker(-90, 35, name="C")
+    m.set_identify([a, b, c])
+    m.remove_layer(b)
+    assert m._ui["identify"] == [a, c]
+    m.remove_layer(c)
+    assert m._ui["identify"] == a
+    m.clear_layers()
+    assert m._ui["identify"] is None
+
+
+def test_to_project_and_save_project_carry_interaction(m, tmp_path):
+    """Identify and controls are written as the project's interaction block."""
+    a = m.add_marker(-100, 40, name="A")
+    b = m.add_marker(-95, 38, name="B")
+    assert "interaction" not in m.to_project()
+    m.set_identify([a, b])
+    m.show_control("search")
+    m.hide_control("globe")
+    expected = {"identify": [a, b], "controls": {"search": True, "globe": False}}
+    assert m.to_project()["interaction"] == expected
+    assert m.to_project(keep_credentials=True)["interaction"] == expected
+    # The live project stays free of it, so a project push never re-applies it.
+    assert "interaction" not in m.project
+    out = tmp_path / "map.geolibre.json"
+    m.save_project(str(out))
+    assert json.loads(out.read_text())["interaction"] == expected
+
+
+def test_to_html_carries_interaction(m):
+    m.add_marker(-100, 40, name="A")
+    m.set_identify("all")
+    m.show_control("bookmark")
+    html = m.to_html()
+    match = re.search(r'id="geolibre-project">(.*?)</script>', html, re.DOTALL)
+    assert match
+    project = json.loads(match.group(1))
+    assert project["interaction"] == {"identify": "all", "controls": {"bookmark": True}}
+
+
+def test_load_project_restores_interaction(m, tmp_path):
+    """A saved interaction block round-trips into _ui and out of the project."""
+    a = m.add_marker(-100, 40, name="A")
+    b = m.add_marker(-95, 38, name="B")
+    m.set_identify([a, b])
+    m.show_control("search")
+    out = tmp_path / "map.geolibre.json"
+    m.save_project(str(out))
+
+    other = Map()
+    other.load_project(str(out))
+    assert other._ui == {"identify": [a, b], "controls": {"search": True}}
+    assert "interaction" not in other.project
+    assert other.to_project()["interaction"] == m.to_project()["interaction"]
+
+
+def test_load_project_filters_interaction_entries(m):
+    """Unknown layers and controls in a hand-edited block are skipped."""
+    project = {
+        "version": m.project["version"],
+        "name": "Hand edited",
+        "mapView": {},
+        "layers": [{"id": "keep"}],
+        "interaction": {
+            "identify": ["keep", "gone"],
+            "controls": {"search": True, "terrain": True, "globe": "no"},
+        },
+    }
+    m.load_project(project)
+    assert m._ui == {"identify": "keep", "controls": {"search": True}}
+
+
 def _ts_string_set(source: str, name: str) -> set[str]:
     """Pull the string literals out of an exported TS array constant.
 
@@ -150,8 +304,8 @@ def _ts_string_set(source: str, name: str) -> set[str]:
     Raises:
         AssertionError: If the constant is not found.
     """
-    match = re.search(rf"export const {name} = \[(.*?)\]", source, re.DOTALL)
-    assert match, f"{name} not found in ui-controls.ts"
+    match = re.search(rf"(?:export )?const {name} = \[(.*?)\]", source, re.DOTALL)
+    assert match, f"{name} not found in the TypeScript source"
     return set(re.findall(r'"([^"]+)"', match.group(1)))
 
 
@@ -170,3 +324,16 @@ def test_control_lists_match_the_typescript_source():
     source = ts_path.read_text(encoding="utf-8")
     assert _ts_string_set(source, "SCRIPTABLE_PANELS") == set(MAP_PANELS)
     assert _ts_string_set(source, "SCRIPTABLE_MAP_CONTROLS") == set(MAP_CONTROLS)
+
+
+def test_measure_units_match_the_typescript_source():
+    """The Measure unit sets mirror ``measure.ts`` by hand; catch the drift."""
+    ts_path = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "packages/plugins/src/plugins/components/measure.ts"
+    )
+    if not ts_path.exists():
+        pytest.skip("frontend source not present in this checkout")
+    source = ts_path.read_text(encoding="utf-8")
+    assert _ts_string_set(source, "MEASURE_DISTANCE_UNITS") == set(MEASURE_DISTANCE_UNITS)
+    assert _ts_string_set(source, "MEASURE_AREA_UNITS") == set(MEASURE_AREA_UNITS)

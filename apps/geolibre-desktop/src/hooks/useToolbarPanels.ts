@@ -58,7 +58,12 @@ import {
   subscribeBookmarkPanel,
   subscribeColorbarPanel,
   subscribeEarthEnginePanel,
+  getImageControlStates,
+  removeImageControl,
+  setImageControl,
   subscribeHtmlPanel,
+  subscribeImagePanel,
+  type ComponentImageState,
   subscribeMeasurePanel,
   subscribeMinimapPanel,
   subscribePrintPanel,
@@ -96,11 +101,23 @@ import {
   subscribeMicrozonationPanel,
 } from "../lib/microzonation-panel";
 import type { AppApi } from "../components/layout/toolbar/constants";
+import { setImageControlDialogOpen } from "../lib/image-control-dialog-store";
 
 /** Visibility flag plus a toggle handler for a single toolbar panel. */
 export interface ToolbarPanel {
   visible: boolean;
   toggle: () => void;
+}
+
+/**
+ * The Image control: its toggle opens the dialog; `images` lists what is on the
+ * map and apply/remove edit it. `visible` means at least one image is shown.
+ */
+export interface ToolbarImagePanel extends ToolbarPanel {
+  images: readonly ComponentImageState[];
+  /** Adds an image, or updates the one with the same id; returns its id. */
+  apply: (state: Partial<ComponentImageState>) => string | null;
+  remove: (id: string) => void;
 }
 
 /** Visibility + toggle state for every panel surfaced in the toolbar menus. */
@@ -123,6 +140,7 @@ export interface ToolbarPanels {
   colorbar: ToolbarPanel;
   legend: ToolbarPanel;
   html: ToolbarPanel;
+  image: ToolbarImagePanel;
   measure: ToolbarPanel;
   bookmark: ToolbarPanel;
   minimap: ToolbarPanel;
@@ -224,6 +242,11 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
     subscribeHtmlPanel,
     isHtmlPanelVisible,
     isHtmlPanelVisible,
+  );
+  const images = useSyncExternalStore(
+    subscribeImagePanel,
+    getImageControlStates,
+    getImageControlStates,
   );
   const measureVisible = useSyncExternalStore(
     subscribeMeasurePanel,
@@ -425,6 +448,13 @@ export function useToolbarPanels(appApi: AppApi): ToolbarPanels {
         }
         openHtmlPanel(appApi);
       },
+    },
+    image: {
+      visible: images.length > 0,
+      toggle: () => setImageControlDialogOpen(true),
+      images,
+      apply: (state) => setImageControl(appApi, state),
+      remove: (id) => removeImageControl(appApi, id),
     },
     measure: {
       visible: measureVisible,

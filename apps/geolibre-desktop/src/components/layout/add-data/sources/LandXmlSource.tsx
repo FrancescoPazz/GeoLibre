@@ -1,11 +1,10 @@
-import type { GeoLibreLayer } from "@geolibre/core";
+import { shouldZoomToNewLayers, type GeoLibreLayer } from "@geolibre/core";
 import { getLayerBounds } from "@geolibre/map";
 import { Button, Input, Label, Select } from "@geolibre/ui";
 import { FileUp } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isGeographicCrs } from "../../../../lib/crs-utils";
-import { reprojectPositionsToWgs84 } from "../../../../lib/duckdb-vector-loader";
 import {
   parseLandXml,
   reprojectLandXmlCollection,
@@ -150,16 +149,22 @@ export function LandXmlSource() {
     const reprojectionCrs = normalizedCrs && !isGeographicCrs(normalizedCrs) ? normalizedCrs : null;
     const baseName = source.layerName.trim() || defaultName;
     const layers: GeoLibreLayer[] = [];
+    // Imported only when reprojecting, so the DuckDB loader stays off the
+    // startup path and a geographic file never fetches it.
+    const reprojectPositions = reprojectionCrs
+      ? (await import("../../../../lib/duckdb-vector-loader")).reprojectPositionsToWgs84
+      : null;
 
     for (const parsedLayer of selectedLayers) {
       // Reproject the distinct vertices rather than the assembled geometry: a
       // TIN reuses each point across ~6 triangles, so transforming the faces
       // directly does several times the work for the same result.
-      const geojson = reprojectionCrs
-        ? await reprojectLandXmlCollection(parsedLayer.features, (positions) =>
-            reprojectPositionsToWgs84(positions, reprojectionCrs),
-          )
-        : parsedLayer.features;
+      const geojson =
+        reprojectionCrs && reprojectPositions
+          ? await reprojectLandXmlCollection(parsedLayer.features, (positions) =>
+              reprojectPositions(positions, reprojectionCrs),
+            )
+          : parsedLayer.features;
       const baseLayer = createBaseLayer(
         `${baseName} ${parsedLayer.name}`,
         "geojson",
@@ -203,8 +208,13 @@ export function LandXmlSource() {
       },
       null,
     );
-    if (combinedBounds) source.shell.mapControllerRef.current?.fitBounds(combinedBounds);
-    else source.shell.mapControllerRef.current?.fitLayer(layers[0]);
+    if (shouldZoomToNewLayers()) {
+      if (combinedBounds) {
+        source.shell.mapControllerRef.current?.fitBounds(combinedBounds);
+      } else {
+        source.shell.mapControllerRef.current?.fitLayer(layers[0]);
+      }
+    }
     source.shell.closeDialog();
   });
 

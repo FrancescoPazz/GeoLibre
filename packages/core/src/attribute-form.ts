@@ -16,16 +16,31 @@
  */
 import type { Feature } from "geojson";
 import { evaluateMapExpression } from "./expressions";
+import {
+  evaluateQgisExpression,
+  parseQgisExpression,
+  formatQgisDate,
+  formatQgisDateTime,
+  type QgisExpressionContext,
+} from "./qgis-expression";
 import type {
   AttributeFormConfig,
   AttributeFormFieldConfig,
   AttributeFormValueMapEntry,
+  AttributeFormValueRelation,
 } from "./types";
 
 /** Options threaded to expression evaluation (constraints, visibility). */
 export interface AttributeFormEvalOptions {
   /** Map zoom for `["zoom"]` in expressions; defaults to 0. */
   zoom?: number;
+  /**
+   * Constraints a data service enforces regardless of the form's
+   * presentation (ArcGIS domains). A field the form hides is still checked
+   * against its entry here, so a visibility rule cannot let an invalid value
+   * reach the service.
+   */
+  serviceForm?: AttributeFormConfig;
   /**
    * Real feature backing the properties, when the caller has one — its
    * geometry feeds `["geometry-type"]` and geometry-aware operators. Its
@@ -37,7 +52,7 @@ export interface AttributeFormEvalOptions {
 
 /** Why a field's value was rejected; codes map to localized messages. */
 export interface AttributeFormFieldError {
-  code: "required" | "number" | "range" | "valueMap" | "constraint";
+  code: "required" | "number" | "integer" | "text" | "range" | "valueMap" | "constraint";
   /**
    * For `constraint`: the author's `constraintDescription`, or the
    * expression's own error text when it failed to evaluate.
@@ -113,6 +128,17 @@ export function valueMapLabelFor(config: AttributeFormFieldConfig, value: unknow
 export function coerceAttributeFormValue(config: AttributeFormFieldConfig, raw: string): unknown {
   const trimmed = raw.trim();
   if (trimmed === "") return null;
+  if (config.valueType) {
+    // A declared type wins over the widget heuristics below. A value-map pick
+    // is kept verbatim so a code with surrounding spaces still matches.
+    const picked =
+      config.widget === "valueMap" && config.valueMap?.some((entry) => entry.value === raw)
+        ? raw
+        : trimmed;
+    if (config.valueType === "string") return picked;
+    const parsed = Number(picked);
+    return Number.isFinite(parsed) ? parsed : raw;
+  }
   if (config.widget === "number" || config.widget === "range") {
     const parsed = Number(trimmed);
     return Number.isFinite(parsed) ? parsed : raw;
@@ -163,6 +189,66 @@ export function isAttributeFormFieldVisible(
 }
 
 /**
+ * Render a computed default as the raw string a form input holds, matching
+ * what {@link coerceAttributeFormValue} parses back for the field's widget.
+ */
+function defaultValueText(config: AttributeFormFieldConfig, value: unknown): string | null {
+  if (value == null) return null;
+  if (config.widget === "checkbox") {
+    if (typeof value === "boolean") return value ? "true" : "false";
+    if (typeof value === "number") return value !== 0 ? "true" : "false";
+    const lower = String(value).trim().toLowerCase();
+    return lower === "true" || lower === "1"
+      ? "true"
+      : lower === "false" || lower === "0"
+        ? "false"
+        : null;
+  }
+  if (value instanceof Date) {
+    return config.widget === "date" ? formatQgisDate(value) : formatQgisDateTime(value);
+  }
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : null;
+  if (typeof value === "object") return null;
+  const text = String(value);
+  // A date input only accepts yyyy-mm-dd, so trim a datetime default to it.
+  if (config.widget === "date") return /^\d{4}-\d{2}-\d{2}/.exec(text)?.[0] ?? null;
+  return text;
+}
+
+/**
+ * Compute the default values a form pre-fills for a new feature. Fields are
+ * evaluated in form order and each result is visible to later expressions, so
+ * a default can build on an earlier one (a photo name built from an ID that
+ * is itself defaulted).
+ *
+ * @param form - The layer's form config.
+ * @param context - Variables, geometry and clock for the expressions; its
+ *   `properties` seed the record (values the user already entered).
+ * @param options.skip - Fields to leave alone, e.g. ones the user has edited.
+ * @returns Field name to raw form string, only for fields whose default
+ *   evaluated to a non-null value.
+ */
+export function computeAttributeFormDefaults(
+  form: AttributeFormConfig | undefined,
+  context: QgisExpressionContext = {},
+  options: { skip?: ReadonlySet<string> } = {},
+): Record<string, string> {
+  const defaults: Record<string, string> = {};
+  const properties: Record<string, unknown> = { ...context.properties };
+  for (const config of form?.fields ?? []) {
+    const source = config.defaultValue?.trim();
+    if (!source || options.skip?.has(config.field)) continue;
+    const result = evaluateQgisExpression(source, { ...context, properties });
+    if (!result.ok) continue;
+    const text = defaultValueText(config, result.value);
+    if (text === null) continue;
+    defaults[config.field] = text;
+    properties[config.field] = coerceAttributeFormValue(config, text);
+  }
+  return defaults;
+}
+
+/**
  * Validate one configured field against the candidate properties record (the
  * field's own candidate value lives at `properties[config.field]`). Returns
  * `null` when the value passes. Checks run in order: required, widget typing,
@@ -182,6 +268,12 @@ export function validateAttributeFormField(
     // requiring it would block every save with a confusing "value required".
     if (config.required && config.widget !== "checkbox") return { code: "required" };
   } else {
+    if (config.valueType === "string" && typeof value !== "string") return { code: "text" };
+    if (config.valueType === "number" || config.valueType === "integer") {
+      if (typeof value !== "number" || !Number.isFinite(value)) return { code: "number" };
+      if (config.valueType === "integer" && !Number.isSafeInteger(value))
+        return { code: "integer" };
+    }
     if (config.widget === "number" || config.widget === "range") {
       const numeric = typeof value === "number" ? value : Number(value);
       if (!Number.isFinite(numeric)) return { code: "number" };
@@ -227,8 +319,9 @@ export function validateAttributeFormField(
 
 /**
  * Validate a whole candidate properties record against a form config. Hidden
- * fields (visibility expression currently false) are skipped entirely — a
- * field the form does not show cannot block a save.
+ * fields (visibility expression currently false) skip the form's own rules —
+ * a field the form does not show cannot block a save — but are still checked
+ * against `options.serviceForm`, whose constraints the data service enforces.
  */
 export function validateAttributeFormValues(
   form: AttributeFormConfig | undefined,
@@ -236,12 +329,95 @@ export function validateAttributeFormValues(
   options: AttributeFormEvalOptions = {},
 ): AttributeFormValidation {
   const errors: Record<string, AttributeFormFieldError> = {};
+  const checked = new Set<string>();
   for (const config of form?.fields ?? []) {
     if (!isAttributeFormFieldVisible(config, properties, options)) continue;
+    checked.add(config.field);
+    const error = validateAttributeFormField(config, properties, options);
+    if (error) errors[config.field] = error;
+  }
+  for (const config of options.serviceForm?.fields ?? []) {
+    if (checked.has(config.field)) continue;
     const error = validateAttributeFormField(config, properties, options);
     if (error) errors[config.field] = error;
   }
   return { ok: Object.keys(errors).length === 0, errors };
+}
+
+/**
+ * Combine a layer's designer-authored form with the constraints its data
+ * service publishes (for example ArcGIS coded-value and range domains) into
+ * the form the editing surfaces use. The author's presentation choices
+ * (alias, visibility, constraint expression, a narrower value map or bounds)
+ * survive, but never widen what the service accepts: a service value map
+ * forces the value-map widget and keeps only author entries the service also
+ * lists (all service entries when none overlap), bounds take the tighter of
+ * each side, and the service's declared value type always applies.
+ *
+ * @param form - The layer's designer-authored config, if any.
+ * @param service - Service-derived configs, if the layer has any.
+ * @returns The effective config, or `form` itself when there is no service form.
+ */
+export function mergeAttributeFormConfigs(
+  form: AttributeFormConfig | undefined,
+  service: AttributeFormConfig | undefined,
+): AttributeFormConfig | undefined {
+  if (!service?.fields.length) return form;
+  const serviceFields = new Map(service.fields.map((entry) => [entry.field, entry]));
+  const fields: AttributeFormFieldConfig[] = [];
+  for (const own of form?.fields ?? []) {
+    const constraint = serviceFields.get(own.field);
+    serviceFields.delete(own.field);
+    fields.push(constraint ? mergeAttributeFormField(own, constraint) : own);
+  }
+  fields.push(...serviceFields.values());
+  return { fields };
+}
+
+function mergeAttributeFormField(
+  own: AttributeFormFieldConfig,
+  service: AttributeFormFieldConfig,
+): AttributeFormFieldConfig {
+  const merged: AttributeFormFieldConfig = { ...own, valueType: service.valueType };
+  if (!own.alias?.trim() && service.alias) merged.alias = service.alias;
+  if (service.required) merged.required = true;
+  if (service.widget === "valueMap" && service.valueMap) {
+    const allowed = new Map(service.valueMap.map((entry) => [entry.value, entry]));
+    const narrowed =
+      own.widget === "valueMap"
+        ? (own.valueMap ?? [])
+            .filter((entry) => allowed.has(entry.value))
+            .map((entry) => ({
+              value: entry.value,
+              label: entry.label ?? allowed.get(entry.value)!.label,
+            }))
+        : [];
+    merged.widget = "valueMap";
+    merged.valueMap = narrowed.length ? narrowed : service.valueMap;
+    delete merged.min;
+    delete merged.max;
+    delete merged.step;
+    return merged;
+  }
+  if (own.widget !== "number" && own.widget !== "range") {
+    merged.widget = service.widget;
+    delete merged.valueMap;
+  }
+  merged.min = tighter(own.min, service.min, Math.max);
+  merged.max = tighter(own.max, service.max, Math.min);
+  if (merged.min === undefined) delete merged.min;
+  if (merged.max === undefined) delete merged.max;
+  return merged;
+}
+
+function tighter(
+  a: number | undefined,
+  b: number | undefined,
+  pick: (a: number, b: number) => number,
+): number | undefined {
+  if (a == null) return b;
+  if (b == null) return a;
+  return pick(a, b);
 }
 
 /**
@@ -259,4 +435,121 @@ function featureForEvaluation(
     ...(feature?.id !== undefined ? { id: feature.id } : {}),
     properties: properties as Feature["properties"],
   };
+}
+
+/** Entries read from a referenced layer, and how their stored values are typed. */
+export interface RelationValueMap {
+  entries: AttributeFormValueMapEntry[];
+  /**
+   * `"string"` when the key column holds text, so a code such as `"01"` is
+   * stored as text like the rows already in the layer; `"number"` when every
+   * key is numeric.
+   */
+  valueType: "string" | "number";
+}
+
+/**
+ * Turn a referenced layer's rows into dropdown entries.
+ *
+ * @param rows - The referenced rows, as plain property records.
+ * @param relation - Which properties hold the stored value and the label.
+ * @param options.maxEntries - Stop once more than this many distinct entries
+ *   are found; the result is then longer than the limit and unsorted.
+ * @returns Every distinct entry, sorted by label. The caller decides what to
+ *   do with a very long list.
+ */
+export function buildRelationValueMap(
+  rows: Iterable<Record<string, unknown> | null | undefined>,
+  relation: Omit<AttributeFormValueRelation, "layerId">,
+  options: { maxEntries?: number } = {},
+): RelationValueMap {
+  const seen = new Set<string>();
+  const entries: AttributeFormValueMapEntry[] = [];
+  // Parsed once: the same expression labels every row.
+  // Also the fallback for a row whose label column is empty.
+  const source = relation.labelExpression?.trim();
+  const parsed = source ? parseQgisExpression(source) : null;
+  const expression = parsed?.ok ? parsed.node : null;
+  let numeric = true;
+  for (const row of rows) {
+    const raw = row?.[relation.keyField];
+    if (!row || raw == null || raw === "") continue;
+    const value = String(raw);
+    if (seen.has(value)) continue;
+    seen.add(value);
+    if (typeof raw !== "number" && typeof raw !== "bigint") numeric = false;
+    let label: unknown = relation.labelField ? row[relation.labelField] : undefined;
+    if (label == null && expression) {
+      const result = evaluateQgisExpression(expression, { properties: row });
+      if (result.ok) label = result.value;
+    }
+    const text = label == null ? "" : String(label).trim();
+    entries.push(text && text !== value ? { value, label: text } : { value });
+    // Past the caller's limit the list is not going to be used: stop before
+    // labelling and sorting the rest of a very long table.
+    if (options.maxEntries !== undefined && entries.length > options.maxEntries) {
+      return { entries, valueType: numeric ? "number" : "string" };
+    }
+  }
+  entries.sort((a, b) =>
+    (a.label ?? a.value).localeCompare(b.label ?? b.value, undefined, { numeric: true }),
+  );
+  return { entries, valueType: numeric ? "number" : "string" };
+}
+
+/** Most entries a live relation dropdown shows; a longer list stays as it was. */
+export const MAX_RELATION_ENTRIES = 1000;
+
+/**
+ * Fill relation dropdowns from the layers they reference.
+ *
+ * @param form - The layer's form config.
+ * @param rowsOf - The current feature properties of a layer by id, or
+ *   `undefined` when the layer is absent or its features have not loaded.
+ * @returns A form whose relation fields carry entries read from the
+ *   referenced layer. A field whose layer is unavailable, or too long for a
+ *   list, keeps the entries it already had; one whose layer is loaded but
+ *   empty has none. Returns `form` itself when
+ *   nothing was resolved.
+ */
+export function resolveAttributeFormRelations(
+  form: AttributeFormConfig | undefined,
+  rowsOf: (layerId: string) => Iterable<Record<string, unknown> | null> | undefined,
+): AttributeFormConfig | undefined {
+  if (!form?.fields.some((field) => field.valueRelation)) return form;
+  let changed = false;
+  const fields = form.fields.map((field) => {
+    const relation = field.valueRelation;
+    const rows = relation ? rowsOf(relation.layerId) : undefined;
+    if (!relation || !rows) return field;
+    const { entries, valueType } = buildRelationValueMap(rows, relation, {
+      maxEntries: MAX_RELATION_ENTRIES,
+    });
+    if (entries.length > MAX_RELATION_ENTRIES) return field;
+    changed = true;
+    // The layer is loaded and has nothing to offer: the import-time snapshot
+    // would list keys that no longer exist, so it is dropped rather than kept.
+    if (entries.length === 0) return { ...field, valueMap: [] };
+    return {
+      ...field,
+      widget: "valueMap" as const,
+      valueMap: entries,
+      valueType: field.valueType ?? valueType,
+    };
+  });
+  return changed ? { ...form, fields } : form;
+}
+
+/**
+ * `metadata` flag on a layer that is a table: its features have attributes
+ * but no geometry (a lookup list, or child records linked to another layer's
+ * features). It draws nothing; its rows show in the attribute table.
+ */
+export const ATTRIBUTE_TABLE_FLAG = "attributeTable";
+
+/** Whether a layer is a geometry-less table (see {@link ATTRIBUTE_TABLE_FLAG}). */
+export function isAttributeTableLayer(layer: {
+  metadata?: Record<string, unknown> | null;
+}): boolean {
+  return layer.metadata?.[ATTRIBUTE_TABLE_FLAG] === true;
 }

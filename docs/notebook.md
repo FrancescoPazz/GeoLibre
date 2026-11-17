@@ -13,6 +13,8 @@ both the web and desktop builds, with a different Python runtime behind the same
   from a uv-managed Python environment (the same mechanism as the FastAPI
   sidecar) on `127.0.0.1:8766`, token-authenticated, and embeds it. This gives
   full CPython with the native geospatial stack (geopandas, rasterio, GDAL, …).
+  The Mac App Store build is the exception: it cannot spawn the server, so it
+  embeds the JupyterLite site like the web build.
 
 This is distinct from the [`geolibre` Python package](python.md), which does the
 inverse — embedding the _whole GeoLibre app_ inside a notebook cell.
@@ -38,6 +40,18 @@ m.get_layer(layer_id)
 m.list_layers()
 m.fit_bounds([-123, 37, -122, 38])
 m.set_basemap("https://…/style.json")
+m.add_tile_layer("https://…/{z}/{x}/{y}.png", name="Imagery")
+m.add_cog("https://…/dem.tif", name="DEM", colormap="terrain", rescale=(0, 4000))
+dem_id = m.add_raster(geotiff_bytes, name="DEM", colormap="terrain")  # a GeoTIFF in memory
+```
+
+Calls that take a layer id only work where `add_*` returns one, which is a desktop
+JupyterLab kernel with a connected window. It returns `None` on JupyterLite (the
+web and Mac App Store builds), and when the relay gets no reply in time:
+
+```python
+if dem_id is not None:
+    m.run_whitebox_tool("slope", input=dem_id, output="slope.tif")
 ```
 
 Most mutation calls are **fire-and-forget**. On desktop, `add_geojson` uses the
@@ -74,6 +88,19 @@ Synchronous read-back is desktop-only. JupyterLite uses browser `postMessage`;
 blocking its Python call would also block the browser event loop that must
 deliver the result. Canonical client source:
 `backend/geolibre_server/notebook_client.py`.
+
+## Example notebooks
+
+Two example notebooks open in the panel's file browser:
+
+- **`Welcome.ipynb`** covers the basics: moving the camera and adding markers and
+  GeoJSON.
+- **`Explore_GeoLibre.ipynb`** covers raster and vector data. It adds tile layers
+  and a COG, runs terrain analysis with NumPy, and converts raster results to
+  vector. It then styles live USGS earthquake data with data-driven colors,
+  heatmaps, labels and 3D extrusions, and runs a GeoPandas spatial join. In the
+  desktop app, it also manages layers by id and runs Whitebox tools, processing
+  tools and a Model Builder graph.
 
 ## Driving the map from an external client (VS Code, …)
 
@@ -158,9 +185,11 @@ instead (GeoLibre#1851, GeoLibre#1658). Install the deps above and rebuild.
 
 Two builds therefore treat a missing CLI as fatal rather than skippable, because
 they serve the site and cannot degrade: the Mac App Store build, and any build
-that sets `GEOLIBRE_JUPYTERLITE_REQUIRED=1` (the Docker image does). The desktop
-(Tauri) dev and build paths skip it entirely (they use the real JupyterLab
-server), so the static site never bloats the installer.
+that sets `GEOLIBRE_JUPYTERLITE_REQUIRED=1` (the Docker image does). The Mac
+App Store build cannot spawn a JupyterLab server, so its Notebook panel embeds
+the JupyterLite site instead. Every other desktop (Tauri) dev and build path
+skips it entirely (they use the real JupyterLab server), so the static site
+never bloats the installer.
 
 The Docker image builds and serves the site, and gives `/jupyterlite/` its own
 block in `docker/nginx.conf`:
@@ -175,8 +204,11 @@ block in `docker/nginx.conf`:
   prefix match would otherwise take away from them.
 
 Build config lives in `apps/geolibre-desktop/jupyterlite/` (a
-`jupyter_lite_config.json`, the build `requirements.txt`, and a starter
-`files/Welcome.ipynb`). The generated directory is excluded from the PWA
+`jupyter_lite_config.json`, a `jupyter-lite.json`, and the build
+`requirements.txt`). The build stages the kernel client and the example notebooks
+into its `files/` from their canonical copies under
+`backend/geolibre_server/` (`notebook_client.py`, `notebook_examples/`). The
+generated directory is excluded from the PWA
 precache (see `pwaPlugin` in `apps/geolibre-desktop/vite.config.ts`).
 
 ## Desktop server

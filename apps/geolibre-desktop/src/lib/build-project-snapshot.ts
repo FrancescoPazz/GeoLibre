@@ -54,7 +54,10 @@ export function buildProjectSnapshot(
     storymap: state.storymap,
     models: state.models,
     processingHistory: state.processingHistory,
+    obia: state.obiaWorkbench ?? undefined,
     widgets: state.widgets,
+    bookmarks: state.bookmarks,
+    bookmarkGroups: state.bookmarkGroups,
     dashboardColumns: state.dashboardColumns,
     mapLayout: state.mapLayout,
     secondaryMapViews: state.secondaryMapViews,
@@ -62,6 +65,7 @@ export function buildProjectSnapshot(
     primaryRenderer: state.primaryRenderer,
     styleLibrary: state.projectStyleLibrary,
     comments: state.comments,
+    interaction: state.projectInteraction,
     metadata: state.metadata,
   });
 }

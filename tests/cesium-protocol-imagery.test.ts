@@ -14,12 +14,14 @@ import {
 } from "../packages/map/src/cesium-cog-imagery";
 import {
   expandTileTemplate,
-  hasRegisteredProtocol,
   ProtocolImageryProvider,
-  protocolScheme,
-  requestProtocolTile,
   type DecodedTile,
 } from "../packages/map/src/cesium-protocol-imagery";
+import {
+  hasRegisteredProtocol,
+  protocolScheme,
+  requestProtocolTile,
+} from "../packages/map/src/protocol-tiles";
 
 // The protocol-bridged imagery provider (issue #2283). Cesium's tiling scheme,
 // rectangle, credit, and event classes are the real ones; the tile bytes come
@@ -713,7 +715,7 @@ describe("CesiumLayerSync raster bridge routing", () => {
     );
     // MapLibre's own factor for rasterSaturation 0.5; the curve itself is
     // covered by the imageryColorAdjustments suite.
-    assert.ok(Math.abs(added[0].saturation - 1 / 0.501) < 1e-9);
+    assert.ok(Math.abs((added[0].saturation ?? NaN) - 1 / 0.501) < 1e-9);
     assert.deepEqual(sync.getRenderStatus(), { pending: [], errors: [] });
     // A symbology change (colormap) rebuilds; an opacity change restyles in place.
     const recoloured = {
@@ -825,6 +827,18 @@ describe("review follow-ups", () => {
     assert.ok(Math.abs(rect.west + Math.PI) < 1e-9);
     assert.ok(Math.abs(rect.east - Math.PI) < 1e-9);
     assert.ok(rect.north < (85.1 * Math.PI) / 180 && rect.north > (85 * Math.PI) / 180);
+  });
+
+  it("keeps a global source inside Cesium's real Web Mercator tiling scheme", async () => {
+    // A rectangle edge past Cesium's limit has no tile, and the globe stops
+    // rendering when it asks for the corner's tile (a global COG or WMS).
+    const Real = await import("@cesium/engine");
+    const { webMercatorRectangle } = await import("../packages/map/src/cesium-protocol-imagery");
+    const rect = webMercatorRectangle(Real, [-180, -90, 180, 90]);
+    const scheme = new Real.WebMercatorTilingScheme();
+    for (const corner of [Real.Rectangle.northwest(rect), Real.Rectangle.southeast(rect)])
+      for (const level of [0, 3, 12])
+        assert.ok(scheme.positionToTileXY(corner, level), `level ${level}`);
   });
 
   it("falls back to an RGB composite only when the source has three bands", () => {

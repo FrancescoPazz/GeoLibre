@@ -11,19 +11,21 @@ The Project menu is filtered by the active [UI profile](../ui-profiles.md), and 
 
 **Project → New...** starts a fresh project. GeoLibre offers to save the current project first, then resets the layers, map view, controls, and plugin state to defaults.
 
-The **New project** dialog names the project and picks its starting basemap: the OpenFreeMap styles, a **Regional** group, sections for the Moon, Mars, and other celestial bodies, a blank background, or a custom MapLibre style or PMTiles URL.
+The **New project** dialog names the project and picks its starting basemap: the OpenFreeMap styles, the Protomaps styles (when the build offers them), a **Regional** group, sections for the Moon, Mars, and other celestial bodies, a blank background, or a custom MapLibre style or PMTiles URL. Templates you saved with **Save as template...** appear above the basemaps under **Saved Templates**.
 
 ![The New project dialog, with a project name field and the basemap gallery](https://assets.geolibre.app/images/geolibre-new-project.webp)
 
+The collapsible **Examples** section lists a few curated starter projects from the [Gallery](../gallery.md). Clicking one downloads it from `assets.geolibre.app` and opens it as an unsaved copy, the same way **Open From → URL** would. It needs an internet connection; if the download fails, the dialog stays open on your current project and says which example could not be opened.
+
 ## Open
 
-**Project → Open From** has two sources:
+**Project → Open From** has three sources:
 
-- **File...** opens a `.geolibre.json` file from disk (desktop app).
+- **File...** opens a `.geolibre.json` file from disk. The browser build uses the browser's file picker.
 - **URL...** loads a public `.geolibre.json` from an HTTP or HTTPS URL. This works in the browser too and adds the project to your recent list.
 - **Gallery...** browses the shared project gallery and opens any entry with one click.
 
-**Project → Open Recent** lists the projects you have opened before, each with its name, path, and the time you last opened it. Click an entry to reopen it, use the small remove button to drop a single entry, or choose **Clear Recent Projects** to empty the list. On the desktop app the recent list persists across sessions; in the browser it tracks URL-based projects.
+**Project → Open Recent** lists the projects you have opened before, each with its name, path, and the time you last opened it. Click an entry to reopen it, use the small remove button to drop a single entry, or choose **Clear Recent Projects** to empty the list. On the desktop app the recent list persists across sessions. In the browser, a URL-based entry reopens directly, while an entry for a local file asks you to pick the file again, because a browser cannot reopen a file on disk by itself.
 
 !!! note "Loading a project at startup"
 You can open a project directly by passing its URL with the `url` query parameter, for example `?url=https://share.geolibre.app/you/project.geolibre.json`. See [Embedding & Sharing](embedding.md).
@@ -35,7 +37,7 @@ You can open a project directly by passing its URL with the `url` query paramete
 - **Save** writes back to the project's existing file path.
 - **Save As...** prompts for a new name and location.
 
-Both capture the current map view, basemap, layers, styles, preferences, and plugin state at the moment you save. Projects that were opened from a URL have no writable local path, so both Save and Save As fall back to the save dialog. Saving requires the desktop app.
+Both capture the current map view, basemap, layers, styles, preferences, and plugin state at the moment you save. Projects that were opened from a URL have no writable local path, so both Save and Save As fall back to the save dialog. In the browser build, saving uses the browser's save dialog where it has one (Chromium-based browsers); elsewhere it asks for a file name and downloads the project to your downloads folder.
 
 **Project → Duplicate project** copies the open project into a new, unsaved one, so you can branch off an experiment without touching the original file.
 
@@ -44,6 +46,8 @@ Both capture the current map view, basemap, layers, styles, preferences, and plu
 GeoLibre autosaves the project as you work. Three seconds after a change settles — a layer added, a style edited, the camera moved — it writes a snapshot to your browser's local IndexedDB storage. Autosaves never touch your `.geolibre.json` file; only **Save** does that.
 
 **Project → History...** lists the snapshots for the current project, newest first, each summarized by its layer count and zoom level. **Restore** loads a snapshot back into the workspace, as an undoable step so you can back out of it. There is no manual delete here — snapshots age out on their own once a cap is hit.
+
+**Compare** shows what changed between a snapshot and the current project, or between two snapshots (pick one under **Compare with**). Changes are grouped into collapsible sections: layers added, removed, renamed, reordered or restyled (each changed style, label, filter and source setting with its before and after value, plus counts of embedded features added, removed and modified), the camera, basemap and projection, plugins, and the project title, details and preferences. When comparing against the current project, **Restore this layer** brings back the snapshot's version of a single layer — or re-adds one you deleted — without touching the rest of the project; **Undo** reverts it. Re-adding a deleted layer also brings back what deleting it removed: its dashboard widgets, comments on its features, its legend order and overrides, its story-map chapter opacity steps, its visibility in other map panes, and Print Layout table, chart or atlas blocks that used it. Anything you changed since the snapshot keeps your change, for example a Print Layout block you pointed at another layer.
 
 The store is capped, so history stays bounded: at most 20 snapshots per project, 10 MB per snapshot, and 50 MB in total. The oldest snapshots are dropped once a cap is hit, and a project too large to fit in a single snapshot is not autosaved.
 
@@ -54,7 +58,36 @@ Snapshots are stored per project — keyed by file path, or by name for a projec
 
 ## Importing a QGIS project
 
-**Project → Import → Import QGIS Project…** reads a QGIS `.qgs` or `.qgz` project and rebuilds it as a GeoLibre project: its layers, layer groups (including nested ones), group visibility, layer order, styling, and the saved map view.
+**Project → Import → Import QGIS Project…** reads a QGIS `.qgs` or `.qgz` project and rebuilds it as a GeoLibre project: its layers, layer groups (including nested ones), group visibility, layer order, styling, the saved map view, and each layer's attribute form.
+
+Layers QGIS reads over HTTP through GDAL's `/vsicurl/` (GeoJSON, GeoParquet, GeoPackage, FlatGeobuf, KML and the other vector formats GeoLibre opens) are downloaded and loaded. WMS layers and XYZ tile layers become GeoLibre tile layers; WMS tiles are requested in Web Mercator whatever CRS the QGIS layer used. WMTS layers are listed as skipped, so add those services from **Add data**. When the project has no saved map canvas, the map opens at the project's default view extent (Project Properties → View Settings).
+
+Every layer of a multi-layer GeoPackage is read from its own table. A GeoPackage table without geometry (a lookup list, a table of reviews or photos linked to a point) is imported as a table layer: it draws nothing on the map, its rows open in the attribute table, dropdowns read from it, and records can be added to it. A geometry-less table in any other format is listed as skipped.
+
+### Forms from QGIS and QField
+
+A project prepared in QGIS for field work with QField keeps its form setup, so the same project collects data in GeoLibre without rebuilding the forms. For each layer the importer reads:
+
+| QGIS form setting | In GeoLibre |
+| --- | --- |
+| Edit widgets | **Value Map** becomes a dropdown, **Range** a slider or number box with its bounds, **Checkbox** a checkbox (or a two-entry dropdown when it stores custom values such as `Y`/`N`), **Date/Time** a date picker (a field that also stores a time stays a text box so the time is kept). **Hidden** fields stay hidden but are still saved. |
+| **Value Relation** and **Relation Reference** | A dropdown that lists the linked layer's rows as they are now, so a record you just added can be picked. If the linked table is not part of the project, the entries are a snapshot taken at import. A table with more than 1,000 distinct values, or a widget that allows several selections, is left as a text box. |
+| **Attachment** (a picture) | A photo field: pick or take a picture and it is stored with the feature. See [Linked records and photos](field-collection.md#linked-records-and-photos). |
+| Drag-and-drop form layout | Fields appear in the layout's order under its tab and group titles. A field the layout leaves out is not shown but is still saved, so a hidden ID keeps its default. |
+| Relations | After saving a record, Field Collection offers to add records to the layers that link to it. See [Linked records and photos](field-collection.md#linked-records-and-photos). |
+| Field aliases | The field's label. |
+| **Not null** constraints | A required field. Constraints QGIS only warns about are not enforced. |
+| Constraint expressions | Converted when they use comparisons, `AND`/`OR`/`NOT`, arithmetic, `IS NULL`, `IN`, and text length or case functions. As in QGIS, an empty value passes. |
+| Default values | Kept as written, including QField's GPS variables. See [Default values](field-collection.md#default-values). |
+| **UUID Generator** | A text field that defaults to `uuid()`. |
+
+A layer that has a form becomes a [Field Collection](field-collection.md) layer, ready to capture into, and its form can be reviewed and changed in the **Style** panel under **Attributes Form**. Anything that could not be carried over (a default that looks up another layer, a constraint using an unsupported function, a linked table that could not be read) is listed per field when the import finishes.
+
+### Symbology from QGIS
+
+A layer's renderer is read the same way **Import layer styles** reads a `.qml` file: a single symbol, **Categorized**, **Graduated**, and **Rule-based** renderers become the matching GeoLibre style mode, with each class's color and label and the rule filters GeoLibre's expressions can express. A point cluster or displacement renderer is read through to the symbols it wraps; the clustering itself is not carried over. Rules whose filter cannot be converted, labels built from an expression rather than a field, and marker shapes with no equivalent are listed per layer when the import finishes. A class drawn only with an SVG or pattern fill has no color to read and keeps the layer's base color.
+
+The layer's existing features are still read from the QGIS data file. Once you capture a new feature into it, GeoLibre keeps that layer's features in the `.geolibre.json` project instead, so the capture is saved with the project and the original file is left untouched. A photo field stores the picture inside the project rather than as a file next to it, so QField's automatic file naming for attachments does not apply; give the record a name field with a default value instead. Rows that already hold a file path keep it as text. Relation widgets placed inside a parent's form are not drawn there: child records are added from the prompt that follows a save.
 
 The importer targets file-based vector layers plus rasters the app can open, and it reports what it could not bring across rather than failing the whole import — you get the project plus a list of skipped layers and the reason (an unsupported data provider, an unsupported file format, a missing source, a network share path, or a remote source). Layers skipped for the same reason are grouped into one line with a count, so a project where hundreds of layers share one root cause reads at a glance; expand a group to see the layer names. In the browser build, layers that reference a local path on disk are listed as skipped because a browser cannot reopen those paths; open the same project in GeoLibre Desktop to load them.
 
@@ -74,8 +107,9 @@ An ArcGIS Pro project can contain several maps; GeoLibre imports its first 2D ma
 
 Connecting your account depends on the build:
 
-- **Web app**: click **Sign in** in the Share dialog (or Settings → Environment Variables). A popup opens `share.geolibre.app`'s consent page; approving it connects the app, and the sign-in is kept for the browser session. Session expired prompts offer a one-click re-sign-in.
-- **GeoLibre Desktop** (and as a fallback everywhere): paste a personal API token — created under Settings → API tokens at [share.geolibre.app/settings](https://share.geolibre.app/settings) — into the **Share.GeoLibre API token** field in **Settings → Environment Variables**.
+- **Web app**: click **Sign in** in the Share dialog (or under **Share.GeoLibre account** in **Settings → Environment Variables**). A popup opens `share.geolibre.app`'s consent page; approving it connects the app, and the sign-in is kept for the browser session. Session expired prompts offer a one-click re-sign-in.
+- **GeoLibre Desktop**: sign in the same way; the consent page opens in your system browser and returns to the app. The sign-in is kept in your system keychain, so it survives restarts. Once signed in, **Settings → Environment Variables** also lets you review and revoke your sessions.
+- **Mobile apps, notebook embeds, and as a fallback everywhere**: paste a personal API token — created under Settings → API tokens at [share.geolibre.app/settings](https://share.geolibre.app/settings) — into the **Share.GeoLibre API token** field in **Settings → Environment Variables**.
 
 ### Share-readiness check
 
@@ -101,7 +135,15 @@ The dialog warns even before a share token is configured, because uploading a sa
 
 ## Export as HTML
 
-**Project → Export as HTML...** writes the whole project to a single standalone HTML file that runs offline with no server. Host it anywhere, or open it straight from disk.
+**Project → Export → Export as HTML...** writes the whole project to a single standalone HTML file that runs offline with no server. Host it anywhere, or open it straight from disk.
+
+## Layer styles
+
+**Project → Export → Export Layer Styles...** writes every layer's style to one JSON file keyed by layer name. **Project → Import → Import Layer Styles...** applies such a file to the open project, restyling each layer whose name matches in one undoable step, and reports any styles that matched no layer. To apply a styles file automatically, choose it under **Default layer styles** in [Settings → Startup](settings.md#startup): each layer you add whose name matches is styled as it arrives, while layers in opened projects keep their saved styles.
+
+## Layers files
+
+**Project → Export → Export Layers...** writes the project's layers to a JSON file (`"type": "geolibre-layers"`) for the **Default layers** setting in [Settings → Startup](settings.md#startup), which adds them to every new project. Each layer keeps its style, labels, visibility, opacity, and folder, but the file holds only a *reference* to its data: a tile or service URL, a remote file URL, or a local file path the desktop app can re-read. Features are never embedded, so a layer whose data exists only in the project (drawn features, processing results, or a file opened in the browser) is left out, and GeoLibre lists the layers it skipped. Credentials such as API keys and tokens are removed from the exported layers, as they are when sharing a project.
 
 ## Collaborate
 
@@ -115,7 +157,7 @@ The dialog warns even before a share token is configured, because uploading a sa
 
 ![The Print Layout composer, with the page settings on the left and a live preview on the right](https://assets.geolibre.app/images/geolibre-print-layout.webp)
 
-**Project → Print Layout...** opens the layout composer, which exports the current map to PNG or PDF. It carries a title block with an editable title and footer, a user-editable legend, an explicit map-scale input, page-size controls, a custom print extent, attribute-table and chart blocks, Atlas / map series generation (one page per feature, or a uniform series along a line), and Copy to Clipboard. The composer is backed by the MapLibre components plugin.
+**Project → Print Layout...** opens the layout composer, which exports the current map to PNG, PDF, or SVG. It carries an editable title and footer, an info (title) block with project metadata, a user-editable legend, an explicit map-scale input, page-size controls, a custom print extent, attribute-table and chart blocks, Atlas / map series generation (one page per feature, or a uniform series along a line), SVG export for editing in a vector editor, and Copy to Clipboard. See [Print Layout](print-layout.md) for the full guide.
 
 ## Story maps
 

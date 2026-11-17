@@ -1,5 +1,6 @@
 import { SEARCH_HIGHLIGHT_COLOR } from "./map-engine";
 import {
+  shortestLongitudeExtent,
   useAppStore,
   type GeoLibreLayer,
   type GlobeAppearance,
@@ -8,13 +9,10 @@ import {
   type MapViewState,
   type StoryChapterAnimation,
   type StoryChapterLocation,
+  storyLocationView,
 } from "@geolibre/core";
-import type {
-  Cartesian2,
-  CesiumWidget,
-  TerrainProvider,
-  PointPrimitiveCollection,
-} from "@cesium/engine";
+import type { Cartesian2 } from "@cesium/core";
+import type { CesiumTerrainProvider, CesiumWidget, PointPrimitiveCollection } from "@cesium/engine";
 import type { FeatureCollection, Point, Polygon } from "geojson";
 import type * as maplibregl from "maplibre-gl";
 import {
@@ -39,7 +37,11 @@ import { TerrariumTerrainProvider } from "./cesium-terrarium";
 import { registerCogDemSource, type CogDemSourceRegistration } from "./cog-dem-source";
 import type { MapRenderSurface } from "./map-engine";
 import type { ExtentDrawingOptions, MapExtent } from "./map-engine";
-import { CesiumLayerSync, type MovingPointFeatureDescription } from "./cesium-layer-sync";
+import {
+  CESIUM_SUPPORTED_LAYER_KINDS,
+  CesiumLayerSync,
+  type MovingPointFeatureDescription,
+} from "./cesium-layer-sync";
 import { getLayerBounds } from "./geojson-loader";
 import type {
   BuiltInMapControl,
@@ -84,6 +86,15 @@ export const CESIUM_CAPABILITIES: MapEngineCapabilities = Object.freeze({
   screenOverlays: false,
   flatProjection: false,
   terrainSource: true,
+  ionTerrain: true,
+  // Zarr cubes, KML/KMZ, CZML and ion assets load through the globe's own
+  // imagery and data-source loaders.
+  nativeZarr: true,
+  nativeDataSources: true,
+  deferredEngineReady: false,
+  measureTool: true,
+  controlLayerPanels: true,
+  supportedLayerKinds: CESIUM_SUPPORTED_LAYER_KINDS,
 });
 
 /**
@@ -130,33 +141,20 @@ const FEATURE_PICK_APERTURE_PX = 12;
 const POINT_FIT_ZOOM = 14;
 
 /**
- * The shortest longitude interval covering `longitudes`, in the `[west, east]`
- * form {@link CesiumEngine.fitBounds} reads: `west` greater than `east` means
- * the interval crosses the antimeridian, the repo-wide convention.
+ * A `MapExtent`'s west/east pair in the form Cesium's `Rectangle` takes:
+ * longitudes within ±180, with `west` greater than `east` for a box across the
+ * antimeridian. Layer extents arrive unwrapped (`east > 180`, the MapLibre
+ * form), which `Rectangle.fromDegrees` would read as an out-of-range east edge.
  *
- * A plain min/max reads a pair at 179° and −179° as 358° apart and frames
- * almost the whole globe instead of the two-degree cluster. The enclosing arc
- * is instead the complement of the widest gap between neighbouring longitudes:
- * the one stretch of the circle nothing selected sits in is the one to leave
- * out. Measuring from any single member instead — the first, say — only finds
- * the minimum while the answer is under 180° wide, and reports 340° for a
- * three-point spread whose true arc is 190°.
+ * @param west - West edge in degrees.
+ * @param east - East edge in degrees, possibly past 180.
+ * @returns The `[west, east]` pair for `Rectangle.fromDegrees`.
  */
-function shortestLongitudeInterval(longitudes: readonly number[]): [number, number] {
-  const sorted = longitudes.map(normalizeBearing).sort((a, b) => a - b);
-  if (sorted.length === 1) return [sorted[0], sorted[0]];
-  // Start from the gap that wraps the antimeridian, then the ordinary ones.
-  let widest = sorted[0] + 360 - sorted[sorted.length - 1];
-  let before = sorted.length - 1;
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const gap = sorted[i + 1] - sorted[i];
-    if (gap > widest) {
-      widest = gap;
-      before = i;
-    }
-  }
-  // The arc runs from the longitude just after the gap to the one just before.
-  return [sorted[(before + 1) % sorted.length], sorted[before]];
+export function cesiumLongitudes(west: number, east: number): [number, number] {
+  if (east - west >= 360) return [-180, 180];
+  const wrap = (lon: number) =>
+    lon >= -180 && lon <= 180 ? lon : ((((lon + 180) % 360) + 360) % 360) - 180;
+  return [wrap(west), wrap(east)];
 }
 
 /**
@@ -210,14 +208,14 @@ export interface CesiumSceneHandle {
 export interface CesiumEngineOptions {
   /** Whether this canvas has credentials for Cesium World Terrain. */
   worldTerrainAvailable?: boolean;
+  /** Runtime Ion token used for the selected terrain asset. */
+  ionToken?: string;
   /**
-   * Cesium Ion asset id of a terrain to load in place of Cesium World Terrain
-   * (`getCesiumTerrainAssetId()` in `@geolibre/core`). Lets a deployment that
-   * uploaded its own DTM to Ion have the globe drape and sample against it. Only
-   * consulted when `worldTerrainAvailable` — the asset is private to the token
-   * that owns it, so without credentials the engine stays on keyless Terrarium.
+   * Ion terrain asset to load in place of Cesium World Terrain: the project's
+   * own choice, else the deployment's (`getCesiumTerrainAssetId()` in
+   * `@geolibre/core`, from CESIUM_TERRAIN_ASSET_ID). Needs `ionToken`.
    */
-  terrainIonAssetId?: number;
+  terrainIonAssetId?: number | null;
   /**
    * Id of the `secondaryMapViews` record this globe draws, or `undefined` when
    * it *is* the primary map area. Decides which camera the engine publishes to
@@ -338,12 +336,23 @@ export class CesiumEngine implements MapEngine {
    */
   private userMoved = false;
   /**
-   * Whether the camera's current position came from the user rather than from
-   * {@link applyView}. Unlike {@link userMoved} (which `moveEnd` consumes) this
-   * stays set until the next programmatic apply, and it is what stops the
-   * terrain correction from fighting live navigation.
+   * Whether something other than {@link applyView} has moved the camera since
+   * its last placement: user input, a scene-mode morph, or an animated flight
+   * (fly-to-layer, Set View, zoom in/out). Unlike {@link userMoved} (which
+   * `moveEnd` consumes) this stays set until the next `applyView` or until a
+   * flight lands untouched, and it is what stops the terrain correction from
+   * re-applying a placement the camera has already left. See
+   * {@link supersedePlacement}.
    */
-  private userOwnsCamera = false;
+  private placementSuperseded = false;
+  /**
+   * Whether an animated flight from {@link startFlight} has not landed yet.
+   * The `moveEnd` that ends it hands the landed view back to the terrain
+   * correction (see {@link adoptLandedFlight}).
+   */
+  private flightPending = false;
+  /** Invalidates a story arrival callback when playback is paused or replaced. */
+  private storyCameraToken = 0;
 
   /**
    * Zoom bounds from the project's `MapPreferences`, in MapLibre zoom levels.
@@ -367,11 +376,12 @@ export class CesiumEngine implements MapEngine {
   private pendingProjection: MapProjection | null = null;
 
   private readonly worldTerrainAvailable: boolean;
-  private readonly terrainIonAssetId: number | undefined;
+  private readonly ionToken: string | undefined;
   private terrainEnabled = false;
   private terrainRequest = 0;
   private terrainExaggeration = 1;
   private terrainProvider: TerrariumTerrainProvider | null = null;
+  private terrainIonAssetId: number | null;
   private cogTerrain: CogDemSourceRegistration | null = null;
   private cogTerrainUrl: string | null = null;
   private cogTerrainRequest = 0;
@@ -387,14 +397,25 @@ export class CesiumEngine implements MapEngine {
     this.viewer = viewer;
     this.viewId = options.viewId;
     this.worldTerrainAvailable = options.worldTerrainAvailable ?? true;
-    this.terrainIonAssetId = options.terrainIonAssetId;
+    this.ionToken = options.ionToken?.trim() || undefined;
+    this.terrainIonAssetId = options.terrainIonAssetId ?? null;
     this.capabilities =
       options.viewId === undefined ? CESIUM_CAPABILITIES : CESIUM_PANE_CAPABILITIES;
     const onDiagnostic = options.onDiagnostic;
     this.layerSync = new CesiumLayerSync(Cesium, viewer, undefined, {
       onTilesetFields: publishTilesetFields,
-      onLayerError: ({ layerName, message }) =>
-        onDiagnostic?.({ message: `${layerName}: ${message}`, source: "cesium" }),
+      onFlyTo: () => this.startFlight(),
+      onFlyToComplete: () => this.settleStillFlight(),
+      onLayerError: ({ layerId, layerName, message }) =>
+        onDiagnostic?.({ message: `${layerName}: ${message}`, source: "cesium", layerId }),
+      onTileFailure: ({ layerId, layerName, message, status, loaded, failed }) =>
+        onDiagnostic?.({
+          message: `${layerName}: ${message}`,
+          source: "cesium",
+          layerId,
+          status,
+          tiles: { loaded, failed },
+        }),
     });
     this.terrainExaggeration = viewer.scene.verticalExaggeration ?? 1;
     if (options.globeAppearance) this.setGlobeAppearance(options.globeAppearance);
@@ -432,6 +453,7 @@ export class CesiumEngine implements MapEngine {
   // ---------------------------------------------------------------- lifecycle
 
   destroy(): void {
+    this.stopStoryCamera();
     this.terrainRequest++;
     this.cogTerrainRequest++;
     this.terrainProvider?.destroy();
@@ -458,7 +480,8 @@ export class CesiumEngine implements MapEngine {
     if (!viewer || this.isMorphing()) return;
     this.lastApplied = view;
     // This placement is ours, so the terrain correction may adjust it.
-    this.userOwnsCamera = false;
+    this.placementSuperseded = false;
+    this.flightPending = false;
     this.lastGroundHeight = groundHeightAt(this.Cesium, viewer, view.center[0], view.center[1]);
     applyMapViewToCamera(this.Cesium, viewer, view);
     return new Promise((resolve) => {
@@ -507,21 +530,34 @@ export class CesiumEngine implements MapEngine {
 
   /** Animate to a story-chapter location. See {@link easeToView} on the arc. */
   flyToView(location: StoryChapterLocation): void {
-    this.animateTo(location, FLY_SECONDS);
+    this.animateTo(storyLocationView(location, this.readView()), FLY_SECONDS);
   }
 
   applyStoryChapterCamera(
     location: StoryChapterLocation,
     animation: StoryChapterAnimation = "flyTo",
     _rotate = false,
+    onArrive?: () => void,
   ): void {
-    // Auto-rotation is MapLibre-only for now: it drives a per-frame bearing tick
-    // against the 2D map, and the globe has no equivalent hook yet.
+    this.stopStoryCamera();
+    const token = this.storyCameraToken;
+    let arrived = false;
+    const arrive = () => {
+      if (arrived || token !== this.storyCameraToken) return;
+      arrived = true;
+      onArrive?.();
+    };
+    // Story auto-rotation is not implemented on the globe yet. Arrival still
+    // completes normally, so playback does not wait for an unsupported orbit.
+    // An absent pitch/bearing keeps the current one, as MapLibre does.
+    const view = storyLocationView(location, this.readView());
     if (animation === "jumpTo") {
-      this.applyView(location);
+      const applied = this.applyView(view);
+      if (applied) void applied.then(arrive);
+      else arrive();
       return;
     }
-    this.animateTo(location, animation === "easeTo" ? EASE_SECONDS : FLY_SECONDS);
+    this.animateTo(view, animation === "easeTo" ? EASE_SECONDS : FLY_SECONDS, arrive);
   }
 
   flyTo(camera: FlyToCamera): void {
@@ -561,7 +597,8 @@ export class CesiumEngine implements MapEngine {
 
   fitBounds(bounds: [number, number, number, number]): void {
     const viewer = this.live();
-    if (!viewer) return;
+    // Cesium throws from `flyTo` mid-morph; skip the fit as `animateTo` does.
+    if (!viewer || this.isMorphing()) return;
     const [west, south, east, north] = bounds;
     if (![west, south, east, north].every((value) => Number.isFinite(value))) return;
     // A degenerate point-sized box cannot be fit; fly to the point instead.
@@ -569,7 +606,7 @@ export class CesiumEngine implements MapEngine {
     // zero-area Rectangle has no "zoom to fit" — Cesium would derive a
     // nonsensical camera distance from it. Mirrors MapController.fitBounds,
     // including its zoom floor, so a single marker frames the same on both
-    // engines.
+    // engines. `animateTo` starts its own flight (or none, mid-morph).
     if (west === east && south === north) {
       this.animateTo(
         {
@@ -582,23 +619,28 @@ export class CesiumEngine implements MapEngine {
       );
       return;
     }
+    this.startFlight();
+    const [rectWest, rectEast] = cesiumLongitudes(west, east);
     viewer.camera.flyTo({
-      destination: this.Cesium.Rectangle.fromDegrees(west, south, east, north),
+      destination: this.Cesium.Rectangle.fromDegrees(rectWest, south, rectEast, north),
       duration: FLY_SECONDS,
+      complete: () => this.settleStillFlight(),
     });
   }
 
-  fitLayer(layer: GeoLibreLayer): void {
+  fitLayer(layer: GeoLibreLayer): boolean {
     const bounds = getLayerBounds(layer);
     if (bounds) {
       this.fitBounds(bounds);
-      return;
+      return true;
     }
     // An Ion asset, a tileset by URL, CZML and KML keep no bounds in the store:
     // their extent belongs to the Cesium object the sync loads. Hand the fit
     // over, including for a layer added a moment ago whose object is still
-    // loading — the sync flies as soon as it has one.
+    // loading — the sync flies as soon as it has one, and reports that flight
+    // through `onFlyTo`.
     this.layerSync.zoomToLayer(layer.id);
+    return true;
   }
 
   readCameraAltitude(): number | null {
@@ -914,7 +956,11 @@ export class CesiumEngine implements MapEngine {
         this.animateTo({ center: [...coordinates[0]], zoom: 4, bearing: 0, pitch: 0 }, FLY_SECONDS);
       } else {
         const latitudes = coordinates.map(([, latitude]) => latitude);
-        const [west, east] = shortestLongitudeInterval(coordinates.map(([longitude]) => longitude));
+        // Short way round: a pair at 179° and -179° is two degrees apart, not
+        // 358°. fitBounds hands the unwrapped pair to Cesium as west > east.
+        const [west, east] = shortestLongitudeExtent(
+          coordinates.map(([longitude]) => [longitude, longitude]),
+        ) ?? [-180, 180];
         this.fitBounds([west, Math.min(...latitudes), east, Math.max(...latitudes)]);
       }
       return;
@@ -1029,7 +1075,12 @@ export class CesiumEngine implements MapEngine {
     return this.live()?.camera.moveEnd.addEventListener(listener) ?? (() => {});
   }
   stopCamera(): void {
+    this.stopStoryCamera();
+  }
+  stopStoryCamera(): void {
+    this.storyCameraToken++;
     this.live()?.camera.cancelFlight();
+    this.settleStillFlight();
   }
   suspendNavigation(): () => void {
     const viewer = this.live();
@@ -1196,6 +1247,17 @@ export class CesiumEngine implements MapEngine {
     return getPrimaryCesiumControlHost()?.addControl(control, position) ?? false;
   }
 
+  /**
+   * The MapLibre-shaped map plugin controls receive on the globe: camera,
+   * events and DOM through the globe, and a style that is recorded rather
+   * than drawn (see `CesiumControlHost`). Null for a grid pane, which hosts no
+   * controls, and before the primary host exists.
+   */
+  getControlMap(): maplibregl.Map | null {
+    if (!this.isPrimary) return null;
+    return getPrimaryCesiumControlHost()?.getControlMap() ?? null;
+  }
+
   /** No-op for a grid pane, which never mounted a control. See {@link addControl}. */
   removeControl(control: maplibregl.IControl): void {
     if (!this.isPrimary) return;
@@ -1291,19 +1353,6 @@ export class CesiumEngine implements MapEngine {
   }
 
   /**
-   * The Ion-backed terrain: the deployment's own asset when one is configured,
-   * otherwise Cesium World Terrain. Both are `CesiumTerrainProvider`s behind the
-   * same token, so everything downstream — the terrain correction, sampling,
-   * the retry-on-failure path — is indifferent to which one loaded.
-   */
-  private loadIonTerrain(): Promise<TerrainProvider> {
-    const assetId = this.terrainIonAssetId;
-    return assetId === undefined
-      ? this.Cesium.createWorldTerrainAsync()
-      : this.Cesium.CesiumTerrainProvider.fromIonAssetId(assetId);
-  }
-
-  /**
    * Await-able form of `setTerrainEnabled(true)`, for the mount path.
    *
    * `CesiumCanvas` adds terrain *before* it seeds the camera, because
@@ -1312,8 +1361,13 @@ export class CesiumEngine implements MapEngine {
    * terrain correction to fix it. The interface form cannot express that (it
    * returns `boolean`), so the mount path calls this and the interface delegates
    * to it fire-and-forget.
+   *
+   * A saved Ion asset that fails to load (revoked, deleted, wrong account) falls
+   * back to World Terrain rather than leaving the globe with none. Callers that
+   * are switching the source themselves pass `false` so they see the failure
+   * and can keep the previous source.
    */
-  async enableWorldTerrain(): Promise<void> {
+  async enableWorldTerrain(fallbackFromIon = true): Promise<boolean> {
     this.terrainEnabled = true;
     const request = ++this.terrainRequest;
     try {
@@ -1324,18 +1378,61 @@ export class CesiumEngine implements MapEngine {
               this.cogTerrain?.renderTile,
               this.cogTerrain ? 22 : 15,
             ))
-          : await this.loadIonTerrain();
+          : this.terrainIonAssetId !== null
+            ? await this.loadIonTerrain(this.terrainIonAssetId).catch((error: unknown) => {
+                if (!fallbackFromIon) throw error;
+                return this.Cesium.createWorldTerrainAsync();
+              })
+            : await this.Cesium.createWorldTerrainAsync();
       const viewer = this.live();
       // The toggle may have been reversed, or the viewer destroyed, while the
       // provider loaded; applying it then would resurrect terrain the user just
       // turned off.
       if (viewer && this.terrainEnabled && request === this.terrainRequest) {
         viewer.terrainProvider = provider;
+        return true;
       }
+      return false;
     } catch {
       // Allow a subsequent enable to retry, without resetting a newer request.
       if (request === this.terrainRequest) this.terrainEnabled = false;
+      return false;
     }
+  }
+
+  /** Resolve the project-selected Ion terrain asset, using the configured token explicitly. */
+  private async loadIonTerrain(assetId: number): Promise<CesiumTerrainProvider> {
+    if (!this.ionToken) throw new Error("A Cesium Ion token is required for Ion terrain.");
+    const resource = await this.Cesium.IonResource.fromAssetId(assetId, {
+      accessToken: this.ionToken,
+    });
+    return this.Cesium.CesiumTerrainProvider.fromUrl(resource);
+  }
+
+  getTerrainIonAssetId(): number | null {
+    return this.terrainIonAssetId;
+  }
+
+  async setTerrainIonAssetId(assetId: number | null): Promise<boolean> {
+    if (assetId !== null && (!Number.isSafeInteger(assetId) || assetId <= 0 || !this.ionToken))
+      return false;
+    if (this.terrainIonAssetId === assetId) return true;
+    const previous = this.terrainIonAssetId;
+    this.terrainIonAssetId = assetId;
+    if (!this.terrainEnabled) {
+      this.terrainRequest++;
+      return true;
+    }
+    const before = this.terrainRequest;
+    const applied = await this.enableWorldTerrain(false);
+    // Roll back only a genuine load failure. A newer request (another asset, a
+    // COG switch, or terrain turned off) bumps `terrainRequest` past ours, and
+    // restoring `previous` then would override that newer state.
+    if (!applied && this.terrainRequest === before + 1 && this.terrainIonAssetId === assetId) {
+      this.terrainIonAssetId = previous;
+      if (this.live()) await this.enableWorldTerrain();
+    }
+    return applied;
   }
 
   getTerrainExaggeration(): number {
@@ -1359,6 +1456,12 @@ export class CesiumEngine implements MapEngine {
   async setTerrainCogSource(source: string | Blob | null, band = 1): Promise<boolean> {
     if (!this.live()) return false;
     const normalized = typeof source === "string" ? source.trim() || null : source;
+    if (this.cogTerrain === null && normalized === null) {
+      // Still supersede a COG that is opening, so it cannot land after this.
+      this.cogTerrainRequest++;
+      this.cogTerrainUrl = null;
+      return true;
+    }
     const request = ++this.cogTerrainRequest;
     let registration: CogDemSourceRegistration | null;
     try {
@@ -1374,10 +1477,24 @@ export class CesiumEngine implements MapEngine {
     this.terrainRequest++;
     const previousProvider = this.terrainProvider;
     const previousSource = this.cogTerrain;
+    const previousUrl = this.cogTerrainUrl;
     this.terrainProvider = null;
     this.cogTerrain = registration;
     this.cogTerrainUrl = typeof normalized === "string" ? normalized : null;
-    if (this.terrainEnabled) await this.enableWorldTerrain();
+    if (this.terrainEnabled) {
+      const before = this.terrainRequest;
+      const applied = await this.enableWorldTerrain(false);
+      // Clearing the COG falls back to Ion/World Terrain, which can fail to
+      // load. Keep the active COG source then instead of leaving no terrain.
+      if (!applied && this.terrainRequest === before + 1 && this.live()) {
+        registration?.dispose();
+        this.terrainProvider = previousProvider;
+        this.cogTerrain = previousSource;
+        this.cogTerrainUrl = previousUrl;
+        await this.enableWorldTerrain();
+        return false;
+      }
+    }
     previousProvider?.destroy();
     previousSource?.dispose();
     return true;
@@ -1473,7 +1590,62 @@ export class CesiumEngine implements MapEngine {
    */
   private markUserDriven(): void {
     this.userMoved = true;
-    this.userOwnsCamera = true;
+    this.supersedePlacement();
+  }
+
+  /**
+   * Stop the terrain correction from re-applying the last {@link applyView}
+   * placement, because the camera is leaving it.
+   *
+   * The correction re-applies `lastApplied` when terrain settles at a new
+   * height. That is right only while the camera still sits on that placement.
+   * A flight loads terrain all along its path, so the tile queue drains mid-air,
+   * and re-applying the old placement then `lookAt`s the camera back where it
+   * started: the fly-to-layer after a drop, or a Set View, would land at the
+   * seed view instead, with nothing published to say so (#2878).
+   */
+  private supersedePlacement(): void {
+    this.placementSuperseded = true;
+  }
+
+  /**
+   * Note that an animated flight is leaving the current placement. The terrain
+   * correction stands down until it lands, then takes over the landed view.
+   */
+  private startFlight(): void {
+    this.supersedePlacement();
+    this.flightPending = true;
+  }
+
+  /**
+   * Make a landed flight's view the placement the terrain correction keeps
+   * honest. A flight converts its target zoom to a distance against whatever
+   * ground had loaded when it started, so it can land too close over terrain
+   * that streams in afterwards; correcting the landed view fixes that the same
+   * way it fixes an `applyView`.
+   */
+  private adoptLandedFlight(): void {
+    const viewer = this.live();
+    const view = this.lastApplied;
+    if (!viewer || !view) return;
+    this.lastGroundHeight = groundHeightAt(this.Cesium, viewer, view.center[0], view.center[1]);
+    this.placementSuperseded = false;
+  }
+
+  /**
+   * End a flight that finished, or was stopped, without moving the camera.
+   *
+   * The `moveEnd` handler lands a flight that moved. One that did not (a zoom
+   * in already at the project's max zoom, a reset north on a north-up globe, a
+   * stop before the first frame) gets no `moveEnd`: Cesium completes a flight
+   * with nowhere to go at once, and raises `moveStart`/`moveEnd` only for real
+   * camera motion. Without this the terrain correction would stay off until
+   * the next `applyView`. A flight that is still moving is left to `moveEnd`.
+   */
+  private settleStillFlight(): void {
+    if (!this.flightPending || this.cameraMoving) return;
+    this.flightPending = false;
+    if (!this.userMoved) this.adoptLandedFlight();
   }
 
   /**
@@ -1488,9 +1660,13 @@ export class CesiumEngine implements MapEngine {
    * clicks behave differently depending on which renderer is drawing, which is
    * precisely what #2260 exists to prevent.
    */
-  private animateTo(view: MapViewState, seconds?: number): void {
+  private animateTo(view: MapViewState, seconds?: number, onArrive?: () => void): void {
     const viewer = this.live();
-    if (!viewer || this.isMorphing()) return;
+    if (!viewer || this.isMorphing()) {
+      onArrive?.();
+      return;
+    }
+    this.startFlight();
     // Cesium has no "ease to a MapLibre view" primitive, so the flight is
     // expressed the same way applyView expresses a placement — a lookAt in the
     // target's local frame — with `flyTo`'s duration doing the animating.
@@ -1535,6 +1711,10 @@ export class CesiumEngine implements MapEngine {
           range,
         ),
         duration: seconds ?? EASE_SECONDS,
+        complete: () => {
+          this.settleStillFlight();
+          onArrive?.();
+        },
       },
     );
   }
@@ -1578,13 +1758,14 @@ export class CesiumEngine implements MapEngine {
    * makes this a no-op without terrain (height stays 0) and stops it recursing:
    * the re-apply's own load settles at the same height.
    *
-   * It corrects a *programmatic* placement only. Navigating loads finer terrain,
+   * It corrects an `applyView` placement only. Navigating loads finer terrain,
    * which drains the queue at a new height mid-gesture; without the
-   * `userOwnsCamera` guard that re-applied the last settled view and yanked the
-   * camera back, so a wheel zoom over terrain snapped straight back to where it
-   * started and the store never saw the move (the yank's own `moveEnd` read as
-   * the suppressed echo). Once the user is driving, their camera is
-   * authoritative and Cesium's own navigation already keeps it above terrain.
+   * `placementSuperseded` guard that re-applied the last settled view and
+   * yanked the camera back, so a wheel zoom over terrain snapped straight back
+   * to where it started and the store never saw the move (the yank's own
+   * `moveEnd` read as the suppressed echo). An animated flight hits the same
+   * guard for the same reason (#2878). Once the user or a flight is driving,
+   * that camera is authoritative and Cesium already keeps it above terrain.
    */
   private installTerrainCorrection(): void {
     const viewer = this.live();
@@ -1593,7 +1774,7 @@ export class CesiumEngine implements MapEngine {
       const live = this.live();
       const view = this.lastApplied;
       if (queued > 0 || !live || !view) return;
-      if (this.userOwnsCamera) return;
+      if (this.placementSuperseded) return;
       const height = groundHeightAt(this.Cesium, live, view.center[0], view.center[1]);
       if (Math.abs(height - this.lastGroundHeight) < 1) return;
       this.applyView(view);
@@ -1611,7 +1792,7 @@ export class CesiumEngine implements MapEngine {
     if (!viewer) return;
     const onMorphComplete = () => {
       // The native animation owns this camera, including any terrain settling.
-      this.userOwnsCamera = true;
+      this.supersedePlacement();
       this.clampCameraToZoomRange();
       this.publishCameraView();
       // A projection preference that landed mid-morph is applied now.
@@ -1636,7 +1817,11 @@ export class CesiumEngine implements MapEngine {
     };
     const onMoveEnd = () => {
       this.cameraMoving = false;
+      // A flight the user took over mid-air stays theirs.
+      const landedFlight = this.flightPending && !this.userMoved;
+      this.flightPending = false;
       this.publishCameraView();
+      if (landedFlight) this.adoptLandedFlight();
     };
     viewer.camera.moveStart.addEventListener(onMoveStart);
     viewer.camera.moveEnd.addEventListener(onMoveEnd);

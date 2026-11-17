@@ -2,13 +2,19 @@
 
 The **Layers panel** on the left lists every layer in the project, from the topmost drawing layer down to the basemap. Selecting a layer here drives the [Style panel](styling.md) and the [Attribute table](attribute-table.md).
 
+The on-map **Layer Control** also lists project layers, including ones currently hidden or still loading, nested under the same [layer groups](#layer-groups) as the left panel. Its checkboxes, opacity sliders, and group folders mirror the same settings as the left panel, and dragging a layer or using its right-click **Move** actions reorders the project's layers.
+
 ![The Layers panel: a group, two vector layers with the selected one's action buttons expanded, and the basemap at the bottom](https://assets.geolibre.app/images/geolibre-layers-panel.webp)
 
 ## Layer order and visibility
 
 - **Visibility**: click the eye button to show or hide a layer. The **Hide all layers** button at the top of the panel hides every layer at once.
-- **Order**: drag a layer to reorder it, or use the move up and move down actions. Layers higher in the list draw on top. The basemap (**Background**) always stays at the bottom.
+- **Order**: drag the grip handle beside a layer's name onto another layer to reorder it, or use the move up and move down actions. Layers higher in the list draw on top. The basemap (**Background**) always stays at the bottom. Layer-handle drags stay inside the panel; dropping files from Finder into the desktop app remains a separate data-import action.
 - **Opacity**: each layer has an opacity slider from 0 to 100 percent.
+
+## Hover tooltips
+
+When at least one layer shows a [hover tooltip](styling.md#popups-and-hover-tooltips), the Layers panel (and the read-only viewer) shows a **Hover tooltips** checkbox. Untick it to pause every layer's hover tip while you explore the map or inspect attributes; tick it again to bring them back with the same per-layer choices and fields. This is a viewing switch only: it does not change or dirty the saved project, and it turns back on when a project opens.
 
 ## Blend modes
 
@@ -83,15 +89,15 @@ WMS, WMTS), PMTiles, MBTiles, and vector tiles.
 
 Selecting a layer expands a row of icon buttons on its card:
 
-| Button                      | What it does                                                                                                                                                                                                    |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Move up** / **Move down** | Shift the layer one position in the stack.                                                                                                                                                                      |
-| **Zoom to layer**           | Fit the map to the layer's extent (for layers whose bounds are known).                                                                                                                                          |
-| **Identify features**       | Click features on the map to see their attributes in a popup. On a raster layer this reads the pixel value instead, and on a multiband raster it also builds a [spectral profile](styling.md#spectral-profile). |
-| **Open Style panel**        | Select the layer and open its [styling controls](styling.md).                                                                                                                                                   |
-| **Layer actions**           | The full menu, below.                                                                                                                                                                                           |
-| **Metadata**                | Inspect the layer's source and configuration.                                                                                                                                                                   |
-| **Remove layer**            | Delete the layer from the project.                                                                                                                                                                              |
+| Button | What it does |
+| --- | --- |
+| **Move up** / **Move down** | Shift the layer one position in the stack. |
+| **Zoom to layer** | Fit the map to the layer's extent (for layers whose bounds are known). |
+| **Identify features** | Click features on the map to see their attributes in a popup. On a raster layer this reads the pixel value instead, and on a multiband raster it also builds a [spectral profile](styling.md#spectral-profile). On an editable vector layer, each result also offers **Edit geometry** (opens the GeoEditor with that feature selected) and **Edit attributes** (opens the attribute table in edit mode on that feature's row). |
+| **Open Style panel** | Select the layer and open its [styling controls](styling.md). |
+| **Layer actions** | The full menu, below. |
+| **Metadata** | Inspect the layer's source and configuration, and edit its descriptive metadata (abstract, keywords, license, contact, lineage, temporal extent, and links). **Export as STAC Item** writes that metadata out as a STAC Item. |
+| **Remove layer** | Delete the layer from the project. |
 
 The **Layer actions** menu (the `…` button) holds everything else:
 
@@ -108,12 +114,16 @@ The **Layer actions** menu (the `…` button) holds everything else:
 | **Quick analysis**                                  | Run a buffer, centroids, convex hull, or bounding box over the whole layer with no dialog. See [Right-click quick actions](map-controls.md#right-click-quick-actions).                                                                                                                |
 | **Select features**                                 | The interactive selection modes: by click, rectangle, polygon, freehand, or radius, plus **Clear Selection**. Hold `Shift` to add, `Alt` to remove, `Shift`+`Alt` to intersect, and `Esc` to cancel.                                                                                  |
 | **Select by Expression…** / **Select by Location…** | Build a selection from an attribute expression or a spatial relationship. Select by Expression can also apply the expression as a persistent layer filter, hiding non-matching features without creating a new layer. Both are also on the [Edit menu](interface.md#the-top-toolbar). |
-| **Bind to Time Slider…**                            | Drive the Time Slider from one of this layer's date or number fields.                                                                                                                                                                                                                 |
-| **Export**                                          | Write the layer out as GeoJSON, GeoParquet, GeoPackage, KML, KMZ, zipped Shapefile, or CSV (attributes only).                                                                                                                                                                         |
-| **Styles**                                          | Import and export symbology — see [below](#importing-and-exporting-styles).                                                                                                                                                                                                           |
-| **Save to My Data**                                 | Store the fully configured layer in your personal library, ready to re-add from the [Browser panel](adding-data.md#the-browser-panel) in any later project.                                                                                                                           |
-| **Copy style** / **Paste style**                    | Carry symbology from one layer to another.                                                                                                                                                                                                                                            |
-| **Refresh** / **Auto refresh**                      | Reload the source now, or on an interval — see [Refreshing live layers](#refreshing-live-layers).                                                                                                                                                                                     |
+| **Bind to Time Slider…** | Drive the Time Slider from one of this layer's date or number fields. |
+| **Export** | Write the layer out as GeoJSON, GeoParquet, GeoPackage, KML, KMZ, zipped Shapefile, or CSV (attributes only). On a raster layer it offers **GeoTIFF (COG)** and **Extract subset…**, and on a LiDAR layer LAS, LAZ, or COPC. A polygon layer drawn as a 3D extrusion can also be exported as a 3D model (glTF `.glb`, OBJ, or STL) for Blender and other 3D tools. See [3D model export](#3d-model-export). |
+| **Styles** | Import and export symbology — see [below](#importing-and-exporting-styles). |
+| **Save to My Data** | Store the fully configured layer in your personal library, ready to re-add from the [Browser panel](adding-data.md#the-browser-panel) in any later project. |
+| **Copy style** / **Paste style** | Carry symbology from one layer to another. |
+| **Refresh** / **Auto refresh** | Reload the source now, or on an interval — see [Refreshing live layers](#refreshing-live-layers). |
+| **Reload from disk** / **Watch file for changes** | Desktop app, layers read from a local file: re-read the file now, or reload it whenever it changes on disk. These replace **Refresh** / **Auto refresh** on such layers. |
+| **Save edits to source file** | Desktop app: write attribute and geometry edits back to the layer's GeoJSON or GeoPackage file. On an ArcGIS feature layer, a PostGIS table, or a SQL Server table it reads **Save edits to ArcGIS service**, **Save edits to PostGIS table**, or **Save edits to SQL Server table**. |
+| **Materialize to editable layer** | DuckDB layers: copy the query result into an editable GeoJSON layer. |
+| **Edit query in SQL Workspace** | SQL query layers: reopen the layer's query in the [SQL Workspace](sql-workspace.md). |
 
 Some entries are unavailable on layers they do not apply to: **Select by Location** needs a second layer to compare against, and **Paste style** needs a style on the clipboard.
 
@@ -124,7 +134,7 @@ Vector layers have a **Layer actions → Styles** submenu for symbology intercha
 - **Export GeoLibre URL style** writes a compact `.geolibre.style.json` file designed for the [`data` and `style` URL parameters](embedding.md#open-remote-data). It contains no feature data. Its MapLibre render layers use the original GeoJSON filename stem as `source`, allowing one style document to distinguish GeoJSON members in a ZIP.
 - **Export as Mapbox GL style** writes a self-contained Mapbox/MapLibre style with the layer's GeoJSON embedded.
 - **Export as OGC SLD** and **Export as QGIS QML** produce styles for other desktop and server GIS software.
-- **Import style from file (GeoLibre URL / Mapbox GL / SLD / QML)…** applies a supported style file to the selected layer. When importing a GeoLibre URL style interactively, the filename-based `source` association is ignored because the selected layer is the target.
+- **Import style from file (GeoLibre URL / Mapbox GL / SLD / QML)…** applies a supported style file to the selected layer. When importing a GeoLibre URL style interactively, the filename-based `source` association is ignored because the selected layer is the target. From a Mapbox GL style's `line` layers it takes the line color (including color classes), width, opacity, dash pattern, blur and zoom range; a line layer that leaves opacity, dashes or blur unset resets them to opaque, solid and sharp. An opacity or blur that varies by zoom or by feature, or a dash pattern that changes with zoom, cannot be held as one value, so the layer keeps its own and the import says so. Gap width, offset, translation, pattern and gradient have no equivalent in a GeoLibre layer style, so they are not applied, and the import warns about each of these paint properties it leaves out. A Mapbox GL, SLD or QML export folds the layer opacity into its line and fill opacity, so re-importing it reads that product as the stroke and fill opacity; on a layer that is still semi-transparent, set the layer opacity back to 1 after the import, or the opacity applies twice. SLD `stroke-opacity` and `stroke-dasharray`, and QGIS line and outline opacity and pen styles (including a line's custom dash), import and export too; neither format has a line blur, so exporting one warns. A style that reads per-feature simplestyle properties (`stroke`, `fill`, `stroke-width` and the like, as GeoLibre writes them for a layer with embedded simplestyle colors) turns simplestyle on for the target layer, so those per-feature values apply there too.
 - **Import style from text…** opens a box to paste a style into, for one copied out of QGIS, a gist, or a catalog page rather than saved to disk. It reads the same four formats, decided from the text rather than a file extension, and reports the same warnings. The Style panel header carries the same box, so you do not have to leave the panel to reach it.
 - **Saved styles (Style Manager)…** applies a preset from your style library, or saves the current symbology into it. The same library is reachable from **Settings → Style Manager**.
 
@@ -136,6 +146,16 @@ https://web.geolibre.app/?data=https://assets.geolibre.app/data/places.geojson&s
 
 See [Embedding & Sharing](embedding.md#open-remote-data) for GeoParquet and PMTiles deep links, ZIP source matching, REST API responses, raster-style JSON, and encoding nested URLs.
 
+### 3D model export
+
+When a polygon layer's **Visualization** is set to **3D extrusion** in the Style panel, **Layer actions → Export** also offers **3D model: glTF (.glb)**, **3D model: OBJ**, and **3D model: STL**. Each feature becomes a closed solid (floor, walls, and roof) with the height, base, and color the map draws. Categorized, graduated, and expression-based colors and heights come through as drawn.
+
+- **glTF (.glb)** keeps one named object per feature with its attributes as custom properties, and one material per color. Blender opens it with **File → Import → glTF 2.0**.
+- **OBJ** keeps one object per feature and stores colors on the vertices.
+- **STL** writes one uncolored mesh, for 3D printing and CAD tools.
+
+Coordinates are in meters around the center of the layer. glTF and OBJ use Y as the up axis, and STL uses Z. The glTF file stores the longitude and latitude of that center on its root object. Features whose height is not above the extrusion base, or that have no area, are skipped, and a notice says how many.
+
 ## Layer groups
 
 Groups are folders in the layer stack. They can nest, so a project can carry a real hierarchy rather than one flat list.
@@ -146,6 +166,7 @@ Groups are folders in the layer stack. They can nest, so a project can carry a r
 - **Sort**: **Sort A to Z** and **Sort Z to A** order a group's contents by name, top of the list first. Numbers sort naturally (Parcel 2 before Parcel 10) and case is ignored. Subgroups are sorted among themselves and move with everything inside them, while the group's own layers stay together as one block. Undo restores the previous order.
 - **Visibility**: hiding a group hides its layers. A layer inside a hidden group is marked _Hidden because its group is not visible_, so you can tell it apart from a layer you turned off yourself.
 - **Remove**: **Ungroup (keep layers)** dissolves the folder and leaves its layers in place; **Delete group and layers** removes both.
+- **On-map Layer Control**: groups appear there as collapsible folders with their own checkbox and opacity slider, and toggling, fading, or collapsing a group in either place updates the other. A layer dragged or moved there stays inside its own group. A group's own layers always sit together, with its subgroups above or below them, so a move that would split them (one layer above a subgroup while its siblings stay below) is not applied and the layer returns to its place.
 
 Groups and their nesting are saved with the project, and [importing a QGIS project](projects.md#importing-a-qgis-project) brings that project's group tree across.
 
@@ -161,7 +182,7 @@ Layers added from a [DuckDB source](adding-data.md#databases) or produced by the
 
 ## The basemap
 
-The **Background** entry at the bottom of the panel is the basemap. Toggle its visibility and adjust its opacity here. To change which basemap is shown, use the **Basemaps** plugin from the [Plugins menu](plugins.md). See [Adding Data](adding-data.md#basemaps).
+The **Background** entry at the bottom of the panel is the basemap. Toggle its visibility and adjust its opacity here. To change which basemap is shown, double-click the row to open the **Change background** dialog, or use the **Basemaps** plugin from the [Plugins menu](plugins.md). See [Adding Data](adding-data.md#basemaps).
 
 !!! tip "Editing geometry"
 To draw or edit features directly on the map, activate the **GeoEditor** plugin from the [Plugins menu](plugins.md). It adds drawing, vertex editing, and deletion tools for GeoJSON layers.

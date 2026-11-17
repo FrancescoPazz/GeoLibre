@@ -143,6 +143,29 @@ export interface WhiteboxToolParameter {
   schema?: unknown;
 }
 
+/**
+ * The lowercase words of a parameter identifier, split on snake_case,
+ * kebab-case and camelCase boundaries, including an acronym followed by a word
+ * (`outputFolder`, `output_folder` and `output-folder` all give
+ * `["output", "folder"]`; `inputJSONFile` gives `["input", "json", "file"]`).
+ *
+ * A plain `\b` regex cannot do this: `_` is a word character, so `\bfolder\b`
+ * never matches inside `output_folder`. Shared by the Processing dialog's
+ * path/filter heuristics and the WASM runner's output-format hint so the two
+ * cannot drift apart.
+ *
+ * @param name - A parameter name (or any identifier-like text).
+ * @returns The identifier's words, lowercased; empty for an empty name.
+ */
+export function identifierWords(name: string): string[] {
+  return name
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
 /** Whether a dataset input accepts several datasets rather than one. */
 export function isMultipleWhiteboxDatasetParameter(param: WhiteboxToolParameter): boolean {
   const kind = String(param.kind ?? "").toLowerCase();
@@ -661,6 +684,52 @@ export async function runRasterTool(
   return startConversion(`${baseUrl}/raster/run`, request, baseUrl);
 }
 
+export interface PointCloudStatus {
+  available: boolean;
+  message: string;
+}
+
+/** A labelled rewrite of a local point cloud file (the sidecar's /pointcloud). */
+export interface PointCloudApplyLabelsRequest {
+  input_path: string;
+  output_path: string;
+  /** The annotator's saved labels for the source: node key -> base64 edits. */
+  labels: Record<string, string>;
+  /** Its instance ids, same layout. */
+  instances?: Record<string, string>;
+}
+
+/**
+ * Whether the sidecar can rewrite point cloud files with labels (laspy +
+ * lazrs in its runtime, installed on first use).
+ */
+export async function fetchPointCloudStatus(
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<PointCloudStatus> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}/pointcloud/status`);
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) {
+    throw new Error(`Point cloud status failed: HTTP ${res.status}`);
+  }
+  return (await res.json()) as PointCloudStatus;
+}
+
+/**
+ * Start writing a whole LAS/LAZ/COPC file with the annotator's labels
+ * applied. The job shares the conversion job store, so poll it with
+ * {@link fetchConversionJob}.
+ */
+export async function runPointCloudApplyLabels(
+  request: PointCloudApplyLabelsRequest,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ConversionJob> {
+  return startConversion(`${baseUrl}/pointcloud/apply-labels`, request, baseUrl);
+}
+
 type ConversionRequest =
   | VectorToVectorRequest
   | VectorLayersRequest
@@ -671,7 +740,8 @@ type ConversionRequest =
   | CsvToGeoParquetRequest
   | VectorToPmtilesRequest
   | RasterToCogRequest
-  | RasterToolRequest;
+  | RasterToolRequest
+  | PointCloudApplyLabelsRequest;
 
 async function startConversion(
   url: string,
@@ -962,6 +1032,208 @@ export async function writePostgisTable(
   }
   return (await res.json()) as WritePostgisTableResult;
 }
+export type MssqlAuthMethod =
+  | "sql"
+  | "windows"
+  | "entra_password"
+  | "entra_sp"
+  | "entra_interactive"
+  | "msi"
+  | "token";
+
+export interface MssqlStatus {
+  available: boolean;
+  message: string;
+  driver: string | null;
+  auth_methods: MssqlAuthMethod[];
+}
+
+export interface MssqlAuth {
+  method: MssqlAuthMethod;
+  username?: string;
+  password?: string;
+  tenant_id?: string;
+  client_id?: string;
+  client_secret?: string;
+  access_token?: string;
+}
+
+export interface ConnectMssqlRequest {
+  server: string;
+  port?: number;
+  database: string;
+  encrypt?: boolean;
+  trust_server_certificate?: boolean;
+  auth: MssqlAuth;
+}
+
+export interface MssqlTableInfo {
+  schema: string;
+  table: string;
+  geometry_column: string;
+  column_type: "geometry" | "geography";
+  srid: number;
+  /** First geometry type in the bounded sample, or `Unknown`. */
+  geometry_type: string;
+  /** Distinct sample types in probe order. */
+  geometry_types: string[];
+  mixed_geometry: boolean;
+  mixed_srid: boolean;
+  /** Single-column primary key; null when absent or composite. */
+  primary_key: string | null;
+  /** Primary-key columns in key order; empty when the table has none. */
+  primary_key_columns: string[];
+}
+
+export interface ReadMssqlTableRequest {
+  session_id: string;
+  schema_name?: string;
+  table: string;
+  geometry_column?: string;
+  excluded_fields?: string[];
+}
+
+export interface ReadMssqlTableResult {
+  geojson: FeatureCollection;
+  schema: string;
+  table: string;
+  geometry_column: string;
+  column_type: "geometry" | "geography";
+  srid: number;
+  primary_key: string | null;
+  primary_key_columns: string[];
+  mixed_geometry: boolean;
+  mixed_srid: boolean;
+  feature_count: number;
+}
+
+export interface WriteMssqlTableRequest {
+  session_id: string;
+  schema_name?: string;
+  table: string;
+  geometry_column?: string;
+  geojson: FeatureCollection;
+  baseline_keys?: Array<string | number>;
+  capabilities?: LayerCapabilities;
+  unchanged_geometry_keys?: Array<string | number>;
+  /** Per loaded row, the columns edited since load; limits that row's update. */
+  changed_columns?: Array<{ key: string | number; columns: string[] }>;
+}
+
+export type WriteMssqlTableResult = WritePostgisTableResult;
+
+export class MssqlWriteRejectedError extends Error {
+  override readonly name = "MssqlWriteRejectedError";
+}
+
+export class MssqlSessionExpiredError extends Error {
+  override readonly name = "MssqlSessionExpiredError";
+}
+
+export async function fetchMssqlStatus(baseUrl = DEFAULT_SIDECAR_URL): Promise<MssqlStatus> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}/mssql/status`);
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) {
+    throw new Error(await responseErrorMessage(res, "Could not check SQL Server runtime"));
+  }
+  return (await res.json()) as MssqlStatus;
+}
+
+async function postMssql(
+  baseUrl: string,
+  path: string,
+  body: unknown,
+  fallback: string,
+): Promise<Response> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}/mssql/${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        // The desktop diagnostics wrapper reads and strips this literal; packages cannot import from the app.
+        "x-geolibre-expected-status": "410",
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+
+  if (res.status === 410) {
+    throw new MssqlSessionExpiredError(
+      await responseErrorMessage(res, "SQL Server session expired"),
+    );
+  }
+  if (!res.ok) {
+    const data = await responseErrorData(res);
+    const message = detailMessage(data, res.status, fallback);
+    if (
+      data !== null &&
+      typeof data === "object" &&
+      "rolled_back" in data &&
+      data.rolled_back === true
+    ) {
+      throw new MssqlWriteRejectedError(message);
+    }
+    throw new Error(message);
+  }
+  return res;
+}
+
+export async function connectMssql(
+  request: ConnectMssqlRequest,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<{ session_id: string }> {
+  const res = await postMssql(baseUrl, "connect", request, "Could not connect to SQL Server");
+  return (await res.json()) as { session_id: string };
+}
+
+export async function disconnectMssql(
+  sessionId: string,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<void> {
+  await postMssql(
+    baseUrl,
+    "disconnect",
+    { session_id: sessionId },
+    "Could not disconnect from SQL Server",
+  );
+}
+
+export async function listMssqlTables(
+  sessionId: string,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<MssqlTableInfo[]> {
+  const res = await postMssql(
+    baseUrl,
+    "tables",
+    { session_id: sessionId },
+    "Could not list SQL Server tables",
+  );
+  const data = (await res.json()) as { tables: MssqlTableInfo[] };
+  return data.tables;
+}
+
+export async function readMssqlTable(
+  request: ReadMssqlTableRequest,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ReadMssqlTableResult> {
+  const res = await postMssql(baseUrl, "read", request, "Could not read SQL Server table");
+  return (await res.json()) as ReadMssqlTableResult;
+}
+
+export async function writeMssqlTable(
+  request: WriteMssqlTableRequest,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<WriteMssqlTableResult> {
+  const res = await postMssql(baseUrl, "write", request, "Could not save edits to SQL Server");
+  return (await res.json()) as WriteMssqlTableResult;
+}
 
 // --- AI segmentation (SamGeo / SAM3) ---------------------------------------
 
@@ -1133,15 +1405,147 @@ export async function runSedonaSql(
   return (await res.json()) as SedonaSqlResult;
 }
 
-async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+async function responseErrorData(response: Response): Promise<unknown> {
   try {
-    const data = (await response.json()) as { detail?: unknown };
-    if (typeof data.detail === "string") return data.detail;
-    if (data.detail) return JSON.stringify(data.detail);
+    return await response.json();
   } catch {
-    // Use the fallback below when the response is not JSON.
+    return undefined;
   }
-  return `${fallback}: HTTP ${response.status}`;
+}
+
+function detailMessage(data: unknown, status: number, fallback: string): string {
+  const detail =
+    data !== null && typeof data === "object" && "detail" in data ? data.detail : undefined;
+  if (typeof detail === "string") return detail;
+  if (detail) return JSON.stringify(detail);
+  return `${fallback}: HTTP ${status}`;
+}
+
+async function responseErrorMessage(response: Response, fallback: string): Promise<string> {
+  return detailMessage(await responseErrorData(response), response.status, fallback);
+}
+
+// --- Native object-based image analysis (OBIA) --------------------------------
+
+/** Native OBIA availability (scikit-image in the sidecar's runtime). */
+export interface ObiaNativeStatus {
+  available: boolean;
+  message: string;
+  /** Pixels a native run may read, per method. */
+  max_pixels?: Partial<Record<"slic" | "felzenszwalb", number>>;
+  /** scikit-image is being installed into the runtime; ask again later. */
+  installing?: boolean;
+}
+
+/** A native segmentation: the image, its bands and area, and the method. */
+export interface ObiaNativeSegmentation {
+  /** Local GeoTIFF path, within the sidecar's allowed roots. */
+  input_path: string;
+  bands: number[];
+  /** Full-resolution pixel window and level; the whole image when null. */
+  area: { level: number; window: [number, number, number, number] } | null;
+  method: "slic" | "felzenszwalb";
+  slic: { size: number; compactness: number } | null;
+  felzenszwalb: { scale: number; sigma: number; min_size: number } | null;
+}
+
+/** Which native object features to compute. */
+export interface ObiaNativeMeasureOptions {
+  spectral: boolean;
+  shape: boolean;
+  context: boolean;
+}
+
+/** The result files a native OBIA job writes. */
+export type ObiaNativeFile = "segments.tif" | "objects.geojson" | "features.csv";
+
+/**
+ * Whether the sidecar can segment natively. The first call installs
+ * scikit-image into the sidecar's runtime, which can take a minute.
+ */
+export async function fetchObiaNativeStatus(
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ObiaNativeStatus> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}/obia/status`);
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) throw new Error(`OBIA status failed: HTTP ${res.status}`);
+  return (await res.json()) as ObiaNativeStatus;
+}
+
+async function postObiaJob(path: string, body: unknown, baseUrl: string): Promise<ConversionJob> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) throw new Error(await responseErrorMessage(res, "Could not start the OBIA job"));
+  return (await res.json()) as ConversionJob;
+}
+
+/** Start a native segmentation job; poll it with {@link fetchConversionJob}. */
+export function startObiaNativeSegment(
+  segmentation: ObiaNativeSegmentation,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ConversionJob> {
+  return postObiaJob("/obia/segment", segmentation, baseUrl);
+}
+
+/**
+ * Start a native measurement job. It reuses the label raster of
+ * `segmentJobId` while the sidecar keeps it, and segments again otherwise.
+ */
+export function startObiaNativeMeasure(
+  segmentation: ObiaNativeSegmentation,
+  options: ObiaNativeMeasureOptions,
+  segmentJobId: string | null,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<ConversionJob> {
+  return postObiaJob(
+    "/obia/measure",
+    { segmentation, options, segment_job_id: segmentJobId },
+    baseUrl,
+  );
+}
+
+/** Stop a native OBIA job. */
+export async function cancelObiaNativeJob(
+  jobId: string,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<void> {
+  try {
+    await sidecarFetch(`${baseUrl}/obia/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: "POST",
+    });
+  } catch {
+    // The job may already be gone; nothing to stop.
+  }
+}
+
+/** Download one result file of a finished native OBIA job. */
+export async function fetchObiaNativeFile(
+  jobId: string,
+  name: ObiaNativeFile,
+  baseUrl = DEFAULT_SIDECAR_URL,
+): Promise<Uint8Array> {
+  let res: Response;
+  try {
+    res = await sidecarFetch(
+      `${baseUrl}/obia/jobs/${encodeURIComponent(jobId)}/files/${encodeURIComponent(name)}`,
+    );
+  } catch (error) {
+    throw sidecarConnectionError(baseUrl, error);
+  }
+  if (!res.ok) throw new Error(await responseErrorMessage(res, `Could not download ${name}`));
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 function sidecarConnectionError(baseUrl: string, error: unknown): Error {

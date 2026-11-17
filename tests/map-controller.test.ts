@@ -14,6 +14,7 @@ import {
   defaultBlankBackgroundColor,
   geolocateControlFactory,
   MapController,
+  storyScaledPaintValue,
 } from "../packages/map/src/map-controller";
 
 // Internal shape of MapController we reach into to inject a fake map. The
@@ -87,6 +88,7 @@ function makeFakeMap(initialBasemapLayers: string[] = ["basemap-bg"]): {
   };
 
   const map = {
+    stop: () => {},
     getStyle: () => ({
       layers: order.map((id) => ({ id, ...layers.get(id) })),
       sources: Object.fromEntries(sources),
@@ -1347,6 +1349,64 @@ describe("MapController camera and query helpers", () => {
     assert.deepEqual((jump.args[0] as { center: [number, number] }).center, [12, 48]);
   });
 
+  // Issue #3083: the store's echo of the view the map wrote on moveend must
+  // not jump, or it stops a camera move started in between.
+  const storeView = (lng: number) => ({
+    center: [lng, 0] as [number, number],
+    zoom: 4,
+    bearing: 0,
+    pitch: 0,
+  });
+
+  it("does not jump to a store echo of the map's own view", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const echo = storeView(1);
+    controller.markStoreEcho(echo);
+    controller.applyStoreView(echo);
+
+    assert.ok(!fake.calls.some((c) => c.method === "jumpTo"));
+  });
+
+  it("skips each echo even when a later moveend overtook an earlier one", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const a = storeView(1);
+    const b = storeView(2);
+    controller.markStoreEcho(a);
+    controller.markStoreEcho(b);
+    controller.applyStoreView(a);
+    controller.applyStoreView(b);
+
+    assert.ok(!fake.calls.some((c) => c.method === "jumpTo"));
+  });
+
+  it("jumps to a view set from outside even when it equals an echo", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const echo = storeView(1);
+    controller.markStoreEcho(echo);
+    controller.markStoreEcho(storeView(2));
+    controller.applyStoreView({ ...echo });
+
+    assert.ok(fake.calls.some((c) => c.method === "jumpTo"));
+  });
+
+  it("skips an echo only once", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+
+    const echo = storeView(1);
+    controller.markStoreEcho(echo);
+    controller.applyStoreView(echo);
+    controller.applyStoreView(echo);
+
+    assert.equal(fake.calls.filter((c) => c.method === "jumpTo").length, 1);
+  });
+
   it("normalizes the projection to globe/mercator", () => {
     const { map } = makeFakeMap();
     const controller = controllerWith(map);
@@ -1442,8 +1502,8 @@ describe("MapController camera and query helpers", () => {
 
     controller.fitLayer(
       pointLayer("global-tiles", {
-        type: "vector-tile",
-        source: { type: "vector-tile", minzoom: 2 },
+        type: "vector-tiles",
+        source: { type: "vector-tiles", minzoom: 2 },
         geojson: undefined,
         metadata: { bounds: [-180, -85, 180, 85] },
       }),
@@ -1469,6 +1529,68 @@ describe("MapController camera and query helpers", () => {
     const fit = fake.calls.find((c) => c.method === "fitBounds");
     assert.ok(fit, "zoom-to-layer fits the bounds");
     assert.ok(typeof (fit.args[1] as { maxZoom?: number }).maxZoom === "number");
+  });
+
+  it("fits a bare vector tile template to its loaded features' extent", () => {
+    const { map, fake } = makeFakeMap();
+    (map as { querySourceFeatures: unknown }).querySourceFeatures = () => [
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Point", coordinates: [-74.01, 40.71] },
+      },
+      {
+        type: "Feature",
+        properties: {},
+        geometry: { type: "Point", coordinates: [-73.97, 40.76] },
+      },
+    ];
+    (map as { getSource: unknown }).getSource = () => ({});
+    const controller = controllerWith(map);
+    const layer = pointLayer("xyz-tiles", {
+      type: "vector-tiles",
+      source: {
+        type: "vector",
+        tiles: ["https://example.com/{z}/{x}/{y}.pbf"],
+        sourceLayer: "data.buildings",
+      },
+      geojson: undefined,
+      metadata: {},
+    });
+
+    assert.equal(controller.fitLayer(layer), true);
+    const fit = fake.calls.find((c) => c.method === "fitBounds");
+    assert.ok(fit, "fits the loaded features");
+    assert.deepEqual(fit.args[0], [
+      [-74.01, 40.71],
+      [-73.97, 40.76],
+    ]);
+  });
+
+  it("reports a layer with no known extent instead of moving the camera", () => {
+    const { map, fake } = makeFakeMap();
+    // The source exists but has no features loaded yet.
+    let queried = 0;
+    (map as { querySourceFeatures: unknown }).querySourceFeatures = () => {
+      queried += 1;
+      return [];
+    };
+    (map as { getSource: unknown }).getSource = () => ({});
+    const controller = controllerWith(map);
+    const layer = pointLayer("xyz-tiles", {
+      type: "vector-tiles",
+      source: {
+        type: "vector",
+        tiles: ["https://example.com/{z}/{x}/{y}.pbf"],
+        sourceLayer: "data.buildings",
+      },
+      geojson: undefined,
+      metadata: {},
+    });
+
+    assert.equal(controller.fitLayer(layer), false);
+    assert.ok(!fake.calls.some((c) => c.method === "fitBounds" || c.method === "flyTo"));
+    assert.ok(queried > 0, "queried the loaded features before giving up");
   });
 
   it("frames a scenegraph model layer at a tilt so it is not edge-on", () => {
@@ -1539,10 +1661,10 @@ describe("MapController camera and query helpers", () => {
     assert.equal(controller.identifyFeatures([0, 0], "b").length, 1);
   });
 
-  it("writes story opacity directly to the native paint property", () => {
+  it("writes story opacity to the native paint property in place of the layer opacity", () => {
     const { map, fake } = makeFakeMap();
     const controller = controllerWith(map);
-    controller.syncLayers([pointLayer("a")]);
+    controller.syncLayers([pointLayer("a", {}, { fillOpacity: 0.5 })]);
 
     controller.setStoryLayerOpacity("a", 0.3);
 
@@ -1553,13 +1675,14 @@ describe("MapController camera and query helpers", () => {
         c.args[1] === "circle-opacity",
     );
     assert.ok(op);
-    assert.equal(op.args[2], 0.3);
+    // The style's own 0.5 fill opacity times the chapter's 0.3.
+    assert.equal(op.args[2], 0.15);
   });
 
   it("clamps story opacity into the 0-1 range", () => {
     const { map, fake } = makeFakeMap();
     const controller = controllerWith(map);
-    controller.syncLayers([pointLayer("a")]);
+    controller.syncLayers([pointLayer("a", {}, { fillOpacity: 1 })]);
 
     controller.setStoryLayerOpacity("a", 5);
 
@@ -1980,6 +2103,75 @@ describe("MapController base-layer label", () => {
   });
 });
 
+describe("MapController story camera handoff", () => {
+  function setup() {
+    const { map, fake } = makeFakeMap();
+    const events: string[] = [];
+    const moves: { storyCameraToken: number }[] = [];
+    Object.assign(map as object, {
+      flyTo: (_view: unknown, data: { storyCameraToken: number }) => moves.push(data),
+      jumpTo: (_view: unknown, data: { storyCameraToken: number }) => {
+        moves.push(data);
+        fake.emit("moveend", data);
+      },
+      getBearing: () => 0,
+      rotateTo: () => events.push("rotate"),
+      stop: () => events.push("stop"),
+    });
+    const controller = controllerWith(map);
+    return { controller, fake, events, moves };
+  }
+  const location = { center: [117, 39] as [number, number], zoom: 10 };
+
+  it("reports jumpTo arrival before rotation, exactly once", () => {
+    const { controller, fake, events, moves } = setup();
+    controller.applyStoryChapterCamera(location, "jumpTo", true, () => events.push("arrive"));
+    assert.deepEqual(events, ["arrive", "rotate"]);
+    fake.emit("moveend", moves[0]);
+    assert.deepEqual(events, ["arrive", "rotate"]);
+  });
+
+  it("ignores unrelated and superseded settles", () => {
+    const { controller, fake, events, moves } = setup();
+    controller.applyStoryChapterCamera(location, "flyTo", true, () => events.push("old"));
+    controller.applyStoryChapterCamera(location, "flyTo", true, () => events.push("arrive"));
+    fake.emit("moveend", {});
+    fake.emit("moveend", moves[0]);
+    assert.deepEqual(events, []);
+    fake.emit("moveend", moves[1]);
+    assert.deepEqual(events, ["arrive", "rotate"]);
+  });
+
+  it("pauses the flight without restoring story styles or invoking a late arrival", () => {
+    const { controller, fake, events, moves } = setup();
+    controller.syncLayers([pointLayer("a")]);
+    controller.setStoryLayerOpacity("a", 0.25, 0);
+    const before = JSON.stringify([...fake.layers]);
+    controller.applyStoryChapterCamera(location, "flyTo", true, () => events.push("arrive"));
+    controller.stopStoryCamera();
+    fake.emit("moveend", moves[0]);
+    assert.deepEqual(events, ["stop"]);
+    assert.equal(JSON.stringify([...fake.layers]), before);
+  });
+
+  it("allows the arrival callback to pause before rotation starts", () => {
+    const { controller, events } = setup();
+    controller.applyStoryChapterCamera(location, "jumpTo", true, () =>
+      controller.stopStoryCamera(),
+    );
+    assert.deepEqual(events, ["stop"]);
+  });
+
+  it("cancels a pending arrival when an authoring preview supersedes the chapter", () => {
+    const { controller, fake, events, moves } = setup();
+    controller.applyStoryChapterCamera(location, "flyTo", true, () => events.push("arrive"));
+    controller.flyToView(location);
+    fake.emit("moveend", moves[0]);
+    fake.emit("moveend", moves[1]);
+    assert.deepEqual(events, []);
+  });
+});
+
 describe("MapController story-map layer helpers", () => {
   /**
    * Register a plugin-owned native raster layer + source on the fake map, the
@@ -2081,6 +2273,119 @@ describe("MapController story-map layer helpers", () => {
     const paint = fake.layers.get("pc-1")?.paint as Record<string, unknown>;
     assert.equal(paint["raster-opacity"], 0.4);
     assert.equal(paint["raster-opacity-transition"], undefined);
+  });
+
+  it("keeps chapter fades when a saved annotation causes a layer sync, then restores project opacity", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+    const projectLayer = pointLayer("a", { opacity: 0.8 }, { fillOpacity: 1 });
+    controller.syncLayers([projectLayer]);
+    const circlePaint = () => fake.layers.get("layer-a-circle")?.paint as Record<string, unknown>;
+    const initialOpacity = circlePaint()["circle-opacity"];
+    controller.setStoryLayerOpacity("a", 0.25, 0);
+    const savedAnnotation = pointLayer("presentation-result");
+    controller.syncLayers([projectLayer, savedAnnotation]);
+    assert.equal(circlePaint()["circle-opacity"], 0.25);
+    assert.equal(projectLayer.opacity, 0.8, "presentation must not change saved project styles");
+    assert.equal(internals(controller).syncedLayers[0], projectLayer);
+
+    controller.restoreLayerStyles();
+    assert.equal(circlePaint()["circle-opacity"], initialOpacity);
+    controller.syncLayers([projectLayer, savedAnnotation]);
+    assert.equal(
+      circlePaint()["circle-opacity"],
+      initialOpacity,
+      "cleared overrides must not return on sync",
+    );
+  });
+
+  // A polygon styled with a translucent fill, as the Style panel leaves a new
+  // polygon layer (fill opacity 0.45).
+  function translucentPolygonLayer(id: string, opacity = 1): GeoLibreLayer {
+    return pointLayer(
+      id,
+      {
+        opacity,
+        geojson: {
+          type: "FeatureCollection",
+          features: [
+            {
+              type: "Feature",
+              properties: {},
+              geometry: {
+                type: "Polygon",
+                coordinates: [
+                  [
+                    [0, 0],
+                    [1, 0],
+                    [1, 1],
+                    [0, 1],
+                    [0, 0],
+                  ],
+                ],
+              },
+            },
+          ],
+        },
+      },
+      { fillOpacity: 0.45, strokeOpacity: 1 },
+    );
+  }
+
+  it("keeps a polygon's styled fill opacity when a chapter sets the layer opacity", () => {
+    const { map, fake } = makeFakeMap();
+    (map as unknown as { stop: () => void }).stop = () => {};
+    const controller = controllerWith(map);
+    controller.syncLayers([translucentPolygonLayer("a")]);
+    const fill = () => fake.layers.get("layer-a-fill")?.paint as Record<string, unknown>;
+    const line = () => fake.layers.get("layer-a-line")?.paint as Record<string, unknown>;
+    assert.equal(fill()["fill-opacity"], 0.45);
+
+    // A chapter at 1 is the layer at full opacity: still the 0.45 fill, not solid.
+    controller.setStoryLayerOpacity("a", 1, 0);
+    assert.equal(fill()["fill-opacity"], 0.45);
+    assert.equal(line()["line-opacity"], 1);
+
+    // A chapter at 0.2 scales the styled fill, as the Layers panel slider does.
+    controller.setStoryLayerOpacity("a", 0.2, 0);
+    assert.ok(Math.abs((fill()["fill-opacity"] as number) - 0.09) < 1e-9);
+    assert.equal(line()["line-opacity"], 0.2);
+
+    // Back to 1 does not compound the previous fade.
+    controller.setStoryLayerOpacity("a", 1, 0);
+    assert.equal(fill()["fill-opacity"], 0.45);
+
+    controller.restoreLayerStyles();
+    assert.equal(fill()["fill-opacity"], 0.45);
+    assert.equal(line()["line-opacity"], 1);
+  });
+
+  it("replaces a layer opacity below 1 rather than multiplying it", () => {
+    const { map, fake } = makeFakeMap();
+    (map as unknown as { stop: () => void }).stop = () => {};
+    const controller = controllerWith(map);
+    controller.syncLayers([translucentPolygonLayer("a", 0.5)]);
+    const fill = () => fake.layers.get("layer-a-fill")?.paint as Record<string, unknown>;
+    assert.equal(fill()["fill-opacity"], 0.225);
+
+    controller.setStoryLayerOpacity("a", 1, 0);
+    assert.equal(fill()["fill-opacity"], 0.45);
+
+    controller.restoreLayerStyles();
+    assert.equal(fill()["fill-opacity"], 0.225);
+  });
+
+  it("does not apply a removed layer's old story fade when its id is reused", () => {
+    const { map, fake } = makeFakeMap();
+    const controller = controllerWith(map);
+    controller.syncLayers([pointLayer("a", { opacity: 0.6 })]);
+    const initialPaint = fake.layers.get("layer-a-circle")?.paint as Record<string, unknown>;
+    const initialOpacity = initialPaint["circle-opacity"];
+    controller.setStoryLayerOpacity("a", 0, 0);
+    controller.syncLayers([]);
+    controller.syncLayers([pointLayer("a", { opacity: 0.6 })]);
+    const paint = fake.layers.get("layer-a-circle")?.paint as Record<string, unknown>;
+    assert.equal(paint["circle-opacity"], initialOpacity);
   });
 
   // A polygon layer whose style draws centroids through the geometry
@@ -2199,7 +2504,7 @@ function makeTerrainDomStub(): { createElement: () => unknown } {
 
 describe("MapController terrain auto-enable", () => {
   it("lets a plugin enable and restore terrain while the map control is hidden", () => {
-    let terrain: maplibregl.TerrainSpecification | null = null;
+    let terrain = null as maplibregl.TerrainSpecification | null;
     let centerClamped = true;
     const sources = new Set<string>();
     const map = {
@@ -2222,7 +2527,8 @@ describe("MapController terrain auto-enable", () => {
 
     assert.equal(controller.setTerrainEnabled(true), true);
     assert.equal(terrain?.source, "geolibre-terrain-dem");
-    assert.equal(centerClamped, false);
+    // The center stays clamped to the terrain (#3409).
+    assert.equal(centerClamped, true);
 
     assert.equal(controller.setTerrainEnabled(false), true);
     assert.equal(terrain, null);
@@ -2233,7 +2539,7 @@ describe("MapController terrain auto-enable", () => {
     const prevDoc = (globalThis as { document?: unknown }).document;
     (globalThis as { document?: unknown }).document = makeTerrainDomStub();
     try {
-      let terrain: maplibregl.TerrainSpecification | null = null;
+      let terrain = null as maplibregl.TerrainSpecification | null;
       const sources = new Set<string>();
       const map = {
         // addControl mirrors MapLibre: it runs the control's onAdd so the
@@ -2273,7 +2579,7 @@ describe("MapController terrain auto-enable", () => {
     const prevDoc = (globalThis as { document?: unknown }).document;
     (globalThis as { document?: unknown }).document = makeTerrainDomStub();
     try {
-      let terrain: maplibregl.TerrainSpecification | null = null;
+      let terrain = null as maplibregl.TerrainSpecification | null;
       const sources = new Set<string>();
       const map = {
         addControl: (control: maplibregl.IControl) =>
@@ -2315,7 +2621,11 @@ describe("MapController terrain auto-enable", () => {
       internal.addTerrainSource();
       if (internal.terrainEnablePending) internal.autoEnableTerrain();
 
-      assert.equal(terrain?.source, "geolibre-terrain-dem");
+      // Re-read through the declared type: the `assert.equal(terrain, null)`
+      // above narrowed the local to `null`, and the fake's setTerrain assigns it
+      // out of the compiler's sight.
+      const enabled = terrain as maplibregl.TerrainSpecification | null;
+      assert.equal(enabled?.source, "geolibre-terrain-dem");
       assert.equal(internal.terrainEnablePending, false);
     } finally {
       if (prevDoc === undefined) delete (globalThis as { document?: unknown }).document;
@@ -2339,6 +2649,7 @@ describe("MapController Mapbox descriptor requests", () => {
       setStyle: (style: unknown, options?: unknown) => {
         styles.push({ style, options });
       },
+      stop: () => {},
       remove: () => {},
       addControl: () => {},
       removeControl: () => {},
@@ -2485,6 +2796,7 @@ describe("COG DEM terrain source", () => {
         terrain = next;
       },
       setCenterClampedToGround: () => {},
+      stop: () => {},
       remove: () => {},
       on: () => {},
       off: () => {},
@@ -2500,12 +2812,97 @@ describe("COG DEM terrain source", () => {
       bounds: undefined,
       renderTile: async () => new Uint8ClampedArray(),
       disposed: false,
+      fallback: null as unknown,
       dispose() {
         this.disposed = true;
+      },
+      setFallback(fallback: unknown) {
+        this.fallback = fallback;
       },
     };
     return registration;
   }
+
+  it("fills outside the DEM from the global terrain when asked (#3470)", async () => {
+    const { controller, sources, terrain } = terrainController();
+    const internal = controller as unknown as TerrainInternals;
+    const registration = {
+      ...fakeRegistration("dem"),
+      bounds: [-84, 35, -83, 36] as [number, number, number, number],
+    };
+    internal.openCogDem = async () => registration;
+
+    // Off: the DEM alone, its requests limited to its bounds, no fallback.
+    await controller.setTerrainCogSource("https://example.com/dem.tif");
+    assert.equal(controller.getTerrainFillOutside(), false);
+    assert.equal(registration.fallback, null);
+    assert.deepEqual((internal.terrainSource as { bounds?: unknown }).bounds, [-84, 35, -83, 36]);
+
+    // On: the fallback is set and the bounds dropped, so tiles beyond the DEM
+    // are requested and carry the global terrain. Terrain stays enabled.
+    controller.setTerrainEnabled(true);
+    controller.setTerrainFillOutside(true);
+    assert.equal(typeof registration.fallback, "function");
+    assert.equal((internal.terrainSource as { bounds?: unknown }).bounds, undefined);
+    assert.equal(
+      (sources.get(TERRAIN_SOURCE_ID) as { bounds?: unknown } | undefined)?.bounds,
+      undefined,
+    );
+    assert.equal(terrain()?.source, TERRAIN_SOURCE_ID);
+
+    // A DEM opened next gets the fill straight away.
+    const next = fakeRegistration("next");
+    internal.openCogDem = async () => next;
+    await controller.setTerrainCogSource("https://example.com/next.tif");
+    assert.equal(typeof next.fallback, "function");
+
+    controller.setTerrainFillOutside(false);
+    assert.equal(next.fallback, null);
+    controller.destroy();
+  });
+
+  it("applies a fill passed with a DEM only once that DEM opens", async () => {
+    const { controller } = terrainController();
+    const internal = controller as unknown as TerrainInternals;
+    const working = fakeRegistration("working");
+    internal.openCogDem = async () => working;
+    await controller.setTerrainCogSource("https://example.com/a.tif", 1, { fillOutside: false });
+    assert.equal(controller.getTerrainFillOutside(), false);
+
+    internal.openCogDem = async () => {
+      throw new Error("404");
+    };
+    await assert.rejects(() =>
+      controller.setTerrainCogSource("https://example.com/missing.tif", 1, { fillOutside: true }),
+    );
+    // The failed open changed nothing: the working DEM keeps its fill.
+    assert.equal(controller.getTerrainFillOutside(), false);
+    assert.equal(working.fallback, null);
+    controller.destroy();
+  });
+
+  it("keeps a fill set while a DEM is still opening", async () => {
+    const { controller } = terrainController();
+    const internal = controller as unknown as TerrainInternals;
+    const slow = fakeRegistration("slow");
+    let release: () => void = () => {};
+    const opened = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    internal.openCogDem = async () => {
+      await opened;
+      return slow;
+    };
+    const pending = controller.setTerrainCogSource("https://example.com/slow.tif", 1, {
+      fillOutside: true,
+    });
+    controller.setTerrainFillOutside(false);
+    release();
+    assert.equal(await pending, true);
+    assert.equal(controller.getTerrainFillOutside(), false);
+    assert.equal(slow.fallback, null);
+    controller.destroy();
+  });
 
   it("discards a slow open that a newer selection has already superseded", async () => {
     const { controller } = terrainController();
@@ -2692,5 +3089,42 @@ describe("MapController search result lifecycle", () => {
     })();
     assert.equal(fake.sources.size, 0);
     assert.equal(fake.layers.size, 1);
+  });
+});
+
+describe("storyScaledPaintValue", () => {
+  it("rescales a numeric paint value from the layer opacity to the chapter's", () => {
+    assert.equal(storyScaledPaintValue(0.45, 1, 1), 0.45);
+    assert.equal(storyScaledPaintValue(0.25, 0.5, 1), 0.5);
+    assert.equal(storyScaledPaintValue(0.4, 0.5, 0), 0);
+    assert.equal(storyScaledPaintValue(0.9, 0.5, 1), 1, "clamped to 1");
+  });
+
+  it("wraps a data expression and leaves it untouched at a ratio of 1", () => {
+    const expr = ["coalesce", ["get", "fill-opacity"], 0.45];
+    assert.equal(storyScaledPaintValue(expr, 1, 1), expr);
+    assert.deepEqual(storyScaledPaintValue(expr, 1, 0.5), ["min", 1, ["*", expr, 0.5]]);
+  });
+
+  it("scales the outputs of a top-level zoom step in place", () => {
+    assert.deepEqual(storyScaledPaintValue(["step", ["zoom"], 0, 5, 0.45, 12, 0], 1, 0.2), [
+      "step",
+      ["zoom"],
+      0,
+      5,
+      0.45 * 0.2,
+      12,
+      0,
+    ]);
+  });
+
+  it("gives up on values it cannot rescale", () => {
+    assert.equal(storyScaledPaintValue(undefined, 1, 0.5), undefined);
+    assert.equal(storyScaledPaintValue(0, 0, 0.5), undefined, "layer opacity 0 erased the style");
+    assert.equal(
+      storyScaledPaintValue(["interpolate", ["linear"], ["zoom"], 5, 0, 10, 1], 1, 0.5),
+      undefined,
+      "zoom expressions must stay top-level",
+    );
   });
 });

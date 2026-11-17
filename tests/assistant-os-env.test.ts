@@ -8,14 +8,20 @@ import {
   configForProvider,
   scopeOsEnvToProject,
 } from "../apps/geolibre-desktop/src/lib/assistant/provider";
-import { PROVIDER_FIELDS } from "../apps/geolibre-desktop/src/lib/assistant/provider-fields";
+import {
+  PROVIDER_FIELDS,
+  type ProviderField,
+} from "../apps/geolibre-desktop/src/lib/assistant/provider-fields";
 
 describe("OS_ENV_VAR_NAMES", () => {
   const allowlist = new Set(OS_ENV_VAR_NAMES);
 
   // Every env var name any provider field reads or accepts as an alias.
   const fieldNames = new Set<string>();
-  for (const fields of Object.values(PROVIDER_FIELDS)) {
+  // Widened to the interface: `as const` drops `aliases` from fields that
+  // declare none.
+  const providerFields: readonly (readonly ProviderField[])[] = Object.values(PROVIDER_FIELDS);
+  for (const fields of providerFields) {
     for (const field of fields) {
       fieldNames.add(field.envKey);
       for (const alias of field.aliases ?? []) fieldNames.add(alias);
@@ -33,6 +39,11 @@ describe("OS_ENV_VAR_NAMES", () => {
     const extras = new Set([
       "GEOLIBRE_ASSISTANT_PROVIDER",
       "GEOLIBRE_ASSISTANT_MODEL",
+      "OPENROUTER_MODEL",
+      "AI_GATEWAY_MODEL",
+      "TRUSTEDROUTER_MODEL",
+      // Seeds a new Ollama profile's model; the profile has no field for it.
+      "OLLAMA_MODEL",
       "TAVILY_API_KEY",
       "JEV_API_KEY",
     ]);
@@ -52,6 +63,12 @@ describe("OS_ENV_VAR_NAMES", () => {
       "GOOGLE_GENAI_API_KEY",
       "ANTHROPIC_API_KEY",
       "OPENAI_API_KEY",
+      "OPENROUTER_API_KEY",
+      "OPENROUTER_MODEL",
+      "AI_GATEWAY_API_KEY",
+      "AI_GATEWAY_MODEL",
+      "TRUSTEDROUTER_API_KEY",
+      "TRUSTEDROUTER_MODEL",
       "OLLAMA_BASE_URL",
       "OLLAMA_MODEL",
       "OPENAI_COMPATIBLE_BASE_URL",
@@ -109,6 +126,45 @@ describe("OS env feeds provider resolution", () => {
     const merged = { ...osEnv };
     assert.deepEqual(availableProviders(merged), ["openai"]);
     assert.equal(configForProvider("openai", undefined, merged)?.apiKey, "os-key");
+  });
+  it("configures OpenRouter from an OS key and its OS model override", () => {
+    const merged = {
+      OPENROUTER_API_KEY: "os-key",
+      OPENROUTER_MODEL: "vendor/os-model",
+    };
+    assert.deepEqual(availableProviders(merged), ["openrouter"]);
+    assert.deepEqual(configForProvider("openrouter", undefined, merged), {
+      provider: "openrouter",
+      apiKey: "os-key",
+      baseURL: "https://openrouter.ai/api/v1",
+      modelId: "vendor/os-model",
+    });
+  });
+  it("configures Vercel AI Gateway from an OS key and its OS model override", () => {
+    const merged = {
+      AI_GATEWAY_API_KEY: "os-key",
+      AI_GATEWAY_MODEL: "vendor/os-model",
+    };
+    assert.deepEqual(availableProviders(merged), ["vercel"]);
+    assert.deepEqual(configForProvider("vercel", undefined, merged), {
+      provider: "vercel",
+      apiKey: "os-key",
+      baseURL: "https://ai-gateway.vercel.sh/v1",
+      modelId: "vendor/os-model",
+    });
+  });
+  it("configures TrustedRouter from an OS key and its OS model override", () => {
+    const merged = {
+      TRUSTEDROUTER_API_KEY: "os-key",
+      TRUSTEDROUTER_MODEL: "vendor/os-model",
+    };
+    assert.deepEqual(availableProviders(merged), ["trustedrouter"]);
+    assert.deepEqual(configForProvider("trustedrouter", undefined, merged), {
+      provider: "trustedrouter",
+      apiKey: "os-key",
+      baseURL: "https://api.trustedrouter.com/v1",
+      modelId: "vendor/os-model",
+    });
   });
 
   it("lets a project key override the OS key on the same name", () => {

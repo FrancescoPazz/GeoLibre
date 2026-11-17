@@ -22,7 +22,7 @@ Before opening a pull request:
 
 ```bash
 pre-commit run --files path/to/changed.ts path/to/other.tsx   # list each file you changed
-npm run ci:web   # frontend-only changes: lint, i18n check, type check, unit tests
+npm run ci:web   # frontend-only changes: lint, drift checks, type checks, unit tests
 npm run ci       # the full gate CI runs (also needs Rust and Python)
 ```
 
@@ -33,3 +33,6 @@ Branch off `main` (never commit to it directly), keep changes focused, follow
 [Conventional Commits](https://www.conventionalcommits.org/) for messages, and
 open your pull request against `main`. Found a bug or have an idea? Open an
 [issue](https://github.com/opengeos/GeoLibre/issues).
+
+Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+For questions and usage help, see [SUPPORT.md](SUPPORT.md).

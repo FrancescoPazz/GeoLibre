@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, it } from "node:test";
 import {
+  canOwnOrganizationProjects,
+  collectionPageUrl,
+  declineProjectTransfer,
+  fetchCollectionProjects,
+  fetchCollections,
+  fetchIncomingTransfers,
   fetchMyGroups,
   fetchMyOrganizations,
   fetchMyProjects,
   fetchMyShareUsername,
   fetchProjectsSharedWithMe,
   fetchSharedProjects,
+  filterCollections,
   GalleryError,
   isPublicSharingBlocked,
   isProjectInMyGroups,
@@ -14,7 +23,9 @@ import {
   loadSharedProjectThumbnail,
   projectOpenToken,
   publicSharingRestriction,
+  requestProjectTransfer,
   resolveThumbnailUrl,
+  setProjectDeleteProtection,
   shareAuthorizedFetch,
 } from "../apps/geolibre-desktop/src/lib/share-gallery";
 
@@ -54,6 +65,23 @@ function fakeFetch(status: number, body: unknown): { fn: typeof fetch; calls: st
     } as Response;
   }) as unknown as typeof fetch;
   return { fn, calls };
+}
+
+/** Like {@link fakeFetch}, but keeps each request's init so method/body can be asserted. */
+function recordingFetch(
+  status: number,
+  body: unknown,
+): { fn: typeof fetch; requests: { url: string; init: RequestInit }[] } {
+  const requests: { url: string; init: RequestInit }[] = [];
+  const fn = (async (url: string, init: RequestInit = {}) => {
+    requests.push({ url, init });
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    } as Response;
+  }) as unknown as typeof fetch;
+  return { fn, requests };
 }
 
 describe("resolveThumbnailUrl", () => {
@@ -202,7 +230,7 @@ describe("fetchSharedProjects", () => {
         json: async () => {
           throw new SyntaxError("Unexpected token < in JSON");
         },
-      }) as Response) as unknown as typeof fetch;
+      }) as unknown as Response) as unknown as typeof fetch;
     await assert.rejects(
       () => fetchSharedProjects({ baseUrl: BASE, fetchImpl: fn }),
       (err: unknown) => err instanceof GalleryError && err.code === "invalid-response",
@@ -222,6 +250,169 @@ describe("fetchSharedProjects", () => {
     // the server actually returned (so the next offset stays correct).
     assert.equal(result.projects.length, 1);
     assert.equal(result.rawCount, 2);
+  });
+});
+
+describe("fetchCollections", () => {
+  it("lists public collections with absolute cover thumbnails", async () => {
+    const { fn, calls } = fakeFetch(200, {
+      collections: [
+        {
+          id: "c1",
+          username: "giswqs",
+          slug: "official-demos",
+          title: "Official Demos",
+          description: "Demo maps",
+          createdAt: "2026-09-28T13:12:05.000Z",
+          projectCount: 105,
+          thumbnailUrl: "/api/thumbnails/abc-123?v=1",
+        },
+        // No cover and no count: both fall back rather than breaking the card.
+        { id: "c2", username: "someone", slug: "empty", title: "Empty" },
+      ],
+    });
+    const collections = await fetchCollections({ baseUrl: `${BASE}/`, fetchImpl: fn });
+    assert.deepEqual(calls, [`${BASE}/api/collections/browse`]);
+    assert.equal(collections.length, 2);
+    assert.deepEqual(collections[0], {
+      id: "c1",
+      username: "giswqs",
+      slug: "official-demos",
+      title: "Official Demos",
+      description: "Demo maps",
+      createdAt: "2026-09-28T13:12:05.000Z",
+      projectCount: 105,
+      thumbnailUrl: `${BASE}/api/thumbnails/abc-123?v=1`,
+    });
+    assert.equal(collections[1].thumbnailUrl, null);
+    assert.equal(collections[1].projectCount, 0);
+  });
+
+  it("drops collections that cannot be addressed by username and slug", async () => {
+    const { fn } = fakeFetch(200, {
+      collections: [
+        { id: "c1", username: "giswqs", slug: "" },
+        { id: "c2", username: "", slug: "x" },
+        { id: "", username: "giswqs", slug: "x" },
+        { id: "c3", username: "giswqs", slug: "ok" },
+      ],
+    });
+    const collections = await fetchCollections({ baseUrl: BASE, fetchImpl: fn });
+    assert.deepEqual(
+      collections.map((c) => c.id),
+      ["c3"],
+    );
+  });
+
+  it("returns an empty list when the payload has no collections array", async () => {
+    const { fn } = fakeFetch(200, {});
+    assert.deepEqual(await fetchCollections({ baseUrl: BASE, fetchImpl: fn }), []);
+  });
+
+  it("throws a coded GalleryError on a non-2xx response", async () => {
+    const { fn } = fakeFetch(503, null);
+    await assert.rejects(
+      () => fetchCollections({ baseUrl: BASE, fetchImpl: fn }),
+      (err: unknown) => err instanceof GalleryError && err.code === "http" && err.status === 503,
+    );
+  });
+});
+
+describe("collection helpers", () => {
+  const collection = (overrides: Record<string, unknown> = {}) => ({
+    id: "c1",
+    username: "giswqs",
+    slug: "official-demos",
+    title: "Official Demos",
+    description: "Showcase maps",
+    createdAt: "",
+    projectCount: 1,
+    thumbnailUrl: null,
+    ...overrides,
+  });
+
+  it("filters collections by title, owner, or description", () => {
+    const list = [
+      collection(),
+      collection({ id: "c2", username: "clarawe", title: "HS_Karto", description: "" }),
+    ];
+    assert.equal(filterCollections(list, ""), list);
+    assert.equal(filterCollections(list, "   "), list);
+    assert.deepEqual(
+      filterCollections(list, "  KARTO ").map((c) => c.id),
+      ["c2"],
+    );
+    assert.deepEqual(
+      filterCollections(list, "showcase").map((c) => c.id),
+      ["c1"],
+    );
+    assert.deepEqual(
+      filterCollections(list, "clarawe").map((c) => c.id),
+      ["c2"],
+    );
+    assert.deepEqual(filterCollections(list, "nothing"), []);
+  });
+
+  it("builds the collection page URL on the share host", () => {
+    assert.equal(
+      collectionPageUrl(collection(), `${BASE}/`),
+      `${BASE}/giswqs/collections/official-demos`,
+    );
+    assert.equal(
+      collectionPageUrl(collection({ username: "a b", slug: "c/d" }), BASE),
+      `${BASE}/a%20b/collections/c%2Fd`,
+    );
+  });
+});
+
+describe("fetchCollectionProjects", () => {
+  it("fetches a collection by owner and slug and normalizes its projects", async () => {
+    const { fn, calls } = fakeFetch(200, {
+      collection: {
+        id: "c1",
+        username: "giswqs",
+        slug: "official-demos",
+        projects: [rawProject(), rawProject({ id: "def-456", rawJsonUrl: "" })],
+      },
+    });
+    const projects = await fetchCollectionProjects({
+      username: "giswqs",
+      slug: "official-demos",
+      baseUrl: BASE,
+      fetchImpl: fn,
+    });
+    assert.deepEqual(calls, [`${BASE}/api/collections/giswqs/official-demos`]);
+    // The record without a raw JSON URL cannot be opened, so it is dropped.
+    assert.equal(projects.length, 1);
+    assert.equal(projects[0].id, "abc-123");
+    assert.equal(projects[0].thumbnailUrl, `${BASE}/api/thumbnails/abc-123?v=1`);
+  });
+
+  it("encodes the username and slug path segments", async () => {
+    const { fn, calls } = fakeFetch(200, { collection: { projects: [] } });
+    await fetchCollectionProjects({
+      username: "a/b",
+      slug: "c d",
+      baseUrl: BASE,
+      fetchImpl: fn,
+    });
+    assert.deepEqual(calls, [`${BASE}/api/collections/a%2Fb/c%20d`]);
+  });
+
+  it("returns an empty list when the collection has no projects", async () => {
+    const { fn } = fakeFetch(200, { collection: { id: "c1" } });
+    assert.deepEqual(
+      await fetchCollectionProjects({ username: "u", slug: "s", baseUrl: BASE, fetchImpl: fn }),
+      [],
+    );
+  });
+
+  it("surfaces a deleted collection as an http 404 GalleryError", async () => {
+    const { fn } = fakeFetch(404, { error: "collection not found" });
+    await assert.rejects(
+      () => fetchCollectionProjects({ username: "u", slug: "gone", baseUrl: BASE, fetchImpl: fn }),
+      (err: unknown) => err instanceof GalleryError && err.code === "http" && err.status === 404,
+    );
   });
 });
 
@@ -444,6 +635,14 @@ describe("shared project membership logic", () => {
       assert.equal(isPublicSharingBlocked(visibility, organization), false);
     }
   });
+
+  it("offers only organizations whose role may own projects", () => {
+    for (const role of ["administrator", "publisher", "member"]) {
+      assert.equal(canOwnOrganizationProjects({ ...organization, role }), true);
+    }
+    assert.equal(canOwnOrganizationProjects({ ...organization, role: "viewer" }), false);
+    assert.equal(canOwnOrganizationProjects({ ...organization, role: null }), false);
+  });
 });
 
 describe("loadSharedProjectThumbnail", () => {
@@ -531,23 +730,77 @@ describe("gallery with no configured share host", () => {
 });
 
 describe("shareAuthorizedFetch", () => {
-  it("attaches the token only for the share host, never third parties", async () => {
-    const seen: { url: string; auth: string | null }[] = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const url = typeof input === "string" ? input : String(input);
-      seen.push({ url, auth: new Headers(init.headers).get("Authorization") });
-      return { ok: true, status: 200 } as Response;
-    }) as unknown as typeof fetch;
+  it("adds a credential only for the share origin and rejects a redirect before reaching its target", async () => {
+    const sourceRequests: string[] = [];
+    const targetRequests: string[] = [];
+    const target = createServer((req, res) => {
+      targetRequests.push(req.headers.authorization ?? "");
+      res.end("target");
+    });
+    const source = createServer((req, res) => {
+      sourceRequests.push(req.headers.authorization ?? "");
+      res.writeHead(302, {
+        Location: `http://127.0.0.1:${(target.address() as AddressInfo).port}/target`,
+      });
+      res.end();
+    });
+    await Promise.all([
+      new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve)),
+      new Promise<void>((resolve) => source.listen(0, "127.0.0.1", resolve)),
+    ]);
     try {
-      const authed = shareAuthorizedFetch("glb_tok", BASE);
-      await authed(`${BASE}/giswqs/secret.geolibre.json`);
-      await authed("https://tiles.example.com/data.json");
-      assert.equal(seen[0].auth, "Bearer glb_tok");
-      assert.equal(seen[1].auth, null);
+      const base = `http://127.0.0.1:${(source.address() as AddressInfo).port}`;
+      const authed = shareAuthorizedFetch("glb_tok", base);
+      await assert.rejects(authed(`${base}/share`), TypeError);
+      assert.deepEqual(targetRequests, []);
+      assert.deepEqual(sourceRequests, ["Bearer glb_tok"]);
+
+      // Unauthenticated requests retain the browser's ordinary redirect policy.
+      const publicResponse = await fetch(`${base}/share`);
+      assert.equal(await publicResponse.text(), "target");
+      assert.deepEqual(targetRequests, [""]);
+      assert.deepEqual(sourceRequests, ["Bearer glb_tok", ""]);
     } finally {
-      globalThis.fetch = original;
+      await Promise.all([
+        new Promise<void>((resolve, reject) =>
+          target.close((error) => (error ? reject(error) : resolve())),
+        ),
+        new Promise<void>((resolve, reject) =>
+          source.close((error) => (error ? reject(error) : resolve())),
+        ),
+      ]);
     }
+  });
+
+  it("preserves Request headers on the share origin and leaves third-party requests uncredentialed", async () => {
+    const seen: { url: string; headers: Headers; redirect: RequestRedirect | undefined }[] = [];
+    const baseFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({
+        url: input instanceof Request ? input.url : String(input),
+        headers: new Headers(
+          init?.headers ?? (input instanceof Request ? input.headers : undefined),
+        ),
+        redirect: init?.redirect,
+      });
+      return new Response("ok");
+    }) as typeof fetch;
+    const authed = shareAuthorizedFetch("glb_tok", BASE, baseFetch);
+    await authed(new Request(`${BASE}/private`, { headers: { "X-Project": "one" } }));
+    await authed(new URL("https://tiles.example.com/data.json"));
+    await authed(new Request("https://tiles.example.com/elsewhere"));
+    await authed(
+      new Request("https://tiles.example.com/secret", {
+        headers: { Authorization: "Bearer issuer-secret", "X-Project": "two" },
+      }),
+    );
+    assert.equal(seen[0].headers.get("X-Project"), "one");
+    assert.equal(seen[0].headers.get("Authorization"), "Bearer glb_tok");
+    assert.equal(seen[0].redirect, "error");
+    assert.equal(seen[1].headers.get("Authorization"), null);
+    assert.equal(seen[1].redirect, undefined);
+    assert.equal(seen[2].headers.get("Authorization"), null);
+    assert.equal(seen[3].headers.get("Authorization"), null);
+    assert.equal(seen[3].headers.get("X-Project"), "two");
   });
 });
 
@@ -572,5 +825,131 @@ describe("projectOpenToken", () => {
 
   it("sends nothing when there is no token to send", () => {
     assert.equal(projectOpenToken({ visibility: "private" }, ""), undefined);
+  });
+});
+
+function rawTransfer(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "t-1",
+    projectId: "abc-123",
+    projectTitle: "My Map",
+    projectSlug: "my-map",
+    fromUsername: "giswqs",
+    toUsername: "bob",
+    toOrganization: null,
+    slug: "my-map",
+    status: "pending",
+    createdAt: "2026-09-30T00:00:00Z",
+    resolvedAt: null,
+    ...overrides,
+  };
+}
+
+describe("delete protection and ownership transfers", () => {
+  it("normalizes deleteProtected to null when the host does not expose it", async () => {
+    const { fn } = fakeFetch(200, { projects: [rawProject()] });
+    const { projects } = await fetchSharedProjects({ baseUrl: BASE, fetchImpl: fn });
+    assert.equal(projects[0].deleteProtected, null);
+  });
+
+  it("preserves an explicit deleteProtected flag", async () => {
+    const { fn } = fakeFetch(200, { projects: [rawProject({ deleteProtected: true })] });
+    const { projects } = await fetchSharedProjects({ baseUrl: BASE, fetchImpl: fn });
+    assert.equal(projects[0].deleteProtected, true);
+  });
+
+  it("PATCHes the protection flag as JSON with a bearer token", async () => {
+    const { fn, requests } = recordingFetch(200, {
+      project: rawProject({ deleteProtected: true }),
+    });
+    const project = await setProjectDeleteProtection({
+      token: "glb_tok",
+      projectId: "abc-123",
+      deleteProtected: true,
+      baseUrl: BASE,
+      fetchImpl: fn,
+    });
+    assert.equal(project.deleteProtected, true);
+    assert.equal(requests[0].url, `${BASE}/api/projects/abc-123`);
+    assert.equal(requests[0].init.method, "PATCH");
+    const headers = new Headers(requests[0].init.headers);
+    assert.equal(headers.get("Authorization"), "Bearer glb_tok");
+    assert.equal(headers.get("Content-Type"), "application/json");
+    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { deleteProtected: true });
+  });
+
+  it("POSTs a user transfer and normalizes the pending offer", async () => {
+    const { fn, requests } = recordingFetch(201, {
+      transfer: rawTransfer(),
+      project: rawProject(),
+    });
+    const result = await requestProjectTransfer({
+      token: "glb_tok",
+      projectId: "abc-123",
+      target: { username: "bob" },
+      baseUrl: BASE,
+      fetchImpl: fn,
+    });
+    assert.equal(requests[0].url, `${BASE}/api/projects/abc-123/transfers`);
+    assert.equal(requests[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(String(requests[0].init.body)), { username: "bob" });
+    assert.equal(result.transfer.toUsername, "bob");
+    assert.equal(result.transfer.status, "pending");
+    assert.equal(result.project?.id, "abc-123");
+  });
+
+  it("maps a slug conflict refusal to a typed error", async () => {
+    const { fn } = fakeFetch(409, { error: "slug already exists for the new owner" });
+    await assert.rejects(
+      requestProjectTransfer({
+        token: "glb_tok",
+        projectId: "abc-123",
+        target: { username: "bob" },
+        baseUrl: BASE,
+        fetchImpl: fn,
+      }),
+      (error: unknown) => error instanceof GalleryError && error.code === "slug-conflict",
+    );
+  });
+
+  it("maps an unknown recipient to a typed error", async () => {
+    const { fn } = fakeFetch(404, { error: "user not found" });
+    await assert.rejects(
+      requestProjectTransfer({
+        token: "glb_tok",
+        projectId: "abc-123",
+        target: { username: "nobody" },
+        baseUrl: BASE,
+        fetchImpl: fn,
+      }),
+      (error: unknown) => error instanceof GalleryError && error.code === "user-not-found",
+    );
+  });
+
+  it("resolves a decline against an empty 204 body", async () => {
+    const { fn, requests } = recordingFetch(204, null);
+    await declineProjectTransfer({
+      token: "glb_tok",
+      transferId: "t-1",
+      baseUrl: BASE,
+      fetchImpl: fn,
+    });
+    assert.equal(requests[0].url, `${BASE}/api/transfers/t-1/decline`);
+    assert.equal(requests[0].init.method, "POST");
+  });
+
+  it("lists incoming transfers and drops records without an id", async () => {
+    const { fn, requests } = recordingFetch(200, {
+      transfers: [rawTransfer({ slug: undefined }), { projectId: "abc-123" }],
+    });
+    const transfers = await fetchIncomingTransfers({
+      token: "glb_tok",
+      baseUrl: BASE,
+      fetchImpl: fn,
+    });
+    assert.equal(requests[0].url, `${BASE}/api/transfers/incoming`);
+    assert.equal(transfers.length, 1);
+    assert.equal(transfers[0].id, "t-1");
+    assert.equal(transfers[0].slug, "");
   });
 });

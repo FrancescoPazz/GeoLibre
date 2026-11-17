@@ -1,22 +1,42 @@
 import type { FeatureCollection, Geometry } from "geojson";
 import {
+  circleRadiusValue,
   documentLocale,
+  extrusionBaseValue,
   extrusionColorValue,
   extrusionHeightValue,
+  isHexColor,
+  isInlineImageList,
   isInlineImageValue,
   isPopupClickEnabled,
   isPopupHoverEnabled,
   isSafePopupUrl,
+  isTileAddressError,
+  lineWidthValue,
+  mapZoomStepOutputs,
   resolveConfiguredPopupTitle,
+  resolveLayerTileAddress,
   resolvePopupBody,
   resolvePopupRows,
   resolvePopupTitle,
+  simpleStyleNumberValue,
+  strokeBlurValue,
+  strokeDashValue,
+  strokeOpacityPaintValue,
+  strokeOpacityValue,
   styleValue,
+  vectorCircleColorValue,
+  vectorFillColorValue,
+  vectorFillOpacityValue,
+  vectorLineColorValue,
+  vectorOutlineColorValue,
+  vectorStrokeWidthValue,
   type GeoLibreLayer,
   type MapProjection,
   type PopupRow,
   type StoryMap,
 } from "@geolibre/core";
+import { buildMapboxStyle } from "@geolibre/map/style-export";
 import { NO_EXTERNAL_CDN } from "./build-flags";
 import { sanitizeStoryHtml } from "./sanitize-html";
 import {
@@ -92,6 +112,8 @@ interface InlineLayerExport {
   /** MapLibre source spec (a GeoJSON source, or a raster tile source). */
   source: Record<string, unknown>;
   layerSpec: Record<string, unknown>;
+  /** The layer's text label (symbol) spec, drawn above it when labels are on. */
+  labelSpec?: Record<string, unknown>;
   /** GeoLibre layer-level opacity, combined with the style's per-geometry one. */
   layerOpacity: number;
   /**
@@ -195,6 +217,7 @@ export function buildStoryMapHtml(options: StoryMapExportOptions): string {
       id: layer.id,
       source: built.source,
       layerSpec: built.layerSpec,
+      ...(built.labelSpec ? { labelSpec: built.labelSpec } : {}),
       // Hidden layers export fully transparent so the export matches what
       // GeoLibre renders (the opacity slider value alone ignores visibility).
       layerOpacity: layer.visible ? layer.opacity : 0,
@@ -255,6 +278,12 @@ export function buildStoryMapHtml(options: StoryMapExportOptions): string {
     startStepId: STORY_START_STEP_ID,
     endStepId: STORY_END_STEP_ID,
     navToggleLabel,
+    labelLayerSuffix: STORY_LABEL_LAYER_SUFFIX,
+    // Each exported style layer's opacity paint at a layer opacity of 1. A
+    // chapter's opacity takes the place of the layer opacity, so the page
+    // scales these rather than overwriting the style's own translucency.
+    fadeBase: storyFadeBase(inlineLayers),
+    labelGlyphs: STORY_LABEL_GLYPHS_URL,
     markerImages: usedMarkerImages,
     popups,
     title: storymap.title,
@@ -287,30 +316,36 @@ export function buildStoryMapHtml(options: StoryMapExportOptions): string {
   const inlineLayerScript = inlineLayers
     .map((entry) => {
       const sourceId = `${entry.id}-source`;
-      const paint = { ...(entry.layerSpec.paint as Record<string, unknown>) };
-      // Seed every opacity paint property the layer type fades. When chapter 0
-      // assigns this layer an opacity, start there (matching the in-app first
-      // frame, #950); otherwise use the style's per-property opacity scaled by
-      // the layer opacity so the export matches what GeoLibre renders. A chapter
-      // 0 opacity wins outright, including over a hidden layer's 0, exactly as
-      // the in-app presenter's setLayerOpacity overwrites the live value. Circles
-      // carry both fill and stroke opacity so a faded point hides fully (#934).
-      for (const opacityProp of opacityProperties(entry.layerSpec.type as string)) {
-        const styleOpacity =
-          typeof paint[opacityProp] === "number" ? (paint[opacityProp] as number) : 1;
-        paint[opacityProp] =
-          entry.chapterZeroOpacity !== undefined
-            ? entry.chapterZeroOpacity
-            : styleOpacity * entry.layerOpacity;
-      }
       const spec = {
         ...entry.layerSpec,
         id: entry.id,
         source: sourceId,
-        paint,
+        paint: seedOpacity(
+          entry.layerSpec.paint as Record<string, unknown>,
+          opacityProperties(entry.layerSpec.type as string),
+          entry,
+        ),
       };
-      return `    map.addSource(${jsonForScript(sourceId)}, ${jsonForScript(entry.source)});
-    map.addLayer(${jsonForScript(spec)});`;
+      const lines = [
+        `    map.addSource(${jsonForScript(sourceId)}, ${jsonForScript(entry.source)});`,
+        `    map.addLayer(${jsonForScript(spec)});`,
+      ];
+      if (entry.labelSpec) {
+        // The label fades with its layer: the page's setLayerOpacity applies a
+        // chapter's opacity to the companion label layer too.
+        const labelSpec = {
+          ...entry.labelSpec,
+          id: `${entry.id}${STORY_LABEL_LAYER_SUFFIX}`,
+          source: sourceId,
+          paint: seedOpacity(
+            entry.labelSpec.paint as Record<string, unknown>,
+            ["text-opacity"],
+            entry,
+          ),
+        };
+        lines.push(`    addLabelLayer(${jsonForScript(labelSpec)});`);
+      }
+      return lines.join("\n");
     })
     .join("\n");
 
@@ -404,9 +439,12 @@ function buildLayerPopups(
       if (body !== null) {
         entry.b = body;
       } else {
-        entry.r = resolvePopupRows(properties, { popup, fieldVisibility, locale }).map(
-          exportPopupRow,
-        );
+        entry.r = resolvePopupRows(properties, { popup, fieldVisibility, locale })
+          // The page draws one image per row from a single property, so a
+          // list of inline photos has no exported form; printing it as text
+          // would inline megabytes of base64 (#3477).
+          .filter((row) => !(row.kind === "auto" && isInlineImageList(row.value)))
+          .map(exportPopupRow);
       }
     }
     if (hover) {
@@ -437,6 +475,106 @@ function buildLayerPopups(
  */
 function jsonForScript(value: unknown, space?: number): string {
   return JSON.stringify(value, null, space).replace(/<\//g, "<\\/").replace(/<!--/g, "<\\!--");
+}
+
+/**
+ * Suffix of a layer's companion label layer id in the exported page. The page
+ * runtime appends the same suffix to fade a layer's labels with it.
+ */
+const STORY_LABEL_LAYER_SUFFIX = "::label";
+
+/**
+ * Glyph server the exported page falls back to for labels when the basemap
+ * style has no text layer whose font they could borrow. MapLibre's demo font
+ * server serves the page's fallback "Noto Sans Regular" stack.
+ */
+const STORY_LABEL_GLYPHS_URL = "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf";
+
+/**
+ * Seed the opacity paint properties an exported layer fades.
+ *
+ * The style's per-property opacity is scaled by the layer opacity so the
+ * export matches what GeoLibre renders, or by chapter 0's opacity when it
+ * assigns one (matching the in-app first frame, #950). A chapter 0 opacity
+ * takes the place of the layer opacity, including a hidden layer's 0, exactly
+ * as the in-app presenter does. Circles carry both fill and stroke opacity so
+ * a faded point hides fully (#934).
+ *
+ * @param paint The layer spec's paint, left unmodified.
+ * @param props The opacity paint properties to seed.
+ * @param entry The exported layer's opacity inputs.
+ * @returns A copy of `paint` with the opacity properties seeded.
+ */
+function seedOpacity(
+  paint: Record<string, unknown>,
+  props: string[],
+  entry: Pick<InlineLayerExport, "layerOpacity" | "chapterZeroOpacity">,
+): Record<string, unknown> {
+  const seeded = { ...paint };
+  const opacity = entry.chapterZeroOpacity ?? entry.layerOpacity;
+  for (const prop of props) seeded[prop] = scaleStoryOpacity(seeded[prop], opacity);
+  return seeded;
+}
+
+/**
+ * Scale a style's opacity paint value (at a layer opacity of 1) by a layer or
+ * chapter opacity. An unset value counts as 1. A data-driven opacity (a
+ * graduated or rule-based renderer) is scaled inside any zoom step, as the live
+ * map's paint builders do. The exported page's `scaleOpacity` mirrors this.
+ *
+ * @param value The style's opacity paint value.
+ * @param opacity The layer or chapter opacity.
+ * @returns The scaled paint value.
+ */
+export function scaleStoryOpacity(value: unknown, opacity: number): unknown {
+  if (value === undefined || value === null) return opacity;
+  if (typeof value === "number") return value * opacity;
+  if (opacity === 1) return value;
+  return mapZoomStepOutputs(value, (output) =>
+    typeof output === "number" ? output * opacity : ["*", output, opacity],
+  );
+}
+
+/**
+ * The opacity paint each exported style layer carries at a layer opacity of 1,
+ * keyed by style layer id, so the page's chapter fades can scale it (see
+ * `fadeLayer` in the page template). Unset properties are left out and count
+ * as 1.
+ *
+ * @param inlineLayers The layers inlined into the export.
+ * @returns Paint values by style layer id, then property.
+ */
+function storyFadeBase(inlineLayers: InlineLayerExport[]): Record<string, Record<string, unknown>> {
+  const base: Record<string, Record<string, unknown>> = {};
+  const record = (id: string, paint: unknown, props: string[]) => {
+    const values: Record<string, unknown> = {};
+    for (const prop of props) {
+      const value = (paint as Record<string, unknown> | undefined)?.[prop];
+      if (value !== undefined) values[prop] = value;
+    }
+    if (Object.keys(values).length > 0) base[id] = values;
+  };
+  for (const entry of inlineLayers) {
+    record(entry.id, entry.layerSpec.paint, opacityProperties(entry.layerSpec.type as string));
+    if (entry.labelSpec) {
+      record(`${entry.id}${STORY_LABEL_LAYER_SUFFIX}`, entry.labelSpec.paint, ["text-opacity"]);
+    }
+  }
+  return base;
+}
+
+/**
+ * The story-map polygon hairline colour: the stroke colour, carrying the
+ * stroke opacity as alpha when the colour is a flat hex, since this hairline is
+ * the polygon's only outline there. A data-driven colour stays as it is.
+ */
+function storyOutlineColor(style: GeoLibreLayer["style"]): unknown {
+  const color = vectorLineColorValue(style);
+  const opacity = strokeOpacityValue(style);
+  if (opacity >= 1 || typeof color !== "string" || !isHexColor(color)) return color;
+  const hex = color.trim().slice(1);
+  const [r, g, b] = [0, 2, 4].map((start) => Number.parseInt(hex.slice(start, start + 2), 16));
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
 }
 
 function opacityProperties(type: string): string[] {
@@ -472,13 +610,19 @@ function opacityProperties(type: string): string[] {
 function buildInlineLayer(
   layer: GeoLibreLayer,
   markerImage?: StoryMarkerImage,
-): { source: Record<string, unknown>; layerSpec: Record<string, unknown> } | null {
+): {
+  source: Record<string, unknown>;
+  layerSpec: Record<string, unknown>;
+  labelSpec?: Record<string, unknown>;
+} | null {
   if (layer.type === "geojson" && layer.geojson) {
     const layerSpec = buildLayerSpec(layer, markerImage);
     if (!layerSpec) return null;
+    const labelSpec = buildLabelSpec(layer);
     return {
       source: { type: "geojson", data: layer.geojson },
       layerSpec,
+      ...(labelSpec ? { labelSpec } : {}),
     };
   }
   const rasterSource = buildRasterTileSource(layer) ?? buildCogSource(layer);
@@ -529,7 +673,22 @@ function buildRasterTileSource(layer: GeoLibreLayer): Record<string, unknown> | 
   // handler there.
   const isHttpUrl = (value: unknown): value is string =>
     typeof value === "string" && /^https?:\/\//i.test(value);
-  const tiles = Array.isArray(layer.source.tiles) ? layer.source.tiles.filter(isHttpUrl) : [];
+  const rawTiles = Array.isArray(layer.source.tiles) ? layer.source.tiles.filter(isHttpUrl) : [];
+  // The exported page is plain MapLibre, which leaves {-y} as text. Rewrite an
+  // XYZ template the same way the live map does. A non-XYZ layer keeps its
+  // templates; scheme tms is written only when the resolved row still flips.
+  let tiles = rawTiles;
+  let scheme: "xyz" | "tms" = layer.source.scheme === "tms" ? "tms" : "xyz";
+  if (rawTiles.length > 0) {
+    try {
+      const addressed = resolveLayerTileAddress(layer, rawTiles);
+      tiles = addressed.tiles;
+      scheme = addressed.scheme;
+    } catch (error) {
+      if (!isTileAddressError(error)) throw error;
+      return null;
+    }
+  }
   // The TileJSON `url` fallback is scoped to plain raster layers: wms/wmts
   // records keep the raw service endpoint (not a TileJSON) in `url` — their
   // loadable template lives in `tiles` — so embedding it would produce a
@@ -547,7 +706,7 @@ function buildRasterTileSource(layer: GeoLibreLayer): Record<string, unknown> | 
   if (typeof layer.source.maxzoom === "number") {
     source.maxzoom = layer.source.maxzoom;
   }
-  if (layer.source.scheme === "tms") source.scheme = "tms";
+  if (scheme === "tms") source.scheme = "tms";
   if (typeof layer.source.attribution === "string") {
     source.attribution = layer.source.attribution;
   }
@@ -646,27 +805,51 @@ function buildLayerSpec(
           "fill-extrusion-color": extrusionColorValue(layer.style),
           "fill-extrusion-opacity": styleValue(layer.style, "extrusionOpacity"),
           "fill-extrusion-height": extrusionHeightValue(layer.style),
-          "fill-extrusion-base": styleValue(layer.style, "extrusionBase"),
+          "fill-extrusion-base": extrusionBaseValue(layer.style),
           "fill-extrusion-vertical-gradient": true,
         },
       };
     }
+    // The color/width/opacity values come from the same core builders the
+    // live map's paint uses, so categorized, graduated, rule-based and
+    // expression renderers export as the data-driven expressions the app draws
+    // rather than the single-symbol fallback color (#3033).
     return {
       type: "fill",
       paint: {
-        "fill-color": styleValue(layer.style, "fillColor"),
-        "fill-opacity": styleValue(layer.style, "fillOpacity"),
-        "fill-outline-color": styleValue(layer.style, "strokeColor"),
+        "fill-color": vectorFillColorValue(layer.style),
+        "fill-opacity": vectorFillOpacityValue(
+          layer.style,
+          simpleStyleNumberValue(
+            layer.style,
+            "fill-opacity",
+            styleValue(layer.style, "fillOpacity"),
+          ),
+        ),
+        // The story map draws a polygon as this one fill layer, with no line
+        // layer for the outline, so the hairline is its only outline and stays
+        // in the stroke colour even under a dashed or translucent stroke (the
+        // map drops it there because its line layer draws the outline). A fully
+        // transparent stroke hides the outline in the app, so it leaves the
+        // edge in the fill colour here too rather than drawing one.
+        ...(strokeOpacityValue(layer.style) > 0
+          ? { "fill-outline-color": storyOutlineColor(layer.style) }
+          : {}),
       },
     };
   }
   if (kind === "line") {
+    const dash = strokeDashValue(layer.style);
     return {
       type: "line",
       paint: {
-        "line-color": styleValue(layer.style, "strokeColor"),
-        "line-width": styleValue(layer.style, "strokeWidth"),
-        "line-opacity": 1,
+        "line-color": vectorLineColorValue(layer.style),
+        "line-width": lineWidthValue(layer.style),
+        "line-opacity": strokeOpacityPaintValue(layer.style),
+        // A solid line has no dash; the key is left out rather than null,
+        // which a style document cannot carry.
+        ...(dash ? { "line-dasharray": dash } : {}),
+        "line-blur": strokeBlurValue(layer.style),
       },
     };
   }
@@ -686,15 +869,57 @@ function buildLayerSpec(
   return {
     type: "circle",
     paint: {
-      "circle-color": styleValue(layer.style, "fillColor"),
-      "circle-radius": styleValue(layer.style, "circleRadius"),
-      "circle-stroke-color": styleValue(layer.style, "strokeColor"),
-      "circle-stroke-width": styleValue(layer.style, "strokeWidth"),
+      "circle-color": vectorCircleColorValue(layer.style),
+      "circle-radius": circleRadiusValue(layer.style),
+      "circle-stroke-color": vectorOutlineColorValue(layer.style),
+      "circle-stroke-width": vectorStrokeWidthValue(
+        layer.style,
+        styleValue(layer.style, "strokeWidth"),
+      ),
       // In-app circle-opacity is fillOpacity * layerOpacity; seed fillOpacity
       // here so the later layerOpacity scaling matches.
-      "circle-opacity": styleValue(layer.style, "fillOpacity"),
+      "circle-opacity": vectorFillOpacityValue(
+        layer.style,
+        simpleStyleNumberValue(
+          layer.style,
+          "marker-opacity",
+          styleValue(layer.style, "fillOpacity"),
+        ),
+      ),
+      "circle-stroke-opacity": strokeOpacityPaintValue(layer.style),
     },
   };
+}
+
+/**
+ * The text label (symbol) layer spec for a layer whose labels are enabled, or
+ * `null` when it draws none.
+ *
+ * Taken from the Mapbox/MapLibre style exporter so the story labels exactly as
+ * that export does: the same text-field (field, expression, number format),
+ * zoom window, per-feature filters, and suppression on extruded and heatmap
+ * layers. It is built at full opacity and visible, since the story seeds and
+ * fades opacity itself. `text-font` is left for the page to resolve against the
+ * basemap's glyphs at load time (`addLabelLayer`), as the live map does.
+ *
+ * @param layer The project layer.
+ * @returns The label layer spec without `id`/`source`, or `null`.
+ */
+function buildLabelSpec(layer: GeoLibreLayer): Record<string, unknown> | null {
+  if (!layer.style.labels?.enabled) return null;
+  const { style } = buildMapboxStyle(
+    { ...layer, opacity: 1, visible: true },
+    layer.geojson ?? null,
+  );
+  const label = style.layers.find(
+    (styleLayer) => styleLayer.type === "symbol" && styleLayer.layout?.["text-field"] !== undefined,
+  );
+  if (!label) return null;
+  const { id: _id, source: _source, ...spec } = label as unknown as Record<string, unknown>;
+  const layout = { ...(spec.layout as Record<string, unknown>) };
+  delete layout["text-font"];
+  delete layout.visibility;
+  return { ...spec, layout };
 }
 
 /**
@@ -747,6 +972,8 @@ function renderTemplate(
         /* Solid cover painted over the map for a blank/black slide; below the
            nav, and pointer-events:none so the page still scrolls. */
         #slide-cover { position: fixed; inset: 0; z-index: 15; display: none; pointer-events: none; }
+        /* The start slide keeps the story's title block, above its cover. */
+        #header.sm-over-cover { z-index: 16; }
         .sm-card { position: relative; display: flex; flex-direction: column; max-height: 70vh; line-height: 22px; font-size: 14px; border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,0.25); overflow: hidden; }
         .sm-bar { display: flex; align-items: center; gap: 6px; padding: 7px 10px; cursor: move; user-select: none; touch-action: none; font-weight: 600; font-size: 13px; border-bottom: 1px solid rgba(127,127,127,0.25); }
         .sm-grip { opacity: 0.5; flex-shrink: 0; }
@@ -773,6 +1000,13 @@ function renderTemplate(
         /* Keep the nav toggle reachable on small screens so the chapter list
            stays discoverable; only cap the pane width to the viewport. */
         @media (max-width: 750px) { .centered, .lefty, .righty, .fully { width: 90vw; margin: 0 auto; } #nav { width: auto; max-width: calc(100vw - 24px); } }
+        /* While the chapter list is open, start left-hand and full-width cards
+           past it (12px inset + 220px list + 12px gap) so the list never covers
+           a card's title (#3477). Small screens keep the centered column. */
+        @media (min-width: 751px) {
+            body.sm-nav-open .lefty { margin-left: max(5vw, 244px); }
+            body.sm-nav-open .fully { margin-left: 244px; width: calc(100% - 244px); }
+        }
         .maplibregl-canvas-container.maplibregl-touch-zoom-rotate.maplibregl-touch-drag-pan,
         .maplibregl-canvas-container.maplibregl-touch-zoom-rotate.maplibregl-touch-drag-pan .maplibregl-canvas { touch-action: unset; }
         #inset-map { position: fixed; width: 180px; height: 180px; border: 2px solid rgba(255, 255, 255, 0.8); border-radius: 4px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); z-index: 10; }
@@ -818,16 +1052,70 @@ function renderTemplate(
         var alignments = { 'left': 'lefty', 'center': 'centered', 'right': 'righty', 'full': 'fully' };
 
         function getLayerPaintType(layer) { var sl = map.getLayer(layer); return sl ? layerTypes[sl.type] : null; }
-        function setLayerOpacity(layer) {
-            if (!map.getLayer(layer.layer)) return;
-            var paintProps = getLayerPaintType(layer.layer);
+        // Mirrors scaleStoryOpacity in storymap-export.ts; keep the two in step.
+        function scaleOpacity(base, opacity) {
+            if (base === undefined || base === null) return opacity;
+            if (typeof base === 'number') return base * opacity;
+            if (opacity === 1) return base;
+            var scale = function (output) { return typeof output === 'number' ? output * opacity : ['*', output, opacity]; };
+            if (Array.isArray(base) && base[0] === 'step' && Array.isArray(base[1]) && base[1][0] === 'zoom') {
+                var out = ['step', base[1], scale(base[2])];
+                for (var i = 3; i < base.length; i += 2) out.push(base[i], scale(base[i + 1]));
+                return out;
+            }
+            return scale(base);
+        }
+        function fadeLayer(id, opacity, duration) {
+            if (!map.getLayer(id)) return;
+            var paintProps = getLayerPaintType(id);
             if (!paintProps) return;
+            var base = (config.fadeBase && config.fadeBase[id]) || {};
             paintProps.forEach(function (prop) {
-                if (layer.duration) {
-                    map.setPaintProperty(layer.layer, prop + '-transition', { duration: layer.duration });
+                if (duration) {
+                    map.setPaintProperty(id, prop + '-transition', { duration: duration });
                 }
-                map.setPaintProperty(layer.layer, prop, layer.opacity);
+                // Hillshade exaggeration is not an opacity the style scales.
+                var value = /-opacity$/.test(prop) ? scaleOpacity(base[prop], opacity) : opacity;
+                map.setPaintProperty(id, prop, value);
             });
+        }
+        // A layer's text labels live in a companion symbol layer that fades with it.
+        function setLayerOpacity(layer) {
+            fadeLayer(layer.layer, layer.opacity, layer.duration);
+            fadeLayer(layer.layer + config.labelLayerSuffix, layer.opacity, layer.duration);
+        }
+        // Labels borrow a font the basemap style already serves glyphs for (as
+        // the live map does), falling back to Noto Sans on a public glyph server
+        // when the basemap has no text layers (e.g. a blank or raster basemap).
+        // resolveLabelFont mirrors resolveTextFontFromStyleLayers in
+        // @geolibre/map's text-font.ts; keep the two in step.
+        var labelFont = null;
+        function addLabelLayer(spec) {
+            if (!labelFont) {
+                var style = map.getStyle();
+                labelFont = resolveLabelFont(style.layers) || ['Noto Sans Regular'];
+                // Swap the glyphs only when no basemap label reads them (or there
+                // are none), so a basemap label on a default or data-driven font
+                // keeps its glyph source.
+                var basemapText = (style.layers || []).some(function (layer) {
+                    return layer.type === 'symbol' && layer.layout && layer.layout['text-field'];
+                });
+                if (!style.glyphs || !basemapText) map.setGlyphs(config.labelGlyphs);
+            }
+            spec.layout['text-font'] = labelFont;
+            map.addLayer(spec);
+        }
+        function resolveLabelFont(layers) {
+            var operators = ['literal', 'get', 'has', 'at', 'in', 'case', 'match', 'coalesce', 'step', 'interpolate', 'let', 'var', 'concat', 'to-string', 'string', 'array', 'format'];
+            for (var i = 0; i < (layers || []).length; i++) {
+                var layer = layers[i];
+                if (layer.type !== 'symbol' || !layer.layout || !layer.layout['text-field']) continue;
+                var font = layer.layout['text-font'];
+                if (!Array.isArray(font)) continue;
+                var fonts = font[0] === 'literal' && Array.isArray(font[1]) ? font[1] : font;
+                if (fonts.length > 0 && fonts.every(function (f) { return typeof f === 'string'; }) && operators.indexOf(fonts[0]) === -1) return fonts;
+            }
+            return null;
         }
 
         var story = document.getElementById('story');
@@ -943,10 +1231,12 @@ function renderTemplate(
         navToggle.textContent = '☰';
         navToggle.addEventListener('click', function () {
             var nowHidden = nav.classList.toggle('hidden-nav');
+            document.body.classList.toggle('sm-nav-open', !nowHidden);
             navToggle.setAttribute('aria-pressed', nowHidden ? 'false' : 'true');
         });
         document.body.appendChild(navToggle);
         if (config.hideChapterNav) nav.classList.add('hidden-nav');
+        else document.body.classList.add('sm-nav-open');
 
         // Solid cover for a blank/black start or closing slide (#998).
         var cover = document.createElement('div');
@@ -963,11 +1253,12 @@ function renderTemplate(
         if (footer.children.length > 0) { footer.classList.add(config.theme); footer.setAttribute('id', 'footer'); story.appendChild(footer); }
 
         // Apply the start slide's initial state during DOM construction (before
-        // map load) so a slow style/tile load can't flash the story header/footer
-        // or an uncovered map on a supposedly text-free start slide (#998 review).
+        // map load) so a slow style/tile load can't flash the story footer or an
+        // uncovered map on the start slide (#998 review). The start slide is the
+        // story's opening screen, so its title block stays, above the cover.
         if (config.startSlide && config.startSlide !== 'none') {
             var startHeaderEl = document.getElementById('header');
-            if (startHeaderEl) startHeaderEl.classList.add('hidden');
+            if (startHeaderEl) startHeaderEl.classList.add('sm-over-cover');
             var startFooterEl = document.getElementById('footer');
             if (startFooterEl) startFooterEl.classList.add('hidden');
             var startBg = slideBg(config.startSlide);
@@ -1138,14 +1429,17 @@ ${inlineLayerScript}
                 if (insetMarker) insetMarker.getElement().style.visibility = value;
             }
 
-            // Hide/show the story title/byline/footer chrome. Slides are
-            // documented as text-free, so the persistent header and footer hide
-            // while one is active, matching the in-app presenter (the blank/black
-            // cover already hides them; this also clears them for global/adjacent).
-            function setChromeHidden(hidden) {
+            // Hide/show the story title/byline/footer chrome, matching the
+            // in-app presenter. Slides carry no chapter text: the closing slide
+            // hides the header and footer, while the start slide keeps the
+            // title block (raised above a blank/black cover) and hides the footer.
+            function setChromeHidden(hidden, keepTitle) {
                 var headerEl = document.getElementById('header');
                 var footerEl = document.getElementById('footer');
-                if (headerEl) headerEl.classList.toggle('hidden', hidden);
+                if (headerEl) {
+                    headerEl.classList.toggle('hidden', hidden && !keepTitle);
+                    headerEl.classList.toggle('sm-over-cover', hidden && !!keepTitle);
+                }
                 if (footerEl) footerEl.classList.toggle('hidden', hidden);
             }
 
@@ -1153,7 +1447,7 @@ ${inlineLayerScript}
                 navItems.forEach(function (it) { it.classList.remove('active'); });
                 map.stop();
                 ++cameraToken;
-                setChromeHidden(true);
+                setChromeHidden(true, isStart);
                 var bg = slideBg(mode);
                 if (bg) { cover.style.background = bg; cover.style.display = 'block'; return; }
                 cover.style.display = 'none';

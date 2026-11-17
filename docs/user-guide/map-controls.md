@@ -25,18 +25,19 @@ These are the standard MapLibre controls that sit in the map corners:
 
 These are interactive panels provided by the MapLibre components plugin:
 
-| Tool           | Description                                                                                                                                                               |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Search**     | Search for places by name and fly to the result.                                                                                                                          |
-| **Colorbar**   | Display a continuous color scale for raster values.                                                                                                                       |
-| **Legend**     | Show a legend describing the layers on the map.                                                                                                                           |
-| **HTML**       | Display custom HTML content in an on-map panel.                                                                                                                           |
-| **Measure**    | Measure distances and areas interactively, with heading and terrain-aware 3D readouts. See [Measuring distance, area, and heading](#measuring-distance-area-and-heading). |
-| **Bookmark**   | Save named map views and jump back to them.                                                                                                                               |
-| **Minimap**    | Show an overview map of the current extent.                                                                                                                               |
-| **View State** | Read and edit the exact center, zoom, bearing, and pitch.                                                                                                                 |
+| Tool | Description |
+| --- | --- |
+| **Search** | Search for places by name and fly to the result. |
+| **Colorbar** | Display a continuous color scale for raster values. |
+| **Legend** | Show a legend describing the layers on the map. |
+| **HTML** | Display custom HTML content in an on-map panel. |
+| **Image** | Place images from `https://` URLs on the map, such as a logo, a north arrow, or a legend, in any corner. Each image has a title bar that folds it away, and a map can hold up to 20. |
+| **Measure** | Measure distances and areas interactively, with heading and terrain-aware 3D readouts. See [Measuring distance, area, and heading](#measuring-distance-area-and-heading). |
+| **Bookmark** | Save named map views and jump back to them. Bookmarks and their folders are saved in the project, so they travel with the file (bookmarks saved by older versions in this browser are copied into the first project you open that has none and saved there; the old browser copy is left in place but no longer updated). |
+| **Minimap** | Show an overview map of the current extent. |
+| **View State** | Read and edit the exact center, zoom, bearing, and pitch. |
 
-The **Print Layout** composer lives under the [Project menu](projects.md#print).
+The **Print Layout** composer lives under the Project menu; see [Print Layout](print-layout.md).
 
 !!! note "Control position"
 Plugin-backed controls can be positioned in any map corner. For plugins that support it, set the corner from the [Plugins menu](plugins.md) (top left, top right, bottom left, or bottom right).
@@ -49,7 +50,7 @@ Plugin-backed controls can be positioned in any map corner. For plugins that sup
 
 **Exact segment** is the keyboard route to the same thing: type a length and a bearing and click **Add** to extend the measurement by a segment of exactly those dimensions, instead of clicking for it. Useful for retracing a deed description or a survey traverse.
 
-Beyond distance and area, the panel adds two further sections:
+Beyond distance and area, the panel adds further readouts:
 
 - **Heading** — the direction of the measured line, as degrees plus a 16-point compass label (for example `310° NW`). This is a true great-circle initial bearing, not the angle the line makes on screen: on a Mercator map Washington to London _looks_ due east, while the real initial bearing is about 50°. On a path with more than two points, the heading is the overall first-to-last direction rather than one row per segment.
 - **Final heading** — the bearing arriving at the far end. A great circle changes direction along its length, so this row appears only on lines long enough for the convergence to reach a degree; short measurements stay a single row.
@@ -105,19 +106,19 @@ Earth curvature and atmospheric refraction are ignored. Over a few kilometres th
 
 The Controls menu also carries tools that move the camera, drape live data over the map, or capture what you see:
 
-| Tool                    | Description                                                                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Sun**                 | Simulate the sun's position and the day/night terminator for any date and time.                                                                                    |
-| **Weather**             | Overlay near-realtime **Clouds** (NASA satellite imagery, animated day by day) and **Precipitation** (RainViewer radar, animated over roughly the last two hours). |
-| **Gridlines**           | Draw a coordinate grid with edge labels, including a UTM easting/northing mode.                                                                                    |
-| **Spinning Globe**      | Slowly rotate the globe, optionally bounded to a region.                                                                                                           |
-| **Route Animation**     | Animate a marker along a line layer with play/pause, speed, a trail, and camera follow.                                                                            |
-| **Flight Simulator**    | Fly over terrain and 3D layers with continuous keyboard controls.                                                                                                  |
-| **Atmospheric Effects** | Render a deep-space backdrop, starfield, comets, and an atmospheric halo at low zoom.                                                                              |
-| **Directions**          | Click the map to add waypoints and get a route. Waypoints are sent to the public OSRM demo server.                                                                 |
-| **Reverse Geocode**     | Click the map to look up an address at those coordinates through the configured [geocoding provider](data-integrations.md#geocoding).                              |
-| **Record Map Tour...**  | Capture an animated keyframe tour to video, with per-keyframe recapture, hold and transition durations, and a saveable tour setup.                                 |
-| **Record Video...**     | Record the map canvas, or a drawn bounding box, to a video file, optionally burning in on-map HTML, legend, and colorbar panels.                                   |
+| Tool | Description |
+| --- | --- |
+| **Sun** | Simulate the sun's position and the day/night terminator for any date and time. |
+| **Weather** | Overlay near-realtime **Clouds** (NASA satellite imagery, animated day by day) and **Precipitation** (RainViewer radar, animated over roughly the last two hours). |
+| **Gridlines** | Draw a coordinate grid with edge labels, including a UTM easting/northing mode and an MGRS/USNG mode (grid zones with the Norway and Svalbard exceptions, lettered 100 km squares, then 10 km and 1 km lines as you zoom in). |
+| **Spinning Globe** | Slowly rotate the globe, optionally bounded to a region. |
+| **Route Animation** | Animate a marker along a line layer with play/pause, speed, a trail, and camera follow. |
+| **Flight Simulator** | Fly over terrain and 3D layers with continuous keyboard controls. |
+| **Atmospheric Effects** | Render a deep-space backdrop, starfield, comets, and an atmospheric halo at low zoom. |
+| **Directions** | Click the map to add waypoints and get a route. Waypoints are sent to the public OSRM demo server. |
+| **Reverse Geocode** | Click the map to look up an address at those coordinates through the configured [geocoding provider](data-integrations.md#geocoding). |
+| **Record Map Tour...** | Capture an animated keyframe tour to video, with per-keyframe recapture, hold and transition durations, and a saveable tour setup. |
+| **Record Video...** | Record the map canvas, or a drawn bounding box, to a video file, optionally burning in on-map HTML, legend, and colorbar panels. |
 
 !!! warning "Some tools call external services"
 Directions and Reverse Geocode send your coordinates to a third-party service — the OSRM demo server and your configured geocoding provider. Weather fetches overlay imagery from NASA and RainViewer. The rest of the table runs locally against tiles the map already fetches.
@@ -149,7 +150,9 @@ Comments are stored in the `.geolibre.json` file, so they travel with a shared o
 !!! note "NMEA needs a Chromium browser"
 Reading a receiver uses the Web Serial and Web Bluetooth APIs, which Chromium browsers such as Chrome and Edge provide but Firefox and Safari do not. Most Bluetooth GPS receivers speak _classic_ Bluetooth rather than Bluetooth Low Energy: pair those in your operating system's settings and they appear here as a serial port. Use **Connect Bluetooth** only for Bluetooth Low Energy receivers.
 
-**Controls → Field Collection...** is the related tool for capturing observations against a custom form. See [Features](../features.md#field-data-collection).
+In the Android app the receiver is read natively instead, with no Chromium requirement: pick a receiver paired in Android's Bluetooth settings from **Paired receiver** and press **Connect receiver**. It connects over classic Bluetooth, so Bluetooth Low Energy-only devices are listed but cannot be connected. The app can also feed the receiver RTK corrections from an NTRIP caster; see [RTK corrections](field-collection.md#rtk-corrections-ntrip).
+
+Start GPS to follow your position, record a track log and save it as a layer or export it as GPX or GeoJSON, and capture points where you stand. **Controls → Field Collection...** is the related tool for capturing point, line, and polygon observations against a custom form. See [GPS Tracking & Field Collection](field-collection.md) for both.
 
 ## Map navigation basics
 

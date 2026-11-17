@@ -3,7 +3,7 @@
  * re-tints the accent-bearing tokens (`--primary`, `--primary-foreground`,
  * `--ring`); the neutral base (background, border, muted) is shared.
  *
- * Preset schemes have their token values baked into `packages/ui/src/globals.css`
+ * Preset schemes have their token values baked into `packages/ui/src/theme.css`
  * under `[data-theme="<id>"]` selectors and are selected via a `data-theme`
  * attribute on <html>. The "custom" scheme instead derives its tokens from a
  * user-picked hex color at runtime and injects them as inline styles on <html>
@@ -12,7 +12,7 @@
  */
 /**
  * Preset scheme ids, the single source of truth. Each one has a matching
- * `[data-theme="<id>"]` block in `globals.css` and an entry in `THEME_SCHEMES`.
+ * `[data-theme="<id>"]` block in `theme.css` and an entry in `THEME_SCHEMES`.
  * Deriving the type from this array keeps the three in sync: adding an id here
  * without a `THEME_SCHEMES` entry is a compile error (the array is typed against
  * the derived id), so persisted values can't silently fall back to the default.
@@ -26,9 +26,9 @@ export type ThemeScheme = PresetScheme | "custom";
 
 /**
  * The default scheme matches the base `:root` / `.dark` tokens already shipped in
- * `globals.css`, so no `data-theme` attribute is set for it. Invariant: if this
+ * `theme.css`, so no `data-theme` attribute is set for it. Invariant: if this
  * ever changes to another preset, add a `[data-theme="<old default>"]` block in
- * `globals.css` for the now-non-default scheme (see `applyThemeScheme`).
+ * `theme.css` for the now-non-default scheme (see `applyThemeScheme`).
  */
 export const DEFAULT_THEME_SCHEME: PresetScheme = "blue";
 
@@ -152,15 +152,14 @@ export function hexToHslChannels(hex: string): string | null {
 }
 
 /**
- * Pick a readable foreground (white or near-black, as HSL channels) for text
- * placed on `hex`, choosing whichever has the higher WCAG contrast ratio.
+ * Whether white text reads better than near-black on `hex`, by WCAG contrast
+ * ratio. `null` when `hex` is not a valid 3- or 6-digit hex colour.
  *
- * @param hex - The background color the foreground sits on.
+ * @param hex - The background color the text sits on.
  */
-export function foregroundForHex(hex: string): string {
+export function prefersLightForeground(hex: string): boolean | null {
   const digits = expandHex(hex);
-  // Fall back to white for invalid input (matches the default light-on-accent).
-  if (!digits) return "0 0% 100%";
+  if (!digits) return null;
 
   const linearize = (value: number) => {
     const channel = value / 255;
@@ -173,8 +172,19 @@ export function foregroundForHex(hex: string): string {
 
   const contrastWithWhite = 1.05 / (luminance + 0.05);
   const contrastWithBlack = (luminance + 0.05) / 0.05;
+  return contrastWithWhite >= contrastWithBlack;
+}
+
+/**
+ * Pick a readable foreground (white or near-black, as HSL channels) for text
+ * placed on `hex`, choosing whichever has the higher WCAG contrast ratio.
+ *
+ * @param hex - The background color the foreground sits on.
+ */
+export function foregroundForHex(hex: string): string {
+  // Fall back to white for invalid input (matches the default light-on-accent).
   // White text, or the palette's near-black foreground.
-  return contrastWithWhite >= contrastWithBlack ? "0 0% 100%" : "222.2 47.4% 11.2%";
+  return (prefersLightForeground(hex) ?? true) ? "0 0% 100%" : "222.2 47.4% 11.2%";
 }
 
 /** Accent tokens the custom scheme overrides inline (cleared on other schemes). */

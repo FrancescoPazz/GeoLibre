@@ -1,10 +1,12 @@
-import { useAppStore } from "@geolibre/core";
+import { unionLonLatExtents, useAppStore } from "@geolibre/core";
 import { type RefObject, useEffect } from "react";
 import { getLayerBounds, type MapEngine } from "@geolibre/map";
 import { imageBlobToDataUrl } from "@geolibre/map";
 import {
+  assertEmbedCapability,
   buildEmbedEvent,
   buildEmbedLayer,
+  createFeaturesChangeTracker,
   embedEventTargets,
   embedEventVersions,
   embedLayerSummaries,
@@ -17,10 +19,11 @@ import {
   type EmbedCommand,
   type EmbedEventType,
 } from "../lib/embed-api";
-import { fetchProjectFromUrl, startupProjectUrl, projectUrlFromLocation } from "../lib/project-url";
-import { shouldAwaitNativeMap } from "../lib/native-map-attach";
+import { readDrawnFeatures, readLayerFeatures } from "../lib/plugin-layer-queries";
+import { fetchProjectFromUrl, startupProjectUrl } from "../lib/project-url";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
 import { isKnownWhiteboxToolId } from "../lib/whitebox-tool-url";
+import { queueDataLoad } from "../lib/data-load-queue";
 import { loadDataUrl } from "./useDataUrlLoader";
 import type { createAppAPI } from "./usePlugins";
 
@@ -44,9 +47,10 @@ const VIEW_THROTTLE_MS = 250;
  * Bridges a framed GeoLibre with an arbitrary host page over a versioned
  * `postMessage` protocol.
  *
- * Host → app: `loadProject`, `setView`, `highlightFeature`, `openTool`.
+ * Host → app: `loadProject`, `setView`, `highlightFeature`, `openTool`,
+ * `getLayerFeatures`, `getDrawnFeatures`.
  * App → host: `ready`, `ack`, `projectLoaded`, `selectionChanged`,
- * `viewChanged`, `toolCompleted`, `serverFileWritten`.
+ * `viewChanged`, `toolCompleted`, `serverFileWritten`, `featuresChanged`.
  *
  * The hook is an inert no-op unless the app is framed AND the deployment
  * configured an origin allowlist (see {@link readEmbedOrigins}); a public build
@@ -128,16 +132,6 @@ export function useEmbedApi(
     let projectSourceUrl: string | null = startupProjectUrl();
     let loadAbort: AbortController | null = null;
     const dataLoadAborts = new Set<AbortController>();
-    let dataLoadQueue: Promise<void> = Promise.resolve();
-
-    const queueDataLoad = <T>(operation: () => Promise<T>): Promise<T> => {
-      const next = dataLoadQueue.then(operation, operation);
-      dataLoadQueue = next.then(
-        () => undefined,
-        () => undefined,
-      );
-      return next;
-    };
 
     const loadProjectFromUrl = async (url: string) => {
       // A second load supersedes the first; otherwise a slow fetch could land
@@ -150,8 +144,13 @@ export function useEmbedApi(
       if (abort.signal.aborted) return;
       projectSourceUrl = url;
       // Host-driven loads are transient deep links, like `?url=`: they are not
-      // added to the recent-projects list.
-      useAppStore.getState().loadProject(resolved, null, { rememberRecent: false });
+      // added to the recent-projects list. The embedding page (an origin the
+      // deployment allowlisted) picked this project for its own viewers, so its
+      // basemap is the host's choice and skips the regional-basemap prompt. A
+      // deployment block still applies.
+      useAppStore
+        .getState()
+        .loadProject(resolved, null, { rememberRecent: false, trustBasemap: true });
     };
 
     const applySetView = (command: Extract<EmbedCommand, { type: "setView" }>) => {
@@ -270,6 +269,7 @@ export function useEmbedApi(
           const result = await queueDataLoad(() =>
             loadDataUrl(mapAppAPI, command.url, {
               styleUrl: command.styleUrl,
+              dataType: command.dataType,
               signal: abort.signal,
               fit: command.fit,
             }),
@@ -281,12 +281,9 @@ export function useEmbedApi(
               .map(getLayerBounds)
               .filter((value) => value !== null);
             if (bounds.length) {
-              controller()?.fitBounds([
-                Math.min(...bounds.map((value) => value[0])),
-                Math.min(...bounds.map((value) => value[1])),
-                Math.max(...bounds.map((value) => value[2])),
-                Math.max(...bounds.map((value) => value[3])),
-              ]);
+              // Short way round the antimeridian, not a plain min/max (GeoLibre#3469).
+              const combined = unionLonLatExtents(bounds);
+              if (combined) controller()?.fitBounds(combined);
             }
           }
           return result.layerIds;
@@ -298,6 +295,12 @@ export function useEmbedApi(
           if (!engine) throw new Error("The map is not ready yet");
           return imageBlobToDataUrl(await engine.captureImage());
         }
+        case "getLayerFeatures":
+          assertEmbedCapability(useAppStore.getState().deploymentCapabilities, "export:data");
+          return readLayerFeatures(useAppStore.getState().layers, command.layerId);
+        case "getDrawnFeatures":
+          assertEmbedCapability(useAppStore.getState().deploymentCapabilities, "export:data");
+          return readDrawnFeatures(useAppStore.getState().layers);
       }
     };
 
@@ -339,6 +342,19 @@ export function useEmbedApi(
     let prevSelectedLayer = store.selectedLayerId;
     let prevSelection = store.selectedFeatureIds.join(" ");
     const emittedRuns = new Set(store.processingHistory.map((run) => run.id));
+    // Debounced per layer so a vertex drag is one event, not one per mouse move.
+    // Emits through `emit`, so it shares the allowlist and version handling.
+    const featuresTracker = createFeaturesChangeTracker(
+      (change) => {
+        // Feature data is what `getLayerFeatures` and `getDrawnFeatures` return, so a deployment that
+        // denies `export:data` must not get the change feed either.
+        if (!useAppStore.getState().deploymentCapabilities.has("export:data")) return;
+        emit("featuresChanged", { ...change });
+      },
+      () => useAppStore.getState().layers,
+    );
+    featuresTracker.reset(store.layers);
+    let prevLayers = store.layers;
 
     const unsubscribe = useAppStore.subscribe((state) => {
       if (state.primaryRenderer !== prevRenderer) {
@@ -347,11 +363,19 @@ export function useEmbedApi(
       }
       if (state.projectGeneration !== prevGeneration) {
         prevGeneration = state.projectGeneration;
+        // A loaded project replaces every layer; `projectLoaded` covers that,
+        // so re-baseline instead of reporting each replaced layer as an edit.
+        featuresTracker.reset(state.layers);
+        prevLayers = state.layers;
         emit("projectLoaded", {
           url: projectSourceUrl,
           name: state.projectName,
           layerIds: state.layers.map((layer) => layer.id),
         });
+      }
+      if (state.layers !== prevLayers) {
+        prevLayers = state.layers;
+        featuresTracker.update(state.layers);
       }
       const selection = state.selectedFeatureIds.join(" ");
       if (selection !== prevSelection || state.selectedLayerId !== prevSelectedLayer) {
@@ -445,6 +469,7 @@ export function useEmbedApi(
       disposed = true;
       window.removeEventListener("message", handleMessage);
       unsubscribe();
+      featuresTracker.reset();
       loadAbort?.abort();
       for (const abort of dataLoadAborts) abort.abort();
       dataLoadAborts.clear();

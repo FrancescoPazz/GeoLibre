@@ -96,8 +96,9 @@ export interface CesiumCanvasProps {
   /**
    * Cesium Ion asset id of a terrain to load instead of Cesium World Terrain,
    * for a deployment that uploaded its own DTM to Ion. Needs `ionToken` — the
-   * asset is private to the token — and is otherwise ignored. The app injects
-   * this from the CESIUM_TERRAIN_ASSET_ID env var; parents key the canvas on it
+   * asset is private to the token — and is otherwise ignored. A terrain asset
+   * chosen in the project (`preferences.map.terrainIonAssetId`) takes
+   * precedence. The app injects this from the CESIUM_TERRAIN_ASSET_ID env var; parents key the canvas on it
    * the way they key on the token, since the engine reads it once at mount.
    */
   terrainAssetId?: number;
@@ -275,6 +276,7 @@ export const CesiumCanvas = memo(function CesiumCanvas({
   const basemapStyleUrl = useAppStore((s) => s.basemapStyleUrl);
   const cesiumBasemap = useAppStore((s) => s.preferences.map.cesiumBasemap);
   const terrainEnabled = useAppStore((s) => s.preferences.map.terrainEnabled);
+  const terrainIonAssetId = useAppStore((s) => s.preferences.map.terrainIonAssetId);
   // Select only the fields the globe applies: setPreferences replaces the whole
   // preferences tree, so the `map` object changes on unrelated saves too.
   const mapProjection = useAppStore((s) => s.preferences.map.projection);
@@ -433,9 +435,14 @@ export const CesiumCanvas = memo(function CesiumCanvas({
         // for the whole mount, exactly as the hand-rolled versions were.
         const engine = new CesiumEngine(Cesium, viewer, {
           globeAppearance: getGlobeAppearanceDefaults(),
+          ionToken: token,
+          // The project's own terrain asset, else the deployment's.
+          terrainIonAssetId:
+            useAppStore.getState().preferences.map.terrainIonAssetId ??
+            terrainAssetIdRef.current ??
+            null,
           viewId: viewIdRef.current,
           worldTerrainAvailable: Boolean(token),
-          terrainIonAssetId: terrainAssetIdRef.current,
 
           onDiagnostic: (event) => onMapDiagnosticEventRef.current?.(event),
         });
@@ -455,7 +462,10 @@ export const CesiumCanvas = memo(function CesiumCanvas({
         if (cancelled || viewer.isDestroyed()) return;
 
         if (viewId === undefined) {
-          const host = new CesiumControlHost(viewer, container, Cesium);
+          const host = new CesiumControlHost(viewer, container, Cesium, {
+            identify: (lngLat, layerId) => engine.identifyFeatures(lngLat, layerId),
+            fitBounds: (bounds) => engine.fitBounds(bounds),
+          });
           controlHostRef.current = host;
           setPrimaryCesiumControlHost(host);
           // Cesium's native toolbar widgets. Imported
@@ -610,6 +620,15 @@ export const CesiumCanvas = memo(function CesiumCanvas({
     const enabled = terrainEnabled;
     if (engine.isTerrainEnabled() !== enabled) engine.setTerrainEnabled(enabled);
   }, [ready, terrainEnabled, ionToken]);
+
+  // An Ion terrain selection is project state, so changing it while the globe
+  // is mounted replaces the provider without rebuilding the widget.
+  useEffect(() => {
+    if (!ready) return;
+    void engineInstanceRef.current?.setTerrainIonAssetId?.(
+      terrainIonAssetId ?? terrainAssetIdRef.current ?? null,
+    );
+  }, [ready, terrainIonAssetId]);
 
   // Push project map preferences (min/max zoom, projection) onto the engine.
   useEffect(() => {

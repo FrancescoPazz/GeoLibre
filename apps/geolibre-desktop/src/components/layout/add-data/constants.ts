@@ -22,7 +22,9 @@ export type KindI18nKey =
   | "ogcVectorTiles"
   | "gpx"
   | "landxml"
+  | "indoorgml"
   | "georss"
+  | "geoBoundaries"
   | "delimitedText"
   | "cad"
   | "gdb"
@@ -31,6 +33,7 @@ export type KindI18nKey =
   | "polyline"
   | "arcgis"
   | "postgres"
+  | "mssql"
   | "iceberg"
   | "deckglViz"
   | "video"
@@ -57,7 +60,9 @@ export const KIND_I18N_KEY: Record<
   "ogc-vector-tiles": "ogcVectorTiles",
   gpx: "gpx",
   landxml: "landxml",
+  indoorgml: "indoorgml",
   georss: "georss",
+  geoboundaries: "geoBoundaries",
   "delimited-text": "delimitedText",
   cad: "cad",
   gdb: "gdb",
@@ -66,6 +71,7 @@ export const KIND_I18N_KEY: Record<
   polyline: "polyline",
   arcgis: "arcgis",
   postgres: "postgres",
+  mssql: "mssql",
   iceberg: "iceberg",
   "deckgl-viz": "deckglViz",
   video: "video",
@@ -85,6 +91,9 @@ export const DEFAULT_WMS_LAYERS = "USGSNAIPImagery:FalseColorComposite";
 // attribution and must not be used for navigation. See gebco.net/data-products.
 export const GEBCO_WMS_ENDPOINT = "https://wms.gebco.net/mapserv";
 export const GEBCO_WMS_LAYERS = "GEBCO_LATEST";
+/** USGS MRLC NLCD 2021 land cover (CONUS); its capabilities advertise a legend. */
+export const NLCD_WMS_ENDPOINT = "https://www.mrlc.gov/geoserver/mrlc_display/wms";
+export const NLCD_WMS_LAYERS = "NLCD_2021_Land_Cover_L48";
 // GEBCO's license requires its imagery credit the source. `attributionForTileUrl`
 // (helpers) attaches this to any GEBCO WMS layer, however it was added (the sample
 // below or a hand-pasted wms.gebco.net URL).
@@ -146,6 +155,24 @@ export const LANDXML_SAMPLES: readonly {
     crs: "EPSG:27700",
   },
 ];
+/**
+ * IndoorGML samples (issue #3341). FJK-Haus is STEMLab's IndoorGML 1.0.3 model
+ * of the KIT FZK-Haus (MIT licence), in UTM zone 32N with no `srsName`, so the
+ * CRS is given here.
+ */
+export const INDOORGML_SAMPLES: readonly {
+  label: string;
+  name: string;
+  url: string;
+  crs: string;
+}[] = [
+  {
+    label: "FJK-Haus (IndoorGML 1.0, UTM 32N)",
+    name: "FJK-Haus",
+    url: "https://data.source.coop/giswqs/opengeos/FJK-Haus_IndoorGML.gml",
+    crs: "EPSG:25832",
+  },
+];
 // USGS "Magnitude 2.5+ Earthquakes, Past Day" Atom feed (Simple georss:point).
 export const DEFAULT_GEORSS_URL =
   "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.atom";
@@ -196,6 +223,8 @@ export const WFS_PROXY_PATH = "/__geolibre_wfs_proxy";
 // service-library.ts). Bumping the key would orphan a user's saved services.
 export const SERVICE_LIBRARY_STORAGE_KEY = "geolibre.serviceLibrary";
 export const MAX_SAVED_SERVICES = 200;
+// Ids of built-in presets the user deleted from the service library.
+export const HIDDEN_BUILTIN_SERVICES_STORAGE_KEY = "geolibre.serviceLibrary.hiddenBuiltins";
 // Last File Geodatabase (and feature class) added through the GDB source, so
 // reopening the panel restores the selection instead of starting blank.
 export const LAST_GEODATABASE_STORAGE_KEY = "geolibre.lastGeodatabase";
@@ -279,6 +308,69 @@ export const CSW_SAMPLES: readonly {
     label: "Nationaal Georegister (Netherlands)",
     endpoint: "https://nationaalgeoregister.nl/geonetwork/srv/dut/csw",
     keyword: "WMS",
+  },
+];
+
+/** A public Zarr store the Add Zarr Layer form can fill itself in with. */
+export interface ZarrSample {
+  label: string;
+  url: string;
+  variable: string;
+  clim: [number, number];
+  /** A GeoLibre ramp name (see `VECTOR_COLOR_RAMPS`). */
+  colormap: string;
+  /** Array indices for the non-spatial dimensions, as the Time Slider writes them. */
+  selector?: Record<string, number>;
+}
+
+// Samples for the Add Zarr Layer form on the 3D globe (opengeos/GeoLibre#2261).
+// Each is a public, CORS-enabled store in EPSG:4326 or EPSG:3857 with
+// longitudes in -180..180, which is what the globe's zarr-cesium provider can
+// place (a 0..360 grid such as NOC's ERA5 hurricane store draws nothing). They
+// cover the layouts it reads: a single-scale v2 cube with an int64 CF time axis
+// (NOAA, which also binds to the Time Slider), a v2 ndpyramid with band/month
+// dimensions (CarbonPlan), and v2 and v3 multiscale ocean model output with
+// depth (NOC's NEMO runs, from zarr-cesium's own demo). Labels name the dataset
+// and its publisher, so like CAD_SAMPLES above they stay untranslated.
+export const ZARR_GLOBE_SAMPLES: readonly ZarrSample[] = [
+  {
+    label: "Sea surface temperature, monthly 1981-2023 (NOAA OISST)",
+    url: "https://data.source.coop/opengeos/data/zarr/noaa-oisst-v2-monthly.zarr",
+    variable: "sst",
+    clim: [-2, 32],
+    colormap: "turbo",
+  },
+  {
+    label: "Air temperature, January climatology (CarbonPlan)",
+    url: "https://carbonplan-maps.s3.us-west-2.amazonaws.com/v2/demo/4d/tavg-prec-month",
+    variable: "climate",
+    clim: [-20, 30],
+    colormap: "coolwarm",
+    // band 0 is `tavg` (band 1 is `prec`); month 0 is January.
+    selector: { band: 0, month: 0 },
+  },
+  {
+    label: "Precipitation, July climatology (CarbonPlan)",
+    url: "https://carbonplan-maps.s3.us-west-2.amazonaws.com/v2/demo/4d/tavg-prec-month",
+    variable: "climate",
+    clim: [0, 300],
+    colormap: "blues",
+    selector: { band: 1, month: 6 },
+  },
+  {
+    label: "Ocean temperature at the surface, yearly (NOC NEMO eORCA025)",
+    url: "https://atlantis-vis-o.s3-ext.jc.rl.ac.uk/noc-npd-era5-demo/npd-eorca025-era5v1/gn/T1y_4d/thetao_con",
+    variable: "thetao_con",
+    clim: [0, 30],
+    colormap: "plasma",
+    selector: { deptht: 0, time: 0 },
+  },
+  {
+    label: "Sea surface salinity, daily (NOC NEMO eORCA1)",
+    url: "https://atlantis-vis-o.s3-ext.jc.rl.ac.uk/nemotest101/pyramid2/T1d/sos_abs.zarr",
+    variable: "sos_abs",
+    clim: [30, 37],
+    colormap: "viridis",
   },
 ];
 

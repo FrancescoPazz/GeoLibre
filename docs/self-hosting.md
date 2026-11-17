@@ -136,24 +136,42 @@ time and strip the prefix in your proxy:
 docker build --build-arg GEOLIBRE_APP_BASE=/gis/ -t geolibre-private .
 ```
 
-Settings that matter for a private deployment:
+The recommended deployment contract is the runtime [`deployment.json` policy](deployment-policy.md).
+On Docker, `GEOLIBRE_DEPLOYMENT_FILE` selects a read-only source file (for
+example `/etc/geolibre/deployment.json`); startup strictly validates it, then
+applies nonblank environment overrides field by field and writes generated
+policy at `/usr/share/nginx/html/deployment.json`, served at `/deployment.json`.
+Never mount the source over that generated output. Without a source or
+overrides, startup generates `{"version":1}`. The client resolves policy,
+runtime environment, then build environment. Docker nginx enforces only its
+generated final policy; build-only grants do not configure its guards.
 
-| Variable                                             | Recommended value                                                      | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ---------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GEOLIBRE_SHARE_URL`                                 | `off`, or your own server                                              | `off` removes Share and the Project Gallery entirely, so no project can be published to `share.geolibre.app` by accident. A URL points both at your own [projects server](server-api.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `GEOLIBRE_COLLAB_URL`                                | unset, or your own relay                                               | Unset leaves [live collaboration](collaboration.md) dark. Set it to a `wss://` relay you run if you want multiplayer editing without the hosted relay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `GEOLIBRE_GEOLENS_URL`                               | unset for the image default, `same-origin`, your GeoLens URL, or `off` | Pre-fills and automatically connects the GeoLens plugin. The stock image defaults to the browser origin, which suits a GeoLens API co-located behind the same reverse proxy. A URL must be a server root without a query or fragment. `off` keeps the panel idle until the user chooses a server. The last successful server is remembered per browser.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `GEOLIBRE_AUTH_USER` / `GEOLIBRE_AUTH_PASSWORD`      | set, for a quick single credential                                     | nginx Basic Auth over the app and the `/sidecar` API. One shared credential, not accounts. Use a real auth proxy for multi-user or SSO.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `GEOLIBRE_CLERK_PUBLISHABLE_KEY`                     | unset, or a Clerk publishable key                                      | Unset keeps the app public and does not load Clerk. A key requires individual users to sign in before the web interface renders; protect server APIs separately.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `GEOLIBRE_CLERK_WAITLIST`                            | unset, or `1` alongside a Clerk key                                    | Adds Clerk's waitlist form to the sign-in screen, so visitors can request access and you approve each one from the Clerk Dashboard. Leave unset for an invite-only ("restricted") instance, where nothing would act on a request.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `GEOLIBRE_AUTH0_DOMAIN` / `GEOLIBRE_AUTH0_CLIENT_ID` | unset, or both, if you use Auth0 instead of Clerk                      | The same sign-in gate backed by Auth0 Universal Login. Both are required together, and the container refuses to start if Clerk is configured as well — pick one provider.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `GEOLIBRE_CONVERSION_ROOTS`                          | `/data` (the image default)                                            | Confines every sidecar read and write to the mounted directory.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `GEOLIBRE_POSTGIS_HOSTS`                             | unset unless needed                                                    | The sidecar's PostGIS endpoints refuse every destination until this names the allowed databases, so a caller cannot aim them at hosts only the container can reach.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `GEOLIBRE_DISABLE_SIDECAR`                           | `1` if you do not need it                                              | Runs nginx only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `GEOLIBRE_EMBED_ORIGINS`                             | unset, or the exact host page origin                                   | Off by default, so a framed deployment cannot be driven by whoever frames it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `GEOLIBRE_NO_EXTERNAL_CDN` (build arg)               | `1` for restricted deployments                                         | Strips GeoLibre's own references to external CDNs (`unpkg.com`, `cdn.jsdelivr.net`) from the build output. Features whose assets are only available from a CDN are disabled or degraded: storymap HTML export, built-in object detection models, ONNX WASM, 3D Tiles Draco/KTX2 decoders, and gdal3.js export. Pyodide is not hard-disabled — the flag drops only its default index URL, so setting `VITE_PYODIDE_INDEX_URL` to an approved mirror keeps it working. Also forces `GEOLIBRE_PGLITE_CDN=0`, `GEOLIBRE_CEREUS_CDN=0`, `GEOLIBRE_GDAL_CDN=0`, and `GEOLIBRE_DUCKDB_WASM_CDN=0` — so PGlite/PostGIS, CereusDB, and DuckDB-WASM stay **available**, vendored into the build under `/assets/` (at a larger build size) rather than fetched. Note that some third-party packages (DuckDB-WASM, loaders.gl, maplibre-gl-3d-tiles) carry their own internal CDN URLs that this flag cannot remove; see [architecture.md](architecture.md) for the details. Intended for deployments that cannot reference untrusted external CDNs (e.g. enterprise environments with strict CSP requirements). |
-| `VITE_WELCOME_DISABLED=1` (build arg)                | optional                                                               | Skips the first-launch wizard for every visitor.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `VITE_GEOLIBRE_CAPABILITIES` (build arg)             | unset, or the capabilities to grant                                    | Unset grants everything (today's behavior). Naming a subset — or `none` — pins what the interface offers: adding data, processing, export, plugins, settings, project authoring. Removes affordances only; it is not a server-side restriction. See [Deployment Capabilities](deployment-capabilities.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Variable | Recommended value | Effect |
+| --- | --- | --- |
+| `GEOLIBRE_DEPLOYMENT_FILE` | unset, or mounted source policy | Validated at boot; generated public file is `/usr/share/nginx/html/deployment.json`, served at `/deployment.json`. |
+| `GEOLIBRE_CAPABILITIES` | unset, or capabilities to grant | Runtime field override; `none` grants none. Unknown names stop boot. Final generated policy controls nginx sidecar guards and sidecar startup. |
+| `GEOLIBRE_AI_URL` / `GEOLIBRE_AI_PROXY_URL` / `GEOLIBRE_AI_PROXY_TOKEN` | unset, or approved proxy trio | `GEOLIBRE_AI_URL=/ai` overrides policy to enable AI. The proxy URL must be an HTTPS origin without credentials/path/query/fragment; token only `[A-Za-z0-9._-]`. Missing or invalid configuration stops boot. Keep upstream URL and token private. |
+| `VITE_GEOLIBRE_CAPABILITIES` (legacy build arg; still honoured) | unset, or capabilities to grant | Client fallback only; does not configure nginx guards. |
+| `GEOLIBRE_AI_MODEL` | optional, with `GEOLIBRE_AI_URL` | Overrides policy model only when `GEOLIBRE_AI_URL` is set. |
+| `GEOLIBRE_COLLAB_URL` | unset, or your own relay | Unset leaves [live collaboration](collaboration.md) dark. Set it to a `wss://` relay you run if you want multiplayer editing without the hosted relay. |
+| `GEOLIBRE_PROJECT_STORAGE` | unset (`local`), or `server` | When set to `server`, projects save to and open from the configured projects server (`GEOLIBRE_SHARE_URL`) by default instead of local `.geolibre` files: Save uploads a private project to the server, and the Open shortcut (Ctrl/Cmd+O) opens the Gallery on your projects instead of a local file picker. **Open from › File…** in the Project menu still opens a local `.geolibre` file. Requires `GEOLIBRE_SHARE_URL` to be set and not `off`. |
+| `GEOLIBRE_GEOLENS_URL` | unset for the image default, `same-origin`, your GeoLens URL, or `off` | Pre-fills and automatically connects the GeoLens plugin. The stock image defaults to the browser origin, which suits a GeoLens API co-located behind the same reverse proxy. A URL must be a server root without a query or fragment. `off` keeps the panel idle until the user chooses a server. The last successful server is remembered per browser. |
+| `GEOLIBRE_OVERPASS_URL` | unset for the public relay, or your own Overpass API interpreter URL | Points the OSM downloader (and the OSM-backed God's Eye View feeds) at an Overpass instance you run or trust, such as `https://overpass.example.com/api/interpreter`, instead of the public relay `https://tiles.geolibre.app/overpass`. Must be `https://` on a DNS name or IPv4 address without credentials, a query, or a fragment; anything else fails the boot. Browsers call it directly, so it must be reachable from every viewer and allow the GeoLibre origin via CORS (or be proxied under the GeoLibre origin). Plain `http://` is rejected, even on loopback, because the web CSP allows `https:` only. A configured endpoint never falls back to `api.openstreetmap.org`. |
+| `GEOLIBRE_AUTH_USER` / `GEOLIBRE_AUTH_PASSWORD` | set, for a quick single credential | nginx Basic Auth over the app and the `/sidecar` API. One shared credential, not accounts. Use a real auth proxy for multi-user or SSO. |
+| `GEOLIBRE_CLERK_PUBLISHABLE_KEY` | unset, or a Clerk publishable key | Unset keeps the app public and does not load Clerk. A key requires individual users to sign in before the web interface renders; protect server APIs separately. |
+| `GEOLIBRE_CLERK_WAITLIST` | unset, or `1` alongside a Clerk key | Adds Clerk's waitlist form to the sign-in screen, so visitors can request access and you approve each one from the Clerk Dashboard. Leave unset for an invite-only ("restricted") instance, where nothing would act on a request. |
+| `GEOLIBRE_AUTH0_DOMAIN` / `GEOLIBRE_AUTH0_CLIENT_ID` | unset, or both, if you use Auth0 instead of Clerk | The same sign-in gate backed by Auth0 Universal Login. Both are required together, and the container refuses to start if Clerk is configured as well — pick one provider. |
+| `GEOLIBRE_CONVERSION_ROOTS` | `/data` (the image default) | Confines every sidecar read and write to the mounted directory. |
+| `GEOLIBRE_POSTGIS_HOSTS` | unset unless needed | The sidecar's PostGIS endpoints refuse every destination until this names the allowed databases, so a caller cannot aim them at hosts only the container can reach. |
+| `GEOLIBRE_MSSQL_HOSTS` | unset unless needed | Enables SQL Server endpoints only for the listed hosts/IPs and optional ports. Requires a derived image with the `mssql` extra and separately installed ODBC Driver 18; named instances require a host-only entry. |
+| `GEOLIBRE_DB_MAX_FEATURES` | unset (1,000,000) | The most features an editable PostGIS or SQL Server layer may load and save back. Each such layer travels whole as one GeoJSON response and is diffed whole on save, so raise it only as far as the sidecar's and the browser's memory allow (reading a 1.2M-point table produces about 190 MB of GeoJSON and peaks near 2 GB of sidecar memory). On a shared deployment, where several people can read at once, consider lowering it. |
+| `GEOLIBRE_MSSQL_ALLOW_MANAGED_IDENTITY` | unset unless needed | Managed identity authentication is disabled, because it signs in as the container's own Azure identity for every caller sharing the sidecar. Set to `1` only when the sidecar is single-tenant and its identity should back database access. `GEOLIBRE_MSSQL_DESKTOP_AUTH=1`, which also enables Windows and interactive Entra sign-in, implies this opt-in, so never set it on a shared sidecar. |
+| `GEOLIBRE_DISABLE_REGIONAL_BASEMAPS` | unset, or `1`/`true` to disable them | Disables the regional basemaps (Amap and Tencent), whose tiles are served from mainland China: the basemap dialogs hide them and a project that names one opens on the default basemap with a notice instead of a prompt. `1` or `true` (any case) sets `basemaps.regional: false` in the generated policy; `0` or `false` sets `true`, overriding the policy file. Any other nonblank value fails the boot. `VITE_GEOLIBRE_DISABLE_REGIONAL_BASEMAPS` is the equivalent build arg. See [Deployment Policy: Regional basemaps](deployment-policy.md#regional-basemaps). |
+| `GEOLIBRE_DISABLE_SIDECAR` | `1` if you do not need it | Skips uvicorn regardless of capabilities; every `/sidecar/` request returns HTTP 403 with an `application/json` detail response. |
+| `GEOLIBRE_EMBED_ORIGINS` | unset, or the exact host page origin | Off by default, so a framed deployment cannot be driven by whoever frames it. |
+| `GEOLIBRE_NO_EXTERNAL_CDN` (build arg) | `1` for restricted deployments | Strips GeoLibre's own references to external CDNs (`unpkg.com`, `cdn.jsdelivr.net`) from the build output. Features whose assets are only available from a CDN are disabled or degraded: storymap HTML export, built-in object detection models, ONNX WASM, 3D Tiles Draco/KTX2 decoders, gdal3.js export, and the Mapbox renderer. Pyodide is not hard-disabled — the flag drops only its default index URL, so setting `VITE_PYODIDE_INDEX_URL` to an approved mirror keeps it working. Also forces `GEOLIBRE_PGLITE_CDN=0`, `GEOLIBRE_CEREUS_CDN=0`, `GEOLIBRE_GDAL_CDN=0`, and `GEOLIBRE_DUCKDB_WASM_CDN=0` — so PGlite/PostGIS, CereusDB, and DuckDB-WASM stay **available**, vendored into the build under `/assets/` (at a larger build size) rather than fetched. Note that some third-party packages (DuckDB-WASM, loaders.gl, maplibre-gl-3d-tiles) carry their own internal CDN URLs that this flag cannot remove; see [architecture.md](architecture.md) for the details. Intended for deployments that cannot reference untrusted external CDNs (e.g. enterprise environments with strict CSP requirements). |
+| `GEOLIBRE_APP_NAME` | optional, e.g. `Acme Maps` | Replaces "GeoLibre" at the start of the toolbar and in the browser tab title. Whitespace runs collapse to one space and the name is capped at 60 characters. `VITE_GEOLIBRE_APP_NAME` is the equivalent build arg. |
+| `VITE_WELCOME_DISABLED=1` (build arg) | optional | Skips the first-launch wizard for every visitor. |
 
 See [Getting Started](getting-started.md#run-with-docker) for the full list.
 
@@ -163,6 +181,55 @@ See [Getting Started](getting-started.md#run-with-docker) for the full list.
 another port. On a public host that lets the served JavaScript probe each
 visitor's loopback interface. Drop those allowances from the CSP for a
 public deployment.
+
+### Container policy enforcement
+
+The container uses the final deployment policy, after environment overrides,
+to guard these route families at nginx. Each row is an **any-of** check: at
+least one listed capability must be granted.
+
+| Sidecar route prefix | Required capability (any of) |
+| --- | --- |
+| `/sidecar/whitebox` | `processing:run` |
+| `/sidecar/raster` | `processing:run` |
+| `/sidecar/vector` | `processing:run` |
+| `/sidecar/pointcloud` | `processing:run` |
+| `/sidecar/ml` | `processing:run` |
+| `/sidecar/sql` | `processing:run` |
+| `/sidecar/postgis` | `data:add` |
+| `/sidecar/mssql` | `data:add` |
+| `/sidecar/conversion` | `processing:run` **or** `data:add` |
+
+A denied route returns HTTP 403 with an `application/json` body containing
+`detail`, rather than reaching the sidecar. Omitting `capabilities` grants all
+capabilities. If the final grant contains neither `processing:run` nor
+`data:add`, uvicorn is not started and all `/sidecar/` requests return that JSON
+403 response. `GEOLIBRE_DISABLE_SIDECAR=1` does the same regardless of the grant.
+
+When uvicorn runs, `/health`, `/algorithms`, `/shutdown`, `/run`, `/docs`,
+`/redoc`, and `/openapi.json` remain unguarded by capability grants. This is a
+route-family policy, not per-method authorization. Guards use nginx's normalized
+URI, including duplicate-slash merging and percent-decoded prefixes.
+
+The final policy also controls `/ai`: `ai.enabled: false`, or an absent
+`ai.enabled`, disables the proxy. Enabling it requires all three values:
+`GEOLIBRE_AI_URL=/ai`, `GEOLIBRE_AI_PROXY_URL=https://<approved-origin>`, and
+`GEOLIBRE_AI_PROXY_TOKEN=<instance-token>`. The URL must be an HTTPS origin
+without credentials, path, query or fragment; the token may contain only
+`[A-Za-z0-9._-]`. Missing or invalid configuration stops boot.
+`GEOLIBRE_AI_URL=/ai` overrides a mounted false value; upstream URL/token alone
+do not enable AI. `GEOLIBRE_AI_MODEL` overrides policy only when
+`GEOLIBRE_AI_URL` is set. Keep proxy credentials, sidecar token, trusted
+proxies, Basic Auth and CSP private; only public policy belongs in the generated
+file.
+
+!!! warning "Container guards are not general authorization"
+    These restrictions apply only to the bundled container's nginx routes.
+    They do not enforce capabilities on browser WASM engines, desktop
+    processing, or separately exposed services. Keep the sidecar and AI
+    upstream private behind nginx, retain filesystem confinement, and use
+    Basic Auth or a real auth proxy for user authentication. Client-side
+    hiding alone is not an authorization boundary.
 
 ### Putting both behind one auth layer
 
@@ -227,6 +294,74 @@ they are gated by the forward-auth layer alone.
 The project deep link is validated as an absolute `http(s)` URL, so
 `?url=/projects/watershed.geolibre.json` is ignored. Write the full URL, as
 above. It is still same-origin, so the session cookie is still sent.
+
+#### Passing the signed-in user to the projects server
+
+If you also run the [projects server](server-api.md) (`geolibre-server` in
+`docker-compose.yml`), the same proxy can sign users in to it, so Share and the
+Project Gallery need no separate GeoLibre password. The server trusts the
+proxy's `Remote-User` and `Remote-Email` headers on its sign-in (consent) page
+once `GEOLIBRE_PROXY_AUTH=true`, and only on connections from an address listed
+in `GEOLIBRE_TRUSTED_PROXIES`:
+
+1. Set `GEOLIBRE_PROXY_AUTH=true` and set `GEOLIBRE_TRUSTED_PROXIES` to the
+   address the projects server sees the proxy connect from: a comma-separated
+   list of IPs or CIDRs, such as the proxy container's IP or a Docker network
+   that contains only the proxy and the server. Every other peer's identity
+   headers are ignored. `GEOLIBRE_TRUSTED_PROXIES` alone only trusts the
+   proxy's `X-Forwarded-For`.
+2. Bind the projects server so only the proxy can reach it. The Compose file
+   publishes it on `127.0.0.1` only; drop that port entirely when the proxy runs
+   in the same Compose network.
+3. The proxy **must strip identity headers sent by the client**. Otherwise
+   anyone who reaches a route where the proxy does not overwrite them can claim
+   to be any user.
+
+The projects server answers on `/api/*` like GeoLens does, so give it its own
+hostname and point the web image's `GEOLIBRE_SHARE_URL` (and the server's
+`GEOLIBRE_PUBLIC_URL`) at it. Only the consent page goes through forward auth:
+the app calls the token endpoint and the API cross-origin with bearer tokens,
+and a login redirect there would break them.
+
+```caddyfile
+projects.example.org {
+    # Drop client-sent identity headers before anything else runs. Caddy orders
+    # request_header ahead of handle, so this precedes the forward_auth below.
+    request_header -Remote-User
+    request_header -Remote-Email
+
+    # The consent page: forward auth sets the headers for the signed-in user.
+    handle /oauth/authorize {
+        forward_auth authelia:9091 {
+            uri /api/verify?rd=https://auth.example.org
+            copy_headers Remote-User Remote-Email
+        }
+        reverse_proxy geolibre-server:8000
+    }
+
+    # `handle`, not `handle_path`: the server expects the /oauth and /api prefixes.
+    handle /oauth/* {
+        reverse_proxy geolibre-server:8000
+    }
+
+    handle /api/* {
+        reverse_proxy geolibre-server:8000
+    }
+}
+```
+
+Signing in from the app then opens a consent page that names the proxy user
+(`Signed in through your organization's proxy as …`) and asks only for the
+device label. The first sign-in creates the account. If your proxy uses other
+header names (oauth2-proxy sends `X-Forwarded-User` and `X-Forwarded-Email`),
+set `GEOLIBRE_PROXY_USER_HEADER` and `GEOLIBRE_PROXY_EMAIL_HEADER` and strip
+those names instead. See
+[Trusted-header proxy sign-in](server-api.md#trusted-header-proxy-sign-in) for
+the full contract.
+
+The nginx Basic Auth built into the web image (`GEOLIBRE_AUTH_USER` /
+`GEOLIBRE_AUTH_PASSWORD`) is not a substitute: it is a single shared
+credential, so it cannot tell the projects server who the visitor is.
 
 ## 3. Connect GeoLibre to GeoLens
 
@@ -327,8 +462,9 @@ The project fetch and every layer fetch is now cross-origin, so:
   signed tile URL, or your own HMAC scheme), because MapLibre's own tile requests
   cannot carry a custom header that GeoLibre has not been told about. The GeoLens
   plugin is the exception on the header path: it sends `X-Api-Key` on its API
-  calls, and attaches it to that dataset's raster tiles through MapLibre's
-  `transformRequest` hook.
+  calls, and registers it for that dataset's raster tiles with the request
+  headers GeoLibre adds to MapLibre tile requests (plugins can do the same with
+  `setLayerRequestHeaders`).
 - **Tokens in URLs leak** into browser history, proxy logs, referrer headers, and
   anything the user copies and pastes. Keep expiries short and scope each token
   to one dataset.
@@ -364,24 +500,30 @@ against a private, authenticated, same-origin host:
   workflow: download from the community server, analyze offline.
 - **The sidecar.** If you enable the bundled Python sidecar, keep
   `GEOLIBRE_CONVERSION_ROOTS` pointed at exactly the directory you mounted, and
-  leave `GEOLIBRE_POSTGIS_HOSTS` unset unless you need those endpoints.
+  leave `GEOLIBRE_POSTGIS_HOSTS` and `GEOLIBRE_MSSQL_HOSTS` unset unless you need
+  those endpoints; SQL Server also requires a derived image with pyodbc and
+  ODBC Driver 18 installed.
 
 ## Reducing outbound requests
 
 A private deployment usually also wants to minimize what the browser fetches from
-the public internet:
+the public internet. [Network Endpoints](network-endpoints.md) lists every host
+by feature and says which are contacted at startup. The main ones are below; the
+**Default provider** column is what each feature uses out of the box, and most
+of them (geocoding and routing, for example) are contacted only when the feature
+is used:
 
-| Feature                        | Default                                                                          | How to keep it internal                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ------------------------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Basemaps                       | OpenFreeMap / CARTO tiles                                                        | Use the Basemaps plugin's **custom style URL** and serve your own style plus a PMTiles basemap from your server, or use a blank background. Add the host to the CSP if it is not your own origin.                                                                                                                                                                                                                                                                                                                     |
-| Geocoding                      | Public Nominatim                                                                 | Point it at a self-hosted Nominatim or Pelias (see [Data Integrations](user-guide/data-integrations.md#geocoding)).                                                                                                                                                                                                                                                                                                                                                                                                   |
-| Routing and isochrones         | Public FOSSGIS Valhalla (`valhalla1.openstreetmap.de`)                           | Set `VITE_ROUTING_ENDPOINT` to your own Valhalla server. This covers Processing → GeoLibre Toolbox → Network and the **Drive time** / **Walk time** [quick actions](user-guide/map-controls.md#quick-analysis-from-a-clicked-point). Add the host to the CSP.                                                                                                                                                                                                                                                         |
-| Pointer elevation readout      | Public Open-Meteo elevation API, whenever 3D terrain has no sample for the point | Leave the readout off (it is off by default), or decline the consent prompt GeoLibre shows before the first remote lookup — that is the gate the resolver checks. Enabling 3D terrain makes the remote call rare but does not rule it out, since a point terrain cannot answer still falls through.                                                                                                                                                                                                                   |
-| Python (Pyodide) vector engine | Loads Pyodide from jsDelivr                                                      | Set `VITE_PYODIDE_INDEX_URL` to a mirrored copy of the Pyodide distribution.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| AI assistant                   | Off unless configured                                                            | Leave `GEOLIBRE_AI_URL` unset, or route it through your own proxy.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Project sharing                | `share.geolibre.app`                                                             | `GEOLIBRE_SHARE_URL=off`, or your own [projects server](server-api.md).                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Collaboration                  | Off unless configured                                                            | Leave `GEOLIBRE_COLLAB_URL` unset, or run `workers/collab-node` yourself.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Telemetry                      | None                                                                             | GeoLibre collects no analytics or usage data. The hosted sites (geolibre.app, web.geolibre.app) run Google Analytics, but nothing you deploy does. The Docker image **cannot** turn it on: the `Dockerfile` declares no build argument for it, and the container's CSP does not allow `googletagmanager.com`. A build from source can, by setting `VITE_GEOLIBRE_GA_MEASUREMENT_ID` for `npm run build` with your own measurement ID; there is no runtime variable that enables it. See [Privacy Policy](privacy.md). |
+| Feature | Default provider | How to keep it internal |
+| --- | --- | --- |
+| Basemaps | OpenFreeMap / CARTO tiles | Use the Basemaps plugin's **custom style URL** and serve your own style plus a PMTiles basemap from your server, or use a blank background. Any HTTPS host is already allowed by the CSP; a plain `http://` host needs a CSP change. |
+| Geocoding | Public Nominatim | Point it at a self-hosted Nominatim or Pelias (see [Data Integrations](user-guide/data-integrations.md#geocoding)). |
+| Routing and isochrones | Public FOSSGIS Valhalla (`valhalla1.openstreetmap.de`) | Set `VITE_ROUTING_ENDPOINT` to your own Valhalla server. This covers Processing → GeoLibre Toolbox → Network and the **Drive time** / **Walk time** [quick actions](user-guide/map-controls.md#quick-analysis-from-a-clicked-point). It is read at build time, or per browser from Settings → Environment variables; the Docker image has no build arg or runtime variable for it. An HTTPS endpoint needs no CSP change. |
+| Pointer elevation readout | Public Open-Meteo elevation API, whenever 3D terrain has no sample for the point | Leave the readout off (it is off by default), or decline the consent prompt GeoLibre shows before the first remote lookup — that is the gate the resolver checks. Enabling 3D terrain makes the remote call rare but does not rule it out, since a point terrain cannot answer still falls through. |
+| Python (Pyodide) vector engine | Loads Pyodide from jsDelivr | Set `VITE_PYODIDE_INDEX_URL` to a mirrored copy of the Pyodide distribution (at build time, or per browser in Settings → Environment variables). Serve the mirror from your own origin, or add it to the CSP `script-src`, which pins only the jsDelivr Pyodide path. |
+| AI assistant | Off unless configured | Leave `GEOLIBRE_AI_URL` unset, or route it through your own proxy. |
+| Project sharing | `share.geolibre.app` | `GEOLIBRE_SHARE_URL=off`, or your own [projects server](server-api.md). |
+| Collaboration | Off unless configured | Leave `GEOLIBRE_COLLAB_URL` unset, or run `workers/collab-node` yourself. |
+| Telemetry | None | GeoLibre collects no analytics or usage data. The hosted sites (geolibre.app, web.geolibre.app) run Google Analytics, but nothing you deploy does. The Docker image **cannot** turn it on: the `Dockerfile` declares no build argument for it, and the container's CSP does not allow `googletagmanager.com`. A build from source can, by setting `VITE_GEOLIBRE_GA_MEASUREMENT_ID` for `npm run build` with your own measurement ID; there is no runtime variable that enables it. See [Privacy Policy](privacy.md). |
 
 ## Deployment checklist
 
@@ -392,8 +534,10 @@ the public internet:
 - [ ] One TLS-terminating reverse proxy with your SSO layer in front of both.
 - [ ] `GEOLIBRE_SHARE_URL=off` (or your own server) so nothing can be published
       externally by accident.
-- [ ] `GEOLIBRE_CONVERSION_ROOTS` confined, `GEOLIBRE_POSTGIS_HOSTS` unset unless
-      required, sidecar disabled if unused.
+- [ ] Review the generated public `/deployment.json`; exercise denied sidecar
+      routes and confirm they return 403.
+- [ ] `GEOLIBRE_CONVERSION_ROOTS` confined, `GEOLIBRE_POSTGIS_HOSTS` and
+      `GEOLIBRE_MSSQL_HOSTS` unset unless required, sidecar disabled if unused.
 - [ ] Loopback `connect-src` allowances removed from the CSP.
 - [ ] Basemap, geocoding, and Pyodide sources pointed at internal hosts if the
       deployment must not reach the public internet.
@@ -408,3 +552,4 @@ the public internet:
 - [Data Integrations](user-guide/data-integrations.md#self-hosted-catalogs)
 - [Embedding & Sharing](user-guide/embedding.md)
 - [Privacy Policy](privacy.md)
+- [Network Endpoints](network-endpoints.md) for every external host, by feature

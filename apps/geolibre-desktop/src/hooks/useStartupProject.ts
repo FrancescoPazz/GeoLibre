@@ -1,17 +1,28 @@
-import { useAppStore, type MapProjection, type MapViewState } from "@geolibre/core";
-import { useEffect, useState } from "react";
+import {
+  createEmptyProject,
+  mapCrsPreferencePatch,
+  useAppStore,
+  type MapProjection,
+  type MapViewState,
+} from "@geolibre/core";
+import { requestInitialMapCrsFrame } from "@geolibre/map";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { dataUrlParameters, serviceUrlParameter } from "../lib/data-url";
+import { dataUrlParameters, serviceUrlParameter, stacUrlParameter } from "../lib/data-url";
 import { isTauri } from "../lib/is-tauri";
-import { startupProjectUrl } from "../lib/project-url";
+import { notify } from "../lib/notify";
+import { isViewerLayout } from "./useLayoutOptions";
+import { projectUrlFromLocation, startupProjectUrl } from "../lib/project-url";
 import { planStartup, startupDefaultWorkspace, type StartupPlan } from "../lib/startup-project";
 import { openRecentProjectFile, RecentProjectGoneError } from "../lib/tauri-io";
 import { resolveProjectXyzLayers } from "../lib/xyz-url";
+import { fetchStartupLayerData, startupLayerIds, withStartupLayers } from "../lib/startup-layers";
 import { DEFAULT_STARTUP_SETTINGS, useDesktopSettingsStore } from "./useDesktopSettings";
 import { loadRecentProjects } from "./useRecentProjectsPersistence";
 import { consumeInlineProjectFragment } from "../lib/inline-project-fragment";
 import { initialNativeProjectPath } from "../lib/native-project-open";
-import { coordinateTargetFromSearch } from "../lib/coordinate-url";
+import { coordinateTargetFromSearch, type CoordinateTarget } from "../lib/coordinate-url";
+import { mapCrsRequestFromSearch } from "../lib/map-crs-url";
 import {
   initialNativeCoordinateTarget,
   finishNativeCoordinateStartup,
@@ -44,6 +55,10 @@ function hasExplicitLaunchPayload(): boolean {
   if (startupProjectUrl() !== null) return true;
   if (dataUrlParameters(window.location.search) !== null) return true;
   if (serviceUrlParameter(window.location.search) !== null) return true;
+  // A read-only viewer ignores `?stac=` (see `useStacUrlLoader`), so it must not
+  // keep the startup project from loading either.
+  if (!isViewerLayout(window.location.search) && stacUrlParameter(window.location.search) !== null)
+    return true;
   return false;
 }
 
@@ -88,12 +103,58 @@ function applyDefaultWorkspace(
   }));
 }
 
+/**
+ * Add the Startup setting's layers to the untitled workspace, if any are set.
+ * Starting a new project that holds them, rather than adding each layer, gives
+ * them the same restore passes an opened project's layers get (local files
+ * re-read from disk, plugin-painted layers replayed) and leaves the workspace
+ * clean.
+ *
+ * @returns The ids of the layers added, empty when none are set.
+ */
+function seedStartupLayers(): Set<string> {
+  const state = useAppStore.getState();
+  const project = withStartupLayers(
+    createEmptyProject(state.projectName, {
+      basemapStyleUrl: state.basemapStyleUrl,
+      mapView: state.mapView,
+    }),
+  );
+  if (project.layers.length === 0) return new Set();
+  state.newProject({
+    name: project.name,
+    basemapStyleUrl: project.basemapStyleUrl,
+    mapView: project.mapView,
+    layers: project.layers,
+    layerGroups: project.layerGroups,
+  });
+  return startupLayerIds(project);
+}
+
+/**
+ * Draw the first map in the CRS the link names (`?crs=`), before the map exists
+ * so the Web Mercator basemap never loads. Not dirtying, like the seed above; a
+ * `?url=` project takes it in `useProjectUrlLoader`, on top of its own
+ * preferences, and `useMapCrsUrl` backs out a code that does not resolve.
+ */
+function seedLinkedMapCrs(location: CoordinateTarget | null): void {
+  const mapCrs = mapCrsRequestFromSearch(window.location.search)?.mapCrs;
+  if (mapCrs == null || projectUrlFromLocation() !== null) return;
+  useAppStore.setState((state) => ({
+    preferences: {
+      ...state.preferences,
+      map: { ...state.preferences.map, ...mapCrsPreferencePatch(mapCrs) },
+    },
+  }));
+  // Without a view of its own the default one may lie outside the CRS's area.
+  if (!location) requestInitialMapCrsFrame();
+}
+
 export function useStartupProject(): {
-  warning: string | null;
   restoring: boolean;
+  settled: boolean;
 } {
   const { t } = useTranslation();
-  const [hasWarning, setHasWarning] = useState(false);
   // Consume a direct-file export before the shell and MapCanvas mount. Loading
   // it here gives it the same startup precedence as a ?url= deep link and, more
   // importantly, prevents the default-workspace initializer from replacing it.
@@ -122,6 +183,9 @@ export function useStartupProject(): {
   // default mode) mount straight away with no spinner. Writing to the store
   // during render is safe here: it happens once, before any subscriber has
   // rendered, and re-running the initializer would set the same value.
+  // The layers the Startup setting added to the untitled workspace, set by the
+  // initializer below and read by the effect that fetches their features.
+  const seededLayerIds = useRef<Set<string>>(new Set());
   const [restoring, setRestoring] = useState(() => {
     if (inlineProject) {
       useAppStore.getState().loadProject(inlineProject, null, { rememberRecent: false });
@@ -130,16 +194,31 @@ export function useStartupProject(): {
     const location =
       initialNativeCoordinateTarget() ?? coordinateTargetFromSearch(window.location.search);
     if (location && !hasExplicitLaunchPayload() && !openedProjectPath) {
+      seededLayerIds.current = seedStartupLayers();
       applyDefaultWorkspace({
         ...startupDefaultWorkspace(useDesktopSettingsStore.getState().desktopSettings.startup),
         ...location,
       });
+      seedLinkedMapCrs(location);
       return false;
     }
     const plan = currentStartupPlan(openedProjectPath);
-    if (plan.kind === "default") applyDefaultWorkspace(plan);
-    return plan.kind === "restore";
+    if (plan.kind === "default") {
+      seededLayerIds.current = seedStartupLayers();
+      applyDefaultWorkspace(plan);
+    }
+    if (plan.kind === "restore") return true;
+    seedLinkedMapCrs(location);
+    return false;
   });
+  const [settled, setSettled] = useState(!restoring);
+
+  // Fetch the features of the URL layers the seeding above added, and only
+  // those. In an effect, not the initializer, so a render that is thrown away
+  // fetches nothing.
+  useEffect(() => {
+    if (seededLayerIds.current.size > 0) void fetchStartupLayerData(seededLayerIds.current);
+  }, []);
 
   // End native startup in the same synchronous render that reads its target.
   // Waiting for the passive effect would drop intents received after render.
@@ -158,7 +237,13 @@ export function useStartupProject(): {
     if (plan.kind !== "restore") return;
     const path = plan.path;
     const settings = useDesktopSettingsStore.getState().desktopSettings.startup;
-    const openDefaultWorkspace = () => {
+    const openDefaultWorkspace = (options: { seedLayers?: boolean } = {}) => {
+      // Only once the restore has given up: seeding bumps the project
+      // generation, which would make a restore still in flight stand down.
+      if (options.seedLayers) {
+        const ids = seedStartupLayers();
+        if (ids.size > 0) void fetchStartupLayerData(ids);
+      }
       applyDefaultWorkspace(startupDefaultWorkspace(settings));
       setRestoring(false);
     };
@@ -173,10 +258,9 @@ export function useStartupProject(): {
     // File > New resets to the same `null` the app started on -- a restore
     // landing after that would clobber the new project and look identical to
     // landing on the untouched startup state.
-    const restoringOver = useAppStore.getState().projectGeneration;
+    let restoringOver = useAppStore.getState().projectGeneration;
 
     let cancelled = false;
-    let warningTimer: number | undefined;
     // Bounded gate: mount the shell over the default workspace if the restore
     // has not settled in time. The restore itself is left running -- it can
     // still land, guarded by `restoringOver`/`isDirty` below -- so a merely slow
@@ -188,7 +272,15 @@ export function useStartupProject(): {
     // spinner would break it, and this call would need the same guard.
     const gateTimer = window.setTimeout(() => {
       if (cancelled) return;
-      openDefaultWorkspace();
+      console.warn(
+        "[GeoLibre] Startup project restore is still pending; showing the default workspace meanwhile",
+      );
+      openDefaultWorkspace({ seedLayers: true });
+      // Seeding the Startup setting's layers starts a new project. The restore
+      // may still replace this workspace while the user has not touched it, so
+      // move its ownership check onto the seeded workspace instead of making
+      // it stand down.
+      restoringOver = useAppStore.getState().projectGeneration;
     }, RESTORE_GATE_TIMEOUT_MS);
     // `cancelled` alone would leave a discarded run's read and XYZ probes in
     // flight; the signal ends them, matching `useProjectUrlLoader`.
@@ -203,6 +295,14 @@ export function useStartupProject(): {
         const { projectGeneration, isDirty } = useAppStore.getState();
         if (projectGeneration !== restoringOver || isDirty) return;
         useAppStore.getState().loadProject(project, result.path);
+        // Kept on screen: the project may be missing changes made to the file
+        // since, and the user should not keep working without knowing.
+        if (result.fromStoredCopy) {
+          notify.warning(t("settings.startup.storedCopyWarning"), {
+            dedupeKey: "stored-project-copy",
+            durationMs: null,
+          });
+        }
       } catch (error) {
         if (cancelled) return;
         if (error instanceof RecentProjectGoneError) {
@@ -237,27 +337,30 @@ export function useStartupProject(): {
         // is gone stays gone whoever owns the workspace now.
         const { projectGeneration, isDirty } = useAppStore.getState();
         if (projectGeneration !== restoringOver || isDirty) return;
-        setHasWarning(true);
-        warningTimer = window.setTimeout(() => setHasWarning(false), 8000);
-        openDefaultWorkspace();
+        // A warning toast (8 s, like the banner it replaced): the app is usable,
+        // just not with the project the user asked to start with.
+        notify.warning(t("settings.startup.loadWarning"), { dedupeKey: "startup-project" });
+        openDefaultWorkspace({ seedLayers: true });
       } finally {
         window.clearTimeout(gateTimer);
-        if (!cancelled) setRestoring(false);
+        // `settled` deliberately waits for the restore itself, not the gate
+        // timer: opening the deployment `openPanel` over the default workspace
+        // would leave it open once a late restore replaces that workspace.
+        if (!cancelled) {
+          setRestoring(false);
+          setSettled(true);
+        }
       }
     })();
     return () => {
       cancelled = true;
       abortController.abort();
       window.clearTimeout(gateTimer);
-      if (warningTimer !== undefined) window.clearTimeout(warningTimer);
     };
     // Startup restoration is intentionally one-shot. In particular, changing
     // language must not reopen this project over the user's current workspace.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [inlineProject, openedProjectPath]);
 
-  return {
-    warning: hasWarning ? t("settings.startup.loadWarning") : null,
-    restoring,
-  };
+  return { restoring, settled };
 }

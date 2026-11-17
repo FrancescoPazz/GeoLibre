@@ -9,15 +9,20 @@ import {
 } from "@geolibre/ui";
 import {
   AlertCircle,
+  ArrowRightLeft,
   Eye,
   EyeOff,
   ExternalLink,
   Globe2,
   ImageOff,
+  Library,
   Loader2,
   Lock,
   LogIn,
   Search,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
   Star,
   User,
   UserPlus,
@@ -26,6 +31,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -33,6 +39,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useDesktopSettingsStore } from "../../hooks/useDesktopSettings";
+import { galleryEmptyKey } from "../../lib/gallery-empty-key";
+import { galleryErrorMessage } from "../../lib/gallery-errors";
 import { observeGalleryEnd } from "../../lib/gallery-auto-load";
 import { openExternalLink } from "../../lib/open-external";
 import {
@@ -45,27 +53,43 @@ import {
   useShareOAuthStore,
 } from "../../lib/share-oauth";
 import {
+  acceptProjectTransfer,
+  cancelProjectTransfer,
+  declineProjectTransfer,
+  fetchCollectionProjects,
+  fetchCollections,
+  filterCollections,
+  fetchIncomingTransfers,
   fetchMyProjects,
   fetchMyGroups,
   fetchMyOrganizations,
+  fetchOutgoingTransfers,
   fetchProjectsSharedWithMe,
   fetchSharedProjects,
   GalleryError,
   type GalleryErrorCode,
   loadSharedProjectThumbnail,
   projectOpenToken,
+  requestProjectTransfer,
+  setProjectDeleteProtection,
+  type ProjectTransfer,
+  type ProjectTransferTarget,
+  type SharedCollection,
   type SharedProject,
   type ShareOrganization,
   type ShareGroup,
 } from "../../lib/share-gallery";
 import { resolveShareBaseUrl, shareHostLabel } from "../../lib/share-geolibre";
-import type { TFunction } from "i18next";
+import { CollectionGrid, CollectionHeader } from "./GalleryCollections";
+import { TransferProjectDialog } from "./TransferProjectDialog";
 
-type GalleryScope = "featured" | "all" | "mine" | "organizations" | "groups";
+type GalleryScope = "featured" | "all" | "collections" | "mine" | "organizations" | "groups";
 
 interface ProjectGalleryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Initial tab to show when the dialog opens; defaults to "featured" / "organizations". */
+  defaultScope?: "mine";
   /**
    * Load a project from its raw `.geolibre.json` URL into the app. `authToken`
    * is passed for the user's own (unlisted/private) projects so the share host
@@ -77,12 +101,14 @@ interface ProjectGalleryDialogProps {
     authToken?: string,
     options?: {
       asCopy?: boolean;
+      oauthSessionRevision?: number;
       remoteProject?: {
         id: string;
         versionCount: number;
         canEdit: boolean;
         token: string;
         baseUrl: string;
+        oauthSessionRevision?: number;
       };
     },
   ) => Promise<void>;
@@ -97,39 +123,6 @@ function searchHaystack(project: SharedProject): string {
 }
 
 /**
- * Translate a fetch error into a localized message. The gallery library throws
- * coded {@link GalleryError}s (it can't call `t()`); the UI maps each code to a
- * catalog string here. Web builds name the OAuth session in the unauthorized
- * case, since that is the credential the web sign-in produced.
- */
-function galleryErrorMessage(error: unknown, t: TFunction, oauthSupported: boolean): string {
-  if (error instanceof ShareOAuthError) return t(shareOAuthErrorKey(error.code));
-  if (error instanceof GalleryError) {
-    switch (error.code) {
-      case "timeout":
-        return t("gallery.errorTimeout");
-      case "network":
-        return t("gallery.errorNetwork", { shareHost: shareHostLabel() });
-      case "invalid-response":
-        return t("gallery.errorInvalidResponse");
-      case "unauthorized":
-        return oauthSupported
-          ? t("gallery.errorUnauthorizedOAuth", { shareHost: shareHostLabel() })
-          : t("gallery.errorUnauthorized", { shareHost: shareHostLabel() });
-      case "username-required":
-        return t("gallery.errorUsernameRequired", {
-          shareHost: shareHostLabel(),
-        });
-      case "not-configured":
-        return t("gallery.errorNotConfigured");
-      case "http":
-        return t("gallery.errorHttp", { status: error.status ?? 0 });
-    }
-  }
-  return error instanceof Error ? error.message : t("gallery.errorFallback");
-}
-
-/**
  * Browse public projects shared on the configured share host and open one in
  * GeoLibre.
  *
@@ -140,19 +133,25 @@ function galleryErrorMessage(error: unknown, t: TFunction, oauthSupported: boole
 export function ProjectGalleryDialog({
   open,
   onOpenChange,
+  defaultScope,
   onOpenProject,
 }: ProjectGalleryDialogProps) {
   const { t } = useTranslation();
   const trimmedToken = (useDesktopSettingsStore((s) => s.desktopSettings.shareToken) ?? "").trim();
-  // Web-only OAuth session; on desktop/embed both flags stay inert and the
-  // personal-API-token behavior is unchanged.
+  // A project OAuth session can change on both web and desktop. A pasted PAT
+  // remains usable independently, but private data from the old OAuth account
+  // must be dropped before the next paint.
   const oauthSupported = supportsShareOAuth();
   const oauthIssuer = useShareOAuthStore((s) => s.issuer);
+  const oauthSessionRevision = useShareOAuthStore((s) => s.sessionRevision);
   const oauthPending = useShareOAuthStore((s) => s.pending);
   const oauthSignedIn = oauthSupported && oauthIssuer !== null;
   const hasToken = oauthSignedIn || trimmedToken.length > 0;
   const [scope, setScope] = useState<GalleryScope>("featured");
   const [projects, setProjects] = useState<SharedProject[]>([]);
+  // "Collections" lists collections, then the projects of `selectedCollection`.
+  const [collections, setCollections] = useState<SharedCollection[]>([]);
+  const [selectedCollection, setSelectedCollection] = useState<SharedCollection | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "loadingMore">("idle");
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<GalleryErrorCode | null>(null);
@@ -171,6 +170,7 @@ export function ProjectGalleryDialog({
   const membershipAbortRef = useRef<AbortController | null>(null);
   const defaultScopePendingRef = useRef(true);
   const reloadGenerationRef = useRef(0);
+  const previousSessionRevisionRef = useRef(oauthSessionRevision);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
   // The resolved Bearer credential (OAuth access token when signed in, else
@@ -181,6 +181,18 @@ export function ProjectGalleryDialog({
 
   const [organizations, setOrganizations] = useState<ShareOrganization[]>([]);
   const [groups, setGroups] = useState<ShareGroup[]>([]);
+
+  // Ownership transfer and delete protection (GeoLibre#1670). Only the "mine"
+  // scope shows these; the incoming list is the accept/decline inbox, the
+  // outgoing list backs the "transfer pending" state on a card.
+  const [incomingTransfers, setIncomingTransfers] = useState<ProjectTransfer[]>([]);
+  const [outgoingTransfers, setOutgoingTransfers] = useState<ProjectTransfer[]>([]);
+  const [manageBusyId, setManageBusyId] = useState<string | null>(null);
+  const [manageError, setManageError] = useState<string | null>(null);
+  const [transferProject, setTransferProject] = useState<SharedProject | null>(null);
+  // Per-transfer slug override, seeded when an accept collides with an
+  // existing project at the destination slug.
+  const [acceptSlugs, setAcceptSlugs] = useState<Record<string, string>>({});
 
   // Authenticated scopes disappear with the token; fall back instead of making
   // an empty-token request if Settings changes while the dialog is open.
@@ -199,11 +211,18 @@ export function ProjectGalleryDialog({
   useEffect(() => () => resizeCleanupRef.current?.(), []);
 
   useEffect(() => {
+    // Clear the collection on close, so a reopen never fetches the old one.
+    if (!open) setSelectedCollection(null);
     if (open) {
-      defaultScopePendingRef.current = true;
-      setScope("featured");
+      if (defaultScope === "mine") {
+        defaultScopePendingRef.current = false;
+        setScope("mine");
+      } else {
+        defaultScopePendingRef.current = true;
+        setScope("featured");
+      }
     }
-  }, [open]);
+  }, [open, defaultScope]);
 
   // Resize the whole dialog from its bottom-right grip. The dialog is centred
   // via a -50% transform, so each edge moves by half the size change; growing
@@ -294,6 +313,27 @@ export function ProjectGalleryDialog({
           if (controller.signal.aborted) return;
           setProjects(mine);
           setHasMore(false);
+          // Transfers are a best-effort add-on: a share host without the
+          // endpoints (an older deployment) must not break "My projects".
+          // Preserve a previously loaded inbox through transient fetch failures;
+          // open and session changes clear it when the account can change.
+          const [incoming, outgoing] = await Promise.allSettled([
+            fetchIncomingTransfers({ token, signal: controller.signal }),
+            fetchOutgoingTransfers({ token, signal: controller.signal }),
+          ]);
+          if (controller.signal.aborted) return;
+          if (incoming.status === "fulfilled") setIncomingTransfers(incoming.value);
+          if (outgoing.status === "fulfilled") setOutgoingTransfers(outgoing.value);
+        } else if (effectiveScope === "collections") {
+          // Neither collection endpoint paginates, so `hasMore` stays false.
+          const signal = controller.signal;
+          if (selectedCollection) {
+            const items = await fetchCollectionProjects({ ...selectedCollection, signal });
+            if (!signal.aborted) setProjects(items);
+          } else {
+            const items = await fetchCollections({ signal });
+            if (!signal.aborted) setCollections(items);
+          }
         } else if (effectiveScope === "organizations" || effectiveScope === "groups") {
           const token = await resolveShareRequestToken(trimmedToken);
           const result = await fetchProjectsSharedWithMe({
@@ -334,18 +374,28 @@ export function ProjectGalleryDialog({
         if (!controller.signal.aborted) setStatus("idle");
       }
     },
-    [t, effectiveScope, trimmedToken, oauthSupported],
+    [t, effectiveScope, selectedCollection, trimmedToken, oauthSupported],
   );
-  // Web sign-in from the gallery. Keep the current error visible while the
-  // popup is pending; a successful sign-in reloads the active scope explicitly
-  // because the issuer may remain unchanged.
+  useLayoutEffect(() => {
+    if (previousSessionRevisionRef.current === oauthSessionRevision) return;
+    previousSessionRevisionRef.current = oauthSessionRevision;
+    abortRef.current?.abort();
+    membershipAbortRef.current?.abort();
+    setProjects([]);
+    setRequestToken("");
+    setOrganizations([]);
+    setGroups([]);
+    setOpeningState(null);
+    setIncomingTransfers([]);
+    setOutgoingTransfers([]);
+    setAcceptSlugs({});
+    setManageError(null);
+    setTransferProject(null);
+  }, [oauthSessionRevision]);
+
   const handleSignIn = () => {
     signInToShare()
-      .then(() => {
-        setErrorCode(null);
-        setProjects([]);
-        void loadPage(0);
-      })
+      .then(() => setErrorCode(null))
       .catch((err: unknown) => {
         setError(
           t(err instanceof ShareOAuthError ? shareOAuthErrorKey(err.code) : "share.oauthFailed"),
@@ -366,12 +416,17 @@ export function ProjectGalleryDialog({
       setErrorCode(null);
       setHasMore(false);
       setRawOffset(0);
+      setIncomingTransfers([]);
+      setOutgoingTransfers([]);
+      setAcceptSlugs({});
+      setManageError(null);
+      setTransferProject(null);
       void loadPage(0);
     } else {
       abortRef.current?.abort();
       abortRef.current = null;
     }
-  }, [open, loadPage]);
+  }, [open, loadPage, oauthSessionRevision]);
 
   useEffect(() => {
     if (!open || !hasToken) {
@@ -417,10 +472,17 @@ export function ProjectGalleryDialog({
       controller.abort();
       if (membershipAbortRef.current === controller) membershipAbortRef.current = null;
     };
-  }, [open, hasToken, trimmedToken, oauthIssuer]);
+  }, [open, hasToken, trimmedToken, oauthIssuer, oauthSessionRevision]);
+
+  // Show one collection's projects, or (null) go back to the collection list.
+  const openCollection = (collection: SharedCollection | null) => {
+    setProjects([]);
+    setSelectedCollection(collection);
+  };
 
   const selectScope = (nextScope: GalleryScope) => {
     defaultScopePendingRef.current = false;
+    setSelectedCollection(null);
     setScope(nextScope);
   };
 
@@ -441,6 +503,8 @@ export function ProjectGalleryDialog({
           : "";
       await onOpenProject(project.rawJsonUrl, projectOpenToken(project, token), {
         asCopy,
+        oauthSessionRevision:
+          oauthIssuer && token !== trimmedToken ? oauthSessionRevision : undefined,
         remoteProject: asCopy
           ? undefined
           : {
@@ -451,6 +515,8 @@ export function ProjectGalleryDialog({
               // OAuth access token at save time.
               token: trimmedToken,
               baseUrl: resolveShareBaseUrl() ?? "",
+              oauthSessionRevision:
+                oauthIssuer && token !== trimmedToken ? oauthSessionRevision : undefined,
             },
       });
       onOpenChange(false);
@@ -468,10 +534,118 @@ export function ProjectGalleryDialog({
     }
   };
 
+  // Toggle "prevent deletion" for one of the caller's projects and swap the
+  // returned record in, so the badge updates without a full reload.
+  const handleToggleDeleteProtection = async (project: SharedProject) => {
+    setManageBusyId(project.id);
+    setManageError(null);
+    try {
+      const token = await resolveShareRequestToken(trimmedToken);
+      const updated = await setProjectDeleteProtection({
+        token,
+        projectId: project.id,
+        deleteProtected: project.deleteProtected !== true,
+      });
+      setProjects((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setManageError(galleryErrorMessage(err, t, oauthSupported));
+    } finally {
+      setManageBusyId(null);
+    }
+  };
+
+  const handleCancelTransfer = async (transfer: ProjectTransfer) => {
+    setManageBusyId(transfer.projectId);
+    setManageError(null);
+    try {
+      const token = await resolveShareRequestToken(trimmedToken);
+      await cancelProjectTransfer({ token, transferId: transfer.id });
+      setOutgoingTransfers((prev) => prev.filter((item) => item.id !== transfer.id));
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setManageError(galleryErrorMessage(err, t, oauthSupported));
+    } finally {
+      setManageBusyId(null);
+    }
+  };
+
+  const handleAcceptTransfer = async (transfer: ProjectTransfer) => {
+    setManageBusyId(transfer.projectId);
+    setManageError(null);
+    try {
+      const token = await resolveShareRequestToken(trimmedToken);
+      await acceptProjectTransfer({
+        token,
+        transferId: transfer.id,
+        slug: acceptSlugs[transfer.id]?.trim() || undefined,
+      });
+      setIncomingTransfers((prev) => prev.filter((item) => item.id !== transfer.id));
+      setAcceptSlugs((prev) => {
+        const next = { ...prev };
+        delete next[transfer.id];
+        return next;
+      });
+      // The moved project now belongs to the caller; refresh so it appears.
+      void loadPage(0);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof GalleryError && err.code === "slug-conflict") {
+        // Offer the current slug for editing, then let the next Accept retry.
+        setAcceptSlugs((prev) => ({ ...prev, [transfer.id]: prev[transfer.id] ?? transfer.slug }));
+      }
+      setManageError(galleryErrorMessage(err, t, oauthSupported));
+    } finally {
+      setManageBusyId(null);
+    }
+  };
+
+  const handleDeclineTransfer = async (transfer: ProjectTransfer) => {
+    setManageBusyId(transfer.projectId);
+    setManageError(null);
+    try {
+      const token = await resolveShareRequestToken(trimmedToken);
+      await declineProjectTransfer({ token, transferId: transfer.id });
+      setIncomingTransfers((prev) => prev.filter((item) => item.id !== transfer.id));
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setManageError(galleryErrorMessage(err, t, oauthSupported));
+    } finally {
+      setManageBusyId(null);
+    }
+  };
+
+  // Runs from the transfer dialog. Resolves with what happened so the dialog
+  // knows whether to close; throws for the dialog to render the message.
+  const handleRequestTransfer = async (
+    target: ProjectTransferTarget,
+    slug: string,
+  ): Promise<"pending" | "accepted"> => {
+    if (!transferProject) throw new Error("no project selected");
+    const token = await resolveShareRequestToken(trimmedToken);
+    const result = await requestProjectTransfer({
+      token,
+      projectId: transferProject.id,
+      target,
+      slug: slug.trim() || undefined,
+    });
+    if (result.transfer.status === "pending") {
+      setOutgoingTransfers((prev) => [...prev, result.transfer]);
+      return "pending";
+    }
+    // An organization transfer applies immediately, so the project leaves
+    // "My projects"; reload to reflect that.
+    void loadPage(0);
+    return "accepted";
+  };
+
   const trimmedQuery = query.trim().toLowerCase();
   const visibleProjects = trimmedQuery
     ? projects.filter((p) => searchHaystack(p).includes(trimmedQuery))
     : projects;
+  // The "Collections" scope shows collection cards until one is picked.
+  const showingCollections = effectiveScope === "collections" && selectedCollection === null;
+  const visibleCollections = filterCollections(collections, trimmedQuery);
 
   // Fetch the next page shortly before the end of the gallery scrolls into
   // view. Recreating the observer after each request also prevents a sentinel
@@ -492,8 +666,12 @@ export function ProjectGalleryDialog({
     });
   }, [hasMore, loadPage, open, rawOffset, status, trimmedQuery]);
 
-  const showInitialSpinner = status === "loading" && projects.length === 0;
-  const showEmpty = status !== "loading" && !error && visibleProjects.length === 0;
+  const nothingLoaded = showingCollections ? collections.length === 0 : projects.length === 0;
+  const showInitialSpinner = status === "loading" && nothingLoaded;
+  const showEmpty =
+    status !== "loading" &&
+    !error &&
+    (showingCollections ? visibleCollections : visibleProjects).length === 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -550,6 +728,12 @@ export function ProjectGalleryDialog({
             icon={<Globe2 className="h-3.5 w-3.5" />}
             label={t("gallery.scopeAll")}
           />
+          <ScopeTab
+            active={effectiveScope === "collections"}
+            onClick={() => selectScope("collections")}
+            icon={<Library className="h-3.5 w-3.5" />}
+            label={t("gallery.scopeCollections")}
+          />
           {hasToken ? (
             <>
               <ScopeTab
@@ -579,11 +763,19 @@ export function ProjectGalleryDialog({
           <Input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={t("gallery.searchPlaceholder")}
+            placeholder={
+              showingCollections
+                ? t("gallery.collectionsSearchPlaceholder")
+                : t("gallery.searchPlaceholder")
+            }
             className="ps-8"
-            disabled={projects.length === 0 && status !== "idle"}
+            disabled={nothingLoaded && status !== "idle"}
           />
         </div>
+
+        {effectiveScope === "collections" && selectedCollection ? (
+          <CollectionHeader collection={selectedCollection} onBack={() => openCollection(null)} />
+        ) : null}
 
         {!hasToken ? (
           oauthSupported ? (
@@ -620,6 +812,13 @@ export function ProjectGalleryDialog({
           </p>
         ) : null}
 
+        {manageError ? (
+          <p className="flex items-start gap-1.5 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{manageError}</span>
+          </p>
+        ) : null}
+
         {/* Native overflow scroll (not the Radix ScrollArea) so the area
             reliably scrolls on touch devices: a percentage-height ScrollArea
             viewport does not resolve against this flex-sized parent and would
@@ -631,10 +830,60 @@ export function ProjectGalleryDialog({
           ref={scrollContainerRef}
           className="-mx-1 min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-1 [-webkit-overflow-scrolling:touch]"
         >
+          {effectiveScope === "mine" && incomingTransfers.length > 0 ? (
+            <div className="mb-3 space-y-2">
+              {incomingTransfers.map((transfer) => (
+                <div
+                  key={transfer.id}
+                  className="flex flex-wrap items-center gap-2 rounded-md border bg-card p-2 text-xs"
+                >
+                  <span className="min-w-0 flex-1">
+                    {t("gallery.transferIncoming", {
+                      from: transfer.fromUsername ?? "",
+                      title: transfer.projectTitle,
+                    })}
+                  </span>
+                  {acceptSlugs[transfer.id] !== undefined ? (
+                    <div className="flex w-full flex-col gap-1 sm:w-auto">
+                      <Input
+                        value={acceptSlugs[transfer.id]}
+                        onChange={(event) =>
+                          setAcceptSlugs((prev) => ({
+                            ...prev,
+                            [transfer.id]: event.target.value,
+                          }))
+                        }
+                        aria-label={t("gallery.transferSlug")}
+                        className="h-8 sm:w-48"
+                      />
+                      <span className="text-muted-foreground">
+                        {t("gallery.transferSlugConflictHint")}
+                      </span>
+                    </div>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    disabled={manageBusyId !== null}
+                    onClick={() => void handleAcceptTransfer(transfer)}
+                  >
+                    {t("gallery.transferAccept")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={manageBusyId !== null}
+                    onClick={() => void handleDeclineTransfer(transfer)}
+                  >
+                    {t("gallery.transferDecline")}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {showInitialSpinner ? (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              {t("gallery.loading")}
+              {showingCollections ? t("gallery.loadingCollections") : t("gallery.loading")}
             </div>
           ) : error ? (
             <div className="flex flex-col items-center gap-3 py-16 text-center">
@@ -662,18 +911,10 @@ export function ProjectGalleryDialog({
             <>
               {showEmpty ? (
                 <p className="py-16 text-center text-sm text-muted-foreground">
-                  {trimmedQuery
-                    ? t("gallery.noMatches")
-                    : effectiveScope === "mine"
-                      ? t("gallery.emptyMine")
-                      : effectiveScope === "organizations"
-                        ? t("gallery.emptyOrganizations")
-                        : effectiveScope === "groups"
-                          ? t("gallery.emptyGroups")
-                          : effectiveScope === "featured"
-                            ? t("gallery.emptyFeatured")
-                            : t("gallery.empty")}
+                  {t(galleryEmptyKey(effectiveScope, showingCollections, trimmedQuery !== ""))}
                 </p>
+              ) : showingCollections ? (
+                <CollectionGrid collections={visibleCollections} onSelect={openCollection} />
               ) : (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {visibleProjects.map((project) => (
@@ -685,6 +926,25 @@ export function ProjectGalleryDialog({
                       disabled={openingState !== null}
                       onOpen={() => void handleOpen(project)}
                       onOpenCopy={() => void handleOpen(project, { asCopy: true })}
+                      manage={
+                        effectiveScope === "mine"
+                          ? {
+                              pendingTransfer:
+                                outgoingTransfers.find((item) => item.projectId === project.id) ??
+                                null,
+                              busy: manageBusyId === project.id,
+                              onToggleDeleteProtection: () =>
+                                void handleToggleDeleteProtection(project),
+                              onTransfer: () => setTransferProject(project),
+                              onCancelTransfer: () => {
+                                const pending = outgoingTransfers.find(
+                                  (item) => item.projectId === project.id,
+                                );
+                                if (pending) void handleCancelTransfer(pending);
+                              },
+                            }
+                          : undefined
+                      }
                     />
                   ))}
                 </div>
@@ -716,6 +976,18 @@ export function ProjectGalleryDialog({
           )}
         </div>
       </DialogContent>
+      <TransferProjectDialog
+        project={transferProject}
+        // Only organizations the caller administers can receive a project, and
+        // one the project is already in is not a destination.
+        organizations={organizations.filter(
+          (org) => org.role === "administrator" && org.id !== transferProject?.organization?.id,
+        )}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setTransferProject(null);
+        }}
+        onSubmit={handleRequestTransfer}
+      />
     </Dialog>
   );
 }
@@ -772,6 +1044,15 @@ function VisibilityBadge({ visibility }: { visibility: string }) {
   );
 }
 
+/** Owner-only controls shown on a card in the "My projects" scope. */
+interface GalleryCardManage {
+  pendingTransfer: ProjectTransfer | null;
+  busy: boolean;
+  onToggleDeleteProtection: () => void;
+  onTransfer: () => void;
+  onCancelTransfer: () => void;
+}
+
 interface GalleryCardProps {
   project: SharedProject;
   token: string;
@@ -779,6 +1060,7 @@ interface GalleryCardProps {
   disabled: boolean;
   onOpen: () => void;
   onOpenCopy: () => void;
+  manage?: GalleryCardManage;
 }
 
 function GalleryCard({
@@ -788,6 +1070,7 @@ function GalleryCard({
   disabled,
   onOpen,
   onOpenCopy,
+  manage,
 }: GalleryCardProps) {
   const { t } = useTranslation();
   const [thumbBroken, setThumbBroken] = useState(false);
@@ -868,6 +1151,68 @@ function GalleryCard({
             {t("gallery.views", { count: project.views })}
           </span>
         </div>
+
+        {manage ? (
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+            {project.deleteProtected === true ? (
+              <span className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+                <ShieldCheck className="h-3 w-3" />
+                {t("gallery.deleteProtectedBadge")}
+              </span>
+            ) : null}
+            {project.deleteProtected !== null ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 px-1.5"
+                aria-pressed={project.deleteProtected}
+                aria-label={t("gallery.preventDeletion")}
+                title={t("gallery.preventDeletion")}
+                disabled={manage.busy}
+                onClick={manage.onToggleDeleteProtection}
+              >
+                {project.deleteProtected ? (
+                  <Shield className="h-3.5 w-3.5" />
+                ) : (
+                  <ShieldOff className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            ) : null}
+            {manage.pendingTransfer ? (
+              <>
+                <span className="min-w-0 flex-1 truncate">
+                  {t("gallery.transferPendingTo", {
+                    target: manage.pendingTransfer.toUsername ?? "",
+                  })}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-6 px-1.5 text-xs"
+                  disabled={manage.busy}
+                  onClick={manage.onCancelTransfer}
+                >
+                  {t("gallery.transferCancel")}
+                </Button>
+              </>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-6 px-1.5"
+                aria-label={t("gallery.transfer")}
+                title={t("gallery.transfer")}
+                disabled={manage.busy}
+                onClick={manage.onTransfer}
+              >
+                <ArrowRightLeft className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
+        ) : null}
 
         <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:flex-nowrap">
           <Button size="sm" className="flex-1" disabled={disabled} onClick={onOpen}>

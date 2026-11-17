@@ -3,7 +3,7 @@ import { beforeEach, describe, it } from "node:test";
 import { parseHTML } from "linkedom";
 import type * as mapboxgl from "mapbox-gl";
 import type { Geometry } from "geojson";
-import { useAppStore, type MapPreferences } from "@geolibre/core";
+import { DEFAULT_LAYER_STYLE, useAppStore, type MapPreferences } from "@geolibre/core";
 import { MapboxEngine, redactMapboxError } from "../packages/map/src/mapbox-engine";
 import { isMapboxSupportedLayer } from "../packages/map/src/mapbox-layers";
 import { geojsonLayer } from "./helpers/layer-fixtures";
@@ -32,8 +32,10 @@ function makeMap() {
   let bearing = 0;
   let pitch = 0;
   let queried: Record<string, unknown>[] = [];
+  const canvasContainer = new EventTarget();
   const map = {
     // Test hooks.
+    canvasContainer,
     sources,
     layers,
     calls,
@@ -69,6 +71,7 @@ function makeMap() {
     getStyle: () => ({ layers: [{ id: "background", type: "background" }] }),
     getCanvas: () => ({}) as HTMLCanvasElement,
     getContainer: () => ({ querySelector: () => null }) as unknown as HTMLElement,
+    getCanvasContainer: () => canvasContainer as unknown as HTMLElement,
     project: (p: [number, number]) => ({ x: p[0], y: p[1] }),
     unproject: (p: [number, number]) => ({ lng: p[0], lat: p[1] }),
     triggerRepaint: () => {},
@@ -452,6 +455,17 @@ describe("MapboxEngine construction", () => {
     // A late style.load must not reach a destroyed engine.
     map.fire("style.load");
     assert.equal(engine.getRenderSurface(), null);
+  });
+  it("cancels a native selection drag from the canvas until destroyed", () => {
+    const { engine, map } = makeEngine();
+    const drag = () => {
+      const event = new Event("dragstart", { cancelable: true });
+      map.canvasContainer.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    assert.equal(drag(), true);
+    engine.destroy();
+    assert.equal(drag(), false);
   });
 });
 
@@ -1837,7 +1851,7 @@ describe("Mapbox plugin-drawn native layers", () => {
       {
         ...geojsonLayer({ id: "oam" }),
         opacity: 0.5,
-        style: { fillOpacity: 0.08, fillColor: "#ff0000" },
+        style: { ...DEFAULT_LAYER_STYLE, fillOpacity: 0.08, fillColor: "#ff0000" },
         metadata: {
           externalNativeLayer: true,
           sourceKind: "openaerialmap-footprints",
@@ -2052,7 +2066,9 @@ describe("Mapbox live layer sources", () => {
     ]);
     // The fill, outline and circle rows all read the one source, so a failed
     // read must not be retried once per row.
-    assert.ok(map.layers.filter((styleLayer) => styleLayer.id.startsWith("geolibre-")).length > 1);
+    assert.ok(
+      map.layers.filter((styleLayer) => String(styleLayer.id).startsWith("geolibre-")).length > 1,
+    );
     const original = globalThis.fetch;
     let requests = 0;
     globalThis.fetch = (async () => {
@@ -2490,5 +2506,71 @@ describe("MapboxEngine search result lifecycle", () => {
     assert.equal(map.sources.size, 0);
     assert.equal(map.layers.length, 0);
     assert.doesNotThrow(clearLast);
+  });
+});
+
+describe("MapboxEngine story camera", () => {
+  it("reports an instant chapter arrival before rotation, exactly once", () => {
+    const { engine, map } = makeEngine();
+    const events: string[] = [];
+    let movement: object | undefined;
+    map.jumpTo = ((_view: object, event: object) => {
+      movement = event;
+      map.fire("moveend", event);
+    }) as typeof map.jumpTo;
+    Object.assign(map, { rotateTo: () => events.push("rotate") });
+    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 3 }, "jumpTo", true, () =>
+      events.push("arrive"),
+    );
+    map.fire("moveend", movement);
+    assert.deepEqual(events, ["arrive", "rotate"]);
+  });
+
+  it("cancels stale arrivals and rotation on pause without restoring layer styles", () => {
+    const { engine, map } = makeEngine();
+    const events: string[] = [];
+    const movements: object[] = [];
+    map.flyTo = ((_view: object, event: object) => void movements.push(event)) as typeof map.flyTo;
+    Object.assign(map, { rotateTo: () => events.push("rotate"), stop: () => events.push("stop") });
+    engine.restoreLayerStyles = () => assert.fail("pausing must not restore layer styles");
+    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 3 }, "flyTo", true, () =>
+      events.push("old"),
+    );
+    engine.applyStoryChapterCamera({ center: [3, 4], zoom: 5 }, "flyTo", true, () =>
+      events.push("arrive"),
+    );
+    map.fire("moveend", movements[0]);
+    assert.deepEqual(events, []);
+    engine.stopStoryCamera();
+    map.fire("moveend", movements[1]);
+    assert.deepEqual(events, ["stop"]);
+  });
+
+  it("lets the arrival callback stop playback before rotation begins", () => {
+    const { engine, map } = makeEngine();
+    map.jumpTo = ((_view: object, event: object) =>
+      map.fire("moveend", event)) as typeof map.jumpTo;
+    Object.assign(map, { rotateTo: () => assert.fail("rotation must remain paused") });
+    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 3 }, "jumpTo", true, () =>
+      engine.stopStoryCamera(),
+    );
+  });
+
+  it("leaves an absent pitch or bearing out so mapbox-gl keeps the camera's", () => {
+    // mapbox-gl tests `"bearing" in options`, so an own undefined key would be
+    // read as a NaN target rather than "keep the current value".
+    const { engine, map } = makeEngine();
+    const seen: object[] = [];
+    map.flyTo = (view: object) => void seen.push(view);
+    map.jumpTo = (view: object) => void seen.push(view);
+    engine.flyToView({ center: [1, 2], zoom: 3, pitch: undefined, bearing: undefined });
+    engine.applyStoryChapterCamera({ center: [1, 2], zoom: 3, pitch: 20 }, "jumpTo");
+    assert.deepEqual(
+      seen.map((view) => Object.keys(view).sort()),
+      [
+        ["center", "zoom"],
+        ["center", "duration", "pitch", "zoom"],
+      ],
+    );
   });
 });

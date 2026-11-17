@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_LAYER_STYLE, type GeoLibreLayer } from "../packages/core/src/types";
-import { createFeatureStyleResolver } from "../packages/map/src/cesium-feature-style";
+import {
+  DEFAULT_LAYER_STYLE,
+  type GeoLibreLayer,
+  type LayerStyle,
+} from "../packages/core/src/types";
+import { createFeatureStyleResolver } from "../packages/map/src/feature-style";
 import { CesiumLayerSync } from "../packages/map/src/cesium-layer-sync";
 import {
   MAX_ENTITY_POINT_FEATURES,
@@ -27,7 +31,9 @@ function point(lng: number, lat: number, properties: Record<string, unknown> = {
   };
 }
 
-function pointLayer(count: number, patch: Partial<GeoLibreLayer> = {}): GeoLibreLayer {
+type LayerPatch = Omit<Partial<GeoLibreLayer>, "style"> & { style?: Partial<LayerStyle> };
+
+function pointLayer(count: number, patch: LayerPatch = {}): GeoLibreLayer {
   const features = Array.from({ length: count }, (_, i) =>
     point((i % 360) - 180, (i % 170) - 85, { n: i }),
   );
@@ -38,10 +44,10 @@ function pointLayer(count: number, patch: Partial<GeoLibreLayer> = {}): GeoLibre
     source: {},
     visible: true,
     opacity: 1,
-    style: {},
     metadata: {},
     geojson: { type: "FeatureCollection", features } as never,
     ...patch,
+    style: { ...DEFAULT_LAYER_STYLE, ...patch.style },
   };
 }
 
@@ -102,9 +108,12 @@ describe("point rendering plan", () => {
     const big = pointLayer(MAX_ENTITY_POINT_FEATURES + 1);
     assert.equal(planPointRendering(big).batched, true);
     assert.equal(planPointRendering(pointLayer(MAX_ENTITY_POINT_FEATURES)).batched, false);
-    assert.equal(planPointRendering({ ...big, style: { markerEnabled: true } }).batched, false);
     assert.equal(
-      planPointRendering({ ...big, style: { pointRenderer: "cluster" } }).batched,
+      planPointRendering({ ...big, style: { ...big.style, markerEnabled: true } }).batched,
+      false,
+    );
+    assert.equal(
+      planPointRendering({ ...big, style: { ...big.style, pointRenderer: "cluster" } }).batched,
       false,
     );
   });
@@ -120,7 +129,7 @@ function makeCesium() {
       return this.points.length;
     }
     add(options: Record<string, unknown>) {
-      const primitive = { show: true, ...options };
+      const primitive: Record<string, unknown> = { show: true, ...options };
       this.points.push(primitive);
       return primitive;
     }
@@ -215,6 +224,35 @@ function makeCesium() {
 }
 
 describe("buildPointBatch", () => {
+  it("follows the horizon depth distance as the camera moves", () => {
+    const Cesium = makeCesium();
+    const layer = pointLayer(2);
+    const captured: { listener?: (distance: number) => boolean } = {};
+    const horizon = {
+      property: 1000,
+      distance: () => 1000,
+      subscribe: (fn: (distance: number) => boolean) => {
+        if (fn(1000)) captured.listener = fn;
+      },
+    };
+    const collection = buildPointBatch(
+      Cesium as never,
+      layer,
+      createFeatureStyleResolver(layer.style),
+      1,
+      0,
+      { horizon },
+    ) as unknown as InstanceType<typeof Cesium.PointPrimitiveCollection>;
+    const depth = () =>
+      collection.points.map(
+        (point) => (point as { disableDepthTestDistance: number }).disableDepthTestDistance,
+      );
+    assert.deepEqual(depth(), [1000, 1000]);
+    assert.ok(captured.listener);
+    assert.equal(captured.listener(5000), true);
+    assert.deepEqual(depth(), [5000, 5000]);
+  });
+
   it("creates one tagged primitive per point with the resolved symbol", () => {
     const Cesium = makeCesium();
     const layer = pointLayer(3, {
@@ -341,6 +379,49 @@ describe("configureClustering", () => {
     assert.equal(writes[writes.length - 1], false);
     handle.dispose();
     assert.equal(listeners.length, 0);
+  });
+
+  it("re-clusters when the horizon moves enough to stale the bubbles' depth test", () => {
+    const Cesium = makeCesium();
+    const writes: boolean[] = [];
+    const clustering = {
+      pixelRange: 0,
+      clusterEvent: { addEventListener: () => () => {} },
+    } as Record<string, unknown>;
+    Object.defineProperty(clustering, "enabled", {
+      get: () => writes[writes.length - 1] ?? false,
+      set: (v: boolean) => writes.push(v),
+    });
+    const captured: { listener?: (distance: number) => boolean } = {};
+    const horizon = {
+      property: 1000,
+      distance: () => 1000,
+      subscribe: (fn: (distance: number) => boolean) => {
+        if (fn(1000)) captured.listener = fn;
+      },
+    };
+    const handle = configureClustering(
+      Cesium as never,
+      { clustering } as never,
+      planPointRendering(pointLayer(4, { style: { pointRenderer: "cluster" } })),
+      () => ({
+        fill: "#000",
+        fillOpacity: 1,
+        stroke: "#000",
+        strokeWidth: 1,
+        strokeOpacity: 1,
+        textColor: "#000",
+        opacity: 1,
+      }),
+      horizon,
+    );
+    assert.deepEqual(writes, [true]);
+    assert.equal(captured.listener!(1020), true);
+    assert.deepEqual(writes, [true], "a small move keeps the bubbles");
+    captured.listener!(1200);
+    assert.deepEqual(writes, [true, false, true], "a large one re-runs clustering");
+    handle.dispose();
+    assert.equal(captured.listener!(5000), false, "dispose ends the subscription");
   });
 });
 

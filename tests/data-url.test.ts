@@ -4,8 +4,12 @@ import { strToU8, zipSync } from "fflate";
 import {
   dataUrlParameters,
   serviceUrlParameter,
+  stacUrlParameter,
   fetchRemoteData,
+  isKmlDownload,
   isStreamedLidarUrl,
+  layerPointsAt,
+  loadDataUrlBatch,
   mapboxStyleForDataLayer,
   parseRasterUrlStyle,
 } from "../apps/geolibre-desktop/src/lib/data-url";
@@ -13,6 +17,22 @@ import {
 const collection = (id: string) => ({
   type: "FeatureCollection" as const,
   features: [{ type: "Feature" as const, id, properties: {}, geometry: null }],
+});
+
+describe("stacUrlParameter", () => {
+  it("reads an http(s) STAC URL, decoded", () => {
+    assert.equal(
+      stacUrlParameter("?stac=https%3A%2F%2Fstac.example.com%2Fcollections%2Fsst%3Fx%3D1"),
+      "https://stac.example.com/collections/sst?x=1",
+    );
+  });
+
+  it("ignores a missing, blank, or non-http value", () => {
+    assert.equal(stacUrlParameter("?data=https://example.com/a.geojson"), null);
+    assert.equal(stacUrlParameter("?stac="), null);
+    assert.equal(stacUrlParameter("?stac=javascript:alert(1)"), null);
+    assert.equal(stacUrlParameter("?stac=file:///etc/passwd"), null);
+  });
 });
 
 describe("serviceUrlParameter", () => {
@@ -296,21 +316,50 @@ describe("data URL deep links", () => {
     );
   });
 
-  it("pairs repeated dataType hints by position and ignores unknown ones", () => {
+  it("pairs repeated dataType hints by position and keeps plugin hint names", () => {
     const endpoint = "https://api.example.com/download/42?token=abc";
     assert.deepEqual(
       dataUrlParameters(
         "?data=https://example.com/roads.geojson" +
           `&data=${encodeURIComponent(endpoint)}` +
           "&data=https://example.com/dem.tif" +
-          "&dataType=&dataType=LiDAR&dataType=bogus",
+          "&dataType=&dataType=LiDAR&dataType=isoxml",
       ),
       [
         { dataUrl: "https://example.com/roads.geojson", styleUrl: null, dataType: null },
         { dataUrl: endpoint, styleUrl: null, dataType: "lidar" },
-        { dataUrl: "https://example.com/dem.tif", styleUrl: null, dataType: null },
+        { dataUrl: "https://example.com/dem.tif", styleUrl: null, dataType: "isoxml" },
       ],
     );
+  });
+
+  it("drops a dataType hint that is not a lower-case [a-z0-9-] name of at most 32 characters", () => {
+    const data =
+      "?data=https://example.com/a&data=https://example.com/b&data=https://example.com/c";
+    assert.deepEqual(
+      dataUrlParameters(
+        `${data}&dataType=${"x".repeat(33)}&dataType=has_underscore&dataType=${encodeURIComponent("a b")}`,
+      )?.map((entry) => entry.dataType),
+      [null, null, null],
+    );
+    assert.equal(
+      dataUrlParameters(`?data=https://example.com/a&dataType=${"x".repeat(32)}`)?.[0]?.dataType,
+      "x".repeat(32),
+    );
+  });
+
+  it("warns about a malformed dataType hint it drops, but not about an empty one", () => {
+    const seen: string[] = [];
+    const original = console.warn;
+    console.warn = (message: unknown) => void seen.push(String(message));
+    try {
+      dataUrlParameters("?data=https://example.com/a&data=https://example.com/b&dataType=Bad_Name");
+      dataUrlParameters("?data=https://example.com/a&dataType=");
+    } finally {
+      console.warn = original;
+    }
+    assert.equal(seen.length, 1);
+    assert.match(seen[0]!, /dataType.*bad_name/);
   });
 
   it("rejects non-http data URLs", () => {
@@ -605,5 +654,127 @@ describe("data URL deep links", () => {
     // The ceiling is 250 MB, so an endless 8 MB stream is cut off well before
     // it could have buffered an unbounded body.
     assert.ok(served <= 34, `read ${served} chunks`);
+  });
+});
+
+describe("KML/KMZ data URLs", () => {
+  const kmz = () =>
+    zipSync({
+      "doc.kml": strToU8('<kml xmlns="http://www.opengis.net/kml/2.2"><Document/></kml>'),
+    });
+
+  it("hands a .kmz to the KML importer instead of reading it as zipped GeoJSON", async () => {
+    const fetchImpl = (async () =>
+      new Response(kmz(), {
+        headers: { "Content-Type": "application/vnd.google-earth.kmz" },
+      })) as unknown as typeof fetch;
+    const result = await fetchRemoteData("https://data.example.com/landmarks.kmz", { fetchImpl });
+    assert.equal(result.kind, "kml");
+    if (result.kind === "kml") {
+      assert.equal(result.name, "landmarks");
+      assert.equal(result.file.name, "landmarks.kmz");
+      assert.equal(result.file.type, "application/vnd.google-earth.kmz");
+    }
+  });
+
+  it("names an extensionless KMZ download from its payload", async () => {
+    const fetchImpl = (async () =>
+      new Response(kmz(), {
+        headers: { "Content-Disposition": 'attachment; filename="export.kmz"' },
+      })) as unknown as typeof fetch;
+    const result = await fetchRemoteData("https://api.example.com/export?id=7", { fetchImpl });
+    assert.equal(result.kind, "kml");
+    if (result.kind === "kml") assert.match(result.file.name, /\.kmz$/);
+  });
+
+  it("recognizes KML by extension, media type, or attachment name", () => {
+    assert.equal(isKmlDownload("kmz", "", ""), true);
+    assert.equal(isKmlDownload("kml", "", ""), true);
+    assert.equal(isKmlDownload("", "application/vnd.google-earth.kml+xml", ""), true);
+    assert.equal(isKmlDownload("", "", 'attachment; filename="a.kml"'), true);
+    assert.equal(isKmlDownload("zip", "application/zip", 'attachment; filename="a.zip"'), false);
+  });
+});
+
+describe("layerPointsAt", () => {
+  it("matches a PMTiles layer recorded behind the pmtiles:// protocol", () => {
+    const url = "https://data.example.com/buildings.pmtiles";
+    const layer = { source: { url: `pmtiles://${url}` }, sourcePath: `pmtiles://${url}` };
+    assert.equal(layerPointsAt(layer as never, url), true);
+    assert.equal(layerPointsAt(layer as never, "https://data.example.com/other.pmtiles"), false);
+  });
+
+  it("matches a plain source path or source URL", () => {
+    const url = "https://data.example.com/a.parquet";
+    assert.equal(layerPointsAt({ source: {}, sourcePath: url } as never, url), true);
+    assert.equal(layerPointsAt({ source: { url } } as never, url), true);
+  });
+});
+
+describe("loadDataUrlBatch", () => {
+  const options = () => {
+    const removed: string[] = [];
+    const reported: unknown[] = [];
+    return {
+      removed,
+      reported,
+      removeLayer: (id: string) => removed.push(id),
+      onEntryError: (error: unknown) => reported.push(error),
+    };
+  };
+
+  it("keeps the entries that load when another fails, and reports the failure", async () => {
+    const opts = options();
+    const failure = new Error("The ZIP archive does not contain any GeoJSON files.");
+    const ids = await loadDataUrlBatch(
+      ["a", "bad", "c"],
+      async (entry) => {
+        if (entry === "bad") throw failure;
+        return [`layer-${entry}`];
+      },
+      opts,
+    );
+    assert.deepEqual(ids, ["layer-a", "layer-c"]);
+    assert.deepEqual(opts.reported, [failure]);
+    assert.deepEqual(opts.removed, []);
+  });
+
+  it("rejects with the first error when nothing loads, still reporting the rest", async () => {
+    const opts = options();
+    const first = new Error("first");
+    const second = new Error("second");
+    await assert.rejects(
+      loadDataUrlBatch(
+        [first, second],
+        async (error) => {
+          throw error;
+        },
+        opts,
+      ),
+      first,
+    );
+    assert.deepEqual(opts.reported, [second]);
+  });
+
+  it("takes back the added layers when the load is aborted", async () => {
+    const opts = options();
+    await assert.rejects(
+      loadDataUrlBatch(
+        ["a", "b"],
+        async (entry) => {
+          if (entry === "b") throw new DOMException("aborted", "AbortError");
+          return ["layer-a"];
+        },
+        opts,
+      ),
+      { name: "AbortError" },
+    );
+    assert.deepEqual(opts.removed, ["layer-a"]);
+  });
+
+  it("is not an error when an entry adds no layer of its own (a striped GeoTIFF)", async () => {
+    const opts = options();
+    assert.deepEqual(await loadDataUrlBatch(["striped"], async () => [], opts), []);
+    assert.deepEqual(opts.reported, []);
   });
 });

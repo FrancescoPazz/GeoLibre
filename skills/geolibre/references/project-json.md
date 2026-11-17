@@ -65,24 +65,25 @@ reprojected.
 
 ## Top-level fields
 
-| Field                          | Type           | Notes                                                                |
-| ------------------------------ | -------------- | -------------------------------------------------------------------- |
-| `version`                      | string         | `"0.1.0"`                                                            |
-| `name`                         | string         | Display name                                                         |
-| `mapView`                      | object         | `center`, `zoom`, `bearing`, `pitch`, optional `bbox`                |
-| `basemapStyleUrl`              | string         | MapLibre style JSON URL; `""` for a blank background                 |
-| `basemapVisible`               | boolean        |                                                                      |
-| `basemapOpacity`               | number         | 0–1                                                                  |
-| `layers`                       | array          | Layer objects, bottom-first                                          |
-| `styles`                       | object         | layer id → style, for styles kept outside the layer                  |
-| `preferences`                  | object         | Map limits (`restrictBounds`, `minZoom`, `maxZoom`, `maxPitch`, …)   |
-| `plugins`                      | object         | `manifestUrls`, `activePluginIds`, `mapControlPositions`, `settings` |
-| `legend`                       | object         | Print Layout legend _edits_ only; the legend itself is derived       |
-| `printLayout`                  | object         | Print composer settings; omitted when default                        |
-| `storymap`                     | object         | Scroll-driven chapters; omitted when there are none                  |
-| `widgets` / `dashboardColumns` | array / number | Dashboard charts                                                     |
-| `styleLibrary`                 | array          | Project-scoped Style Manager entries                                 |
-| `metadata`                     | object         | Free-form                                                            |
+| Field | Type | Notes |
+| --- | --- | --- |
+| `version` | string | `"0.1.0"` |
+| `name` | string | Display name |
+| `mapView` | object | `center`, `zoom`, `bearing`, `pitch`, optional `bbox` |
+| `basemapStyleUrl` | string | MapLibre style JSON URL; `""` for a blank background |
+| `basemapVisible` | boolean | |
+| `basemapOpacity` | number | 0–1 |
+| `layers` | array | Layer objects, bottom-first |
+| `styles` | object | layer id → style, for styles kept outside the layer |
+| `preferences` | object | Map limits (`restrictBounds`, `minZoom`, `maxZoom`, `maxPitch`, …) |
+| `plugins` | object | `manifestUrls`, `activePluginIds`, `mapControlPositions`, `settings` |
+| `legend` | object | Print Layout legend *edits* only; the legend itself is derived |
+| `printLayout` | object | Print composer settings; omitted when default |
+| `storymap` | object | Scroll-driven chapters; omitted when there are none |
+| `widgets` / `dashboardColumns` | array / number | Dashboard charts |
+| `bookmarks` / `bookmarkGroups` | array / array | Saved views and their folders (Bookmarks panel) |
+| `styleLibrary` | array | Project-scoped Style Manager entries |
+| `metadata` | object | Free-form |
 
 ## The layer object
 
@@ -102,15 +103,20 @@ reprojected.
 ```
 
 Useful style keys: `minZoom`, `maxZoom`, `fillColor`, `fillOpacity`,
-`strokeColor`, `strokeWidth`, `strokeWidthUnit`, `circleRadius`, `textColor`,
-`textSize`, and for rasters `rasterBrightnessMin`, `rasterBrightnessMax`,
-`rasterSaturation`, `rasterContrast`, `rasterHueRotate`.
+`strokeColor`, `strokeWidth`, `strokeWidthUnit`, `strokeOpacity` (0-1, fades
+lines and outlines only), `strokeDash` (dash and gap lengths in multiples of
+the stroke width, `[]` for solid, e.g. `[4, 2]`), `strokeBlur` (px),
+`circleRadius`, `textColor`, `textSize`, for 3D extrusions `extrusionEnabled`,
+`extrusionHeightProperty`, `extrusionHeightScale`, `extrusionBase`,
+`extrusionBaseProperty`, `extrusionBaseScale`, `extrusionFloorHeight`,
+`extrusionColor`, `extrusionOpacity`, and for rasters `rasterBrightnessMin`,
+`rasterBrightnessMax`, `rasterSaturation`, `rasterContrast`, `rasterHueRotate`.
 
 ### Layer types
 
-`geojson`, `xyz`, `raster`, `wms`, `vector-tiles`, `mbtiles`, `arcgis`,
+`geojson`, `xyz`, `raster`, `wms`, `wmts`, `vector-tiles`, `mbtiles`, `arcgis`,
 `pmtiles`, `cog`, `flatgeobuf`, `zarr`, `lidar`, `gaussian-splat`, `geoparquet`,
-`duckdb-query`, `3d-tiles`.
+`duckdb-query`, `3d-tiles`, `deckgl-viz`, `video`, `image`.
 
 ArcGIS FeatureServer layers are saved as `geojson`; MapServer and ImageServer as
 `raster`. GeoParquet imported from a local file becomes `geojson`.
@@ -129,7 +135,8 @@ declaration, not access control.
   geocoding API keys, environment variables, and plugin settings. Anything
   leaving the workspace must pass through `redactCredentials(project)` — which
   is what Share, HTML export, embed snapshots, and `Map.save_project()` already
-  do. Only a deliberate, trusted local save keeps them.
+  do. Only a deliberate, trusted local save keeps them. Environment variable
+  rows marked `"secret": false` are ordinary values and are kept.
 - **Check the URLs are reachable and CORS-enabled** — the browser fetches them
   directly, so a URL that works in `curl` can still fail in the app.
 - **Local `sourcePath` layers do not travel.** They resolve on the authoring

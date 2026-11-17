@@ -75,7 +75,13 @@ describe("createGraduatedClassBreaks", () => {
   });
 
   it("starts every scheme at the sample minimum", () => {
-    for (const scheme of ["equal-interval", "quantile", "natural-breaks"] as const) {
+    for (const scheme of [
+      "equal-interval",
+      "quantile",
+      "natural-breaks",
+      "standard-deviation",
+      "geometric-interval",
+    ] as const) {
       assert.equal(createGraduatedClassBreaks(DENTISTS, 5, scheme)[0], 262, scheme);
     }
   });
@@ -91,13 +97,110 @@ describe("createGraduatedClassBreaks", () => {
   it("returns strictly ascending breaks so MapLibre accepts the step expression", () => {
     // A sample with fewer distinct values than classes would otherwise repeat a
     // break, which MapLibre rejects ("input values in strictly ascending order").
-    for (const scheme of ["equal-interval", "quantile", "natural-breaks"] as const) {
+    for (const scheme of [
+      "equal-interval",
+      "quantile",
+      "natural-breaks",
+      "standard-deviation",
+      "geometric-interval",
+    ] as const) {
       const breaks = createGraduatedClassBreaks([1, 1, 1, 5, 5], 6, scheme);
       assert.ok(breaks.length > 0, scheme);
       assert.ok(
         breaks.every((value, index) => index === 0 || value > breaks[index - 1]),
         `${scheme}: ${breaks.join(", ")}`,
       );
+    }
+  });
+
+  it("centers standard-deviation classes on the mean, one deviation wide", () => {
+    // Mean 5, population standard deviation 2.
+    const sample = [2, 4, 4, 4, 5, 5, 7, 9];
+    // An even count puts a break on the mean.
+    assert.deepEqual(createGraduatedClassBreaks(sample, 4, "standard-deviation"), [2, 3, 5, 7]);
+    // An odd count makes the middle class straddle it.
+    assert.deepEqual(createGraduatedClassBreaks(sample, 3, "standard-deviation"), [2, 4, 6]);
+    // 8 classes reach mean ± 3σ (-1 and 11); the breaks past the sample range
+    // are dropped, so no class is empty and fewer classes come back.
+    assert.deepEqual(createGraduatedClassBreaks(sample, 8, "standard-deviation"), [2, 3, 5, 7, 9]);
+  });
+
+  it("grows geometric-interval breaks by a constant ratio", () => {
+    const breaks = createGraduatedClassBreaks([1, 10, 100, 1000], 3, "geometric-interval");
+    assert.equal(breaks.length, 3);
+    [1, 10, 100].forEach((expected, index) => {
+      assert.ok(Math.abs(breaks[index] - expected) < 1e-9, breaks.join(", "));
+    });
+  });
+
+  it("rounds interior breaks to the precision the range calls for (#3471)", () => {
+    // Interpolated quantiles of these values land on float noise such as
+    // 66399.59999999999 without rounding.
+    const values = [28579, 52506.4, 59496.1, 66399.3, 75896.2, 98000, 144640];
+    for (const scheme of ["quantile", "equal-interval", "standard-deviation"] as const) {
+      const breaks = createGraduatedClassBreaks(values, 5, scheme);
+      assert.equal(breaks[0], 28579);
+      for (const value of breaks) assert.ok(Number.isInteger(value), `${scheme}: ${value}`);
+    }
+    // A small range keeps decimals: four significant digits of 0.9 is 0.0001.
+    const fine = createGraduatedClassBreaks([0.1, 0.2337, 0.53333, 1.0], 3, "equal-interval");
+    assert.deepEqual(fine, [0.1, 0.4, 0.7]);
+    const small = createGraduatedClassBreaks([0, 1 / 3, 2 / 3, 1], 3, "quantile");
+    assert.deepEqual(small, [0, 0.3333, 0.6667]);
+    // Rounding never merges a break into the one before it.
+    const clustered = createGraduatedClassBreaks(
+      [28579.2, 28579.3, 28579.35, 28579.4, 150000],
+      3,
+      "quantile",
+    );
+    assert.equal(clustered.length, 3, clustered.join(", "));
+    // Quantiles 50000.67, 50000.75 and 50000.83 all round to 50001: none may
+    // be rounded onto the raw break after it.
+    const straddling = createGraduatedClassBreaks(
+      [0, 50000.6, 50000.7, 50000.8, 50000.9, 100000],
+      6,
+      "quantile",
+    );
+    assert.equal(straddling.length, 6, straddling.join(", "));
+    const offset = createGraduatedClassBreaks([1e15, 1e15 + 2], 2, "equal-interval");
+    assert.deepEqual(offset, [1e15, 1e15 + 1]);
+    // Natural breaks are data values and stay exact, so no feature changes class.
+    const natural = createGraduatedClassBreaks(
+      [1, 1.23456, 50.98765, 51, 99.1],
+      3,
+      "natural-breaks",
+    );
+    for (const value of natural)
+      assert.ok([1, 1.23456, 50.98765, 51, 99.1].includes(value), String(value));
+  });
+
+  it("keeps geometric breaks finite across extreme ranges", () => {
+    const breaks = createGraduatedClassBreaks([1e-200, 1e200], 4, "geometric-interval");
+    assert.equal(breaks.length, 4);
+    assert.ok(breaks.every(Number.isFinite), breaks.join(", "));
+    assert.ok(Math.abs(breaks[2] / 1 - 1) < 1e-9, breaks.join(", "));
+  });
+
+  it("starts the geometric series at the smallest positive value", () => {
+    // Zero and negative values cannot seed a geometric series; they land in the
+    // first class, which still opens at the sample minimum.
+    const breaks = createGraduatedClassBreaks([-5, 0, 1, 10, 100, 1000], 3, "geometric-interval");
+    assert.equal(breaks[0], -5);
+    assert.ok(Math.abs(breaks[1] - 10) < 1e-9, breaks.join(", "));
+    assert.ok(Math.abs(breaks[2] - 100) < 1e-9, breaks.join(", "));
+  });
+
+  it("falls back to equal interval when no value is positive", () => {
+    assert.deepEqual(
+      createGraduatedClassBreaks([-100, -50, 0], 4, "geometric-interval"),
+      createGraduatedClassBreaks([-100, -50, 0], 4, "equal-interval"),
+    );
+  });
+
+  it("collapses the data-driven schemes to one break for a constant or single value", () => {
+    for (const scheme of ["standard-deviation", "geometric-interval"] as const) {
+      assert.deepEqual(createGraduatedClassBreaks([3, 3, 3], 4, scheme), [3], scheme);
+      assert.deepEqual(createGraduatedClassBreaks([7], 4, scheme), [7], scheme);
     }
   });
 

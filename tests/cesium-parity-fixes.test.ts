@@ -59,6 +59,7 @@ function makeFakes() {
       lookAtTransform: () => {},
       flyTo: () => {},
       flyToBoundingSphere: () => {},
+      cancelFlight: () => {},
       getPickRay: () => ({ ray: true }),
       pickEllipsoid: () => ({ x: 0, y: 0, z: 0 }),
     },
@@ -244,6 +245,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         bounds: [-120, 30, -110, 40],
       },
       style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
     };
 
     sync.sync([layer]);
@@ -292,6 +294,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         attribution: "USGS WMS",
       },
       style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
     };
 
     const wmtsLayer: GeoLibreLayer = {
@@ -308,6 +311,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         attribution: "NASA WMTS",
       },
       style: { ...DEFAULT_LAYER_STYLE },
+      metadata: {},
     };
 
     sync.sync([wmsLayer, wmtsLayer]);
@@ -325,6 +329,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         opacity: 1,
         source: {},
         style: { ...DEFAULT_LAYER_STYLE },
+        metadata: {},
       }),
       true,
     );
@@ -337,6 +342,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         opacity: 1,
         source: {},
         style: { ...DEFAULT_LAYER_STYLE },
+        metadata: {},
       }),
       true,
     );
@@ -349,6 +355,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         opacity: 1,
         source: {},
         style: { ...DEFAULT_LAYER_STYLE },
+        metadata: {},
       }),
       true,
     );
@@ -361,6 +368,7 @@ describe("Cesium Parity Fixes (#2476)", () => {
         opacity: 1,
         source: {},
         style: { ...DEFAULT_LAYER_STYLE },
+        metadata: {},
       }),
       false,
     );
@@ -373,8 +381,10 @@ describe("Cesium Parity Fixes (#2476)", () => {
         opacity: 1,
         source: {},
         style: { ...DEFAULT_LAYER_STYLE },
+        metadata: {},
       }),
-      false,
+      // Drawn through zarr-cesium since opengeos/GeoLibre#2261.
+      true,
     );
   });
 
@@ -437,7 +447,8 @@ describe("Cesium Parity Fixes (#2476)", () => {
 
   it("CesiumEngine publishes camera altitude on primary globe and respects story presentation guard", () => {
     const { viewer, Cesium, calls } = makeFakes();
-    const engine = new CesiumEngine(Cesium as never, viewer as never, { isPrimary: true });
+    // No `viewId`: this engine is the primary globe.
+    const engine = new CesiumEngine(Cesium as never, viewer as never);
 
     // Initial camera applyView updates cameraAltitude in store
     engine.applyView({
